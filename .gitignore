@@ -46,3 +46,5 @@ src/packages/
 *.pdb
 *.diff.txt
 *.log
+*.msi
+*.wixpdb

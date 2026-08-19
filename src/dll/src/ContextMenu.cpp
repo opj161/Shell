@@ -1564,7 +1564,8 @@ namespace Nilesoft
 			__trace(L"ContextMenu.UninitMenuPopup");
 			
 			current.hMenu = nullptr;
-			menu->wnd = nullptr;
+			if(menu)
+				menu->wnd = nullptr;
 			return ret;
 		}
 
@@ -3934,10 +3935,12 @@ namespace Nilesoft
 
 			if(ver->IsWindows11OrGreater()) 
 			{
-				DWORD dwTextScaleFactor = 100, cbData;
-				::RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Accessibility", 
-							   L"TextScaleFactor", RRF_RT_DWORD, nullptr, &dwTextScaleFactor, &cbData);
-				long scale = ((dpi.val + 24) * dwTextScaleFactor) / 100;
+				DWORD dwTextScaleFactor = 100, cbData = sizeof(dwTextScaleFactor);
+				if(ERROR_SUCCESS != ::RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Accessibility", 
+							   L"TextScaleFactor", RRF_RT_DWORD, nullptr, &dwTextScaleFactor, &cbData))
+					dwTextScaleFactor = 100;
+
+				long scale = ((dpi.val + 24) * static_cast<long>(dwTextScaleFactor)) / 100;
 				_theme.font.lfHeight = 12 * scale / 100;
 			}
 					
@@ -4500,9 +4503,9 @@ namespace Nilesoft
 
 							if(_settings.modify_items.remove.duplicate)
 							{
-								uint32_t indexof = 0;
-								for(auto im : menu->items)
+								for(size_t indexof = 0; indexof < menu->items.size(); indexof++)
 								{
+									auto im = menu->items[indexof];
 									if(im->hash == item->hash)
 									{
 										if(im->type == item->type)
@@ -4513,6 +4516,7 @@ namespace Nilesoft
 												if(!item->disabled)
 												{
 													found_duplicate = 2;
+													delete menu->items[indexof];
 													menu->items[indexof] = item.release();
 												}
 											}
@@ -4520,7 +4524,6 @@ namespace Nilesoft
 										}
 									}
 								}
-								indexof++;
 							}
 							
 							if(found_duplicate == 1)

@@ -3,8 +3,7 @@
 // Config files are read by Lexer::load_File, which picks a decoder purely from
 // what this function returns. Guessing wrong does not fail loudly; it silently
 // decodes the file through the wrong codepage, so every non-ASCII title in a
-// user's shell.nss comes out as mojibake. These tests pin down what the
-// detector actually does today, including where it is wrong.
+// user's shell.nss comes out as mojibake.
 
 #include "test.h"
 
@@ -61,32 +60,31 @@ TEST(encoding, legacy_codepage_bytes_are_detected_as_ansi)
 	CHECK(detect(cp1252, sizeof(cp1252)) == EncodingType::ANSI);
 }
 
-// Known gaps. These document real misdetections rather than asserting the
-// behaviour is correct: each one decodes a file through the wrong codepage.
-TEST(encoding, known_gaps_in_the_bomless_heuristic)
+TEST(encoding, malformed_utf8_is_rejected)
 {
-	// A high byte as the very last byte of the buffer. The continuation check
-	// is guarded by (i < l), so when the lead byte is last there is nothing to
-	// validate against and the file is claimed as UTF-8.
 	const byte trailing[] = { 'c','a','f', 0xE9 };
-	auto got = detect(trailing, sizeof(trailing));
-	CHECK_MSG(got == EncodingType::UTF8,
-			  "documents a gap: a trailing high byte is claimed as UTF-8, not ANSI");
+	CHECK_MSG(detect(trailing, sizeof(trailing)) == EncodingType::ANSI,
+			  "truncated multibyte lead must be rejected");
 
-	// Only the first continuation byte of a multi-byte sequence is checked, and
-	// the remaining bytes are then consumed as if they were ASCII, so a
-	// truncated 3-byte sequence still passes.
 	const byte truncated[] = { 'x', 0xE4, 0xB8, 'A', 'y', '\r', '\n' };
-	got = detect(truncated, sizeof(truncated));
-	CHECK_MSG(got == EncodingType::UTF8,
-			  "documents a gap: a malformed 3-byte sequence is claimed as UTF-8");
+	CHECK_MSG(detect(truncated, sizeof(truncated)) == EncodingType::ANSI,
+			  "malformed 3-byte sequence must be rejected");
 
-	// A lone continuation byte is not a valid lead, but the lookup table maps
-	// 0x80-0xBF to 1 rather than 0, so it is treated as a single character.
 	const byte lone[] = { 'a', 0x93, 'b', '\r', '\n' };
-	got = detect(lone, sizeof(lone));
-	CHECK_MSG(got == EncodingType::UTF8,
-			  "documents a gap: a lone continuation byte is claimed as UTF-8");
+	CHECK_MSG(detect(lone, sizeof(lone)) == EncodingType::ANSI,
+			  "lone continuation byte must be rejected");
+
+	const byte overlong[] = { 0xE0, 0x80, 0x80 };
+	CHECK_MSG(detect(overlong, sizeof(overlong)) == EncodingType::ANSI,
+			  "overlong UTF-8 must be rejected");
+
+	const byte surrogate[] = { 0xED, 0xA0, 0x80 };
+	CHECK_MSG(detect(surrogate, sizeof(surrogate)) == EncodingType::ANSI,
+			  "UTF-8 surrogate encoding must be rejected");
+
+	const byte too_high[] = { 0xF4, 0x90, 0x80, 0x80 };
+	CHECK_MSG(detect(too_high, sizeof(too_high)) == EncodingType::ANSI,
+			  "code point above U+10FFFF must be rejected");
 }
 
 TEST(encoding, degenerate_input)

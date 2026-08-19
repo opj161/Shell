@@ -193,7 +193,6 @@ struct
 {
 	string path;
 	bool explorer{};
-	bool contextmenuhandler{};
 	HMODULE handle{};
 
 	bool init()
@@ -541,6 +540,9 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	return (BOOL)XXX::OnContextMenu(hWnd, x, y, hMenu);;
 #endif
 
+	HRESULT hr_com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	bool need_uninit_com = SUCCEEDED(hr_com);
+
 	auto result = FALSE;
 	auto invoked = false;
 
@@ -582,7 +584,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					_initializer.init();
 				}
 
-				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, _loader.contextmenuhandler);
+				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, static_cast<bool>(ShellExtCapture::match(hMenu)));
 				if(ctx != nullptr)
 				{
 
@@ -648,6 +650,8 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 									y = rc.bottom;
 								else if(rcM.bottom == rc.bottom)
 									y = (rc.top + 5) - (z + ctx->_theme.border.padding.height());
+								else
+									y = rc.bottom;
 							}
 						}
 					}
@@ -656,7 +660,26 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 						y -= z;
 					}
 					
-					invoke(ctx->MenuHandle(), flag, { x, y });
+					flag.remove(TPM_HORIZONTAL);
+					flag.add(TPM_VERTICAL);
+					//flag.add(TPM_RIGHTBUTTON);
+
+					if(ctx->Selected.Window.id == WINDOW_START)
+					{
+						flag.remove(TPM_TOPALIGN);
+						flag.add(TPM_BOTTOMALIGN);
+					}
+
+					//invoke(hMenu, flag, { x, y });
+
+					//if(ctx->is_menu_has_commands)
+					{
+						//flag.remove(TPM_RIGHTBUTTON);
+						//flag.add(TPM_LEFTBUTTON);
+						//flag.add(TPM_RETURNCMD);
+					}
+
+					invoke(hMenu, flag, { x, y });
 				
 					// v = 0;
 					// SystemParametersInfoW(SPI_SETMENUANIMATION, 0, &v, SPIF_SENDCHANGE);
@@ -676,8 +699,9 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	{
 		ShellExtCapture::clear();
 		invoke(hMenu, uFlags, { x, y });
-		_loader.contextmenuhandler = false;
 		is_in_taskbar = false;
+		if(need_uninit_com)
+			::CoUninitialize();
 		return result;
 	}
 }
@@ -1177,7 +1201,6 @@ STDAPI DllGetClassObject(_In_ REFCLSID rclsid, [[maybe_unused]] _In_ REFIID riid
 		
 		if(rclsid == IID_ContextMenu)
 		{
-			_loader.contextmenuhandler = true;
 			Selections::point.GetCursorPos();
 		}
 

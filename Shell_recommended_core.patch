@@ -1,0 +1,1434 @@
+diff --git a/docs/functions/sys.html b/docs/functions/sys.html
+index d3529f4..c902f3b 100644
+--- a/docs/functions/sys.html
++++ b/docs/functions/sys.html
+@@ -52,8 +52,8 @@ sys.version.type</code></pre>
+ 	<h5>sys.datetime (system.datetime)</h5>
+ 	<p>Date and time format</p>
+ 	<p>Syntax</p>
+-	<pre><code>sys.datetime                                   // the date and time in a short format (Format: YYYY.MM.DD-HH.MM.SS).
+-sys.datetime.short                             // the date and time in a short format (Format: YYYY.MM.DD-HH.MM.SS).
++	<pre><code>sys.datetime                                   // the date and time in a short format (Format: YYYY.MM.DD-HH:MM:SS).
++sys.datetime.short                             // the date and time in a short format (Format: YYYY.MM.DD-HH:MM:SS).
+ sys.datetime.dayofweek (sys.datetime.dw)       // the day of the week as a number (Sunday as 1)
+ 
+ sys.datetime.date                              // the full date in a long format (Format: YYYY.MM.DD).
+@@ -62,7 +62,7 @@ sys.datetime.year (sys.datetime.y)             // the year part of the current d
+ sys.datetime.month (sys.datetime.m)            // the month part of the current date.
+ sys.datetime.day (sys.datetime.d)              // the day part of the current date.
+ 
+-sys.datetime.time                              // the full time in hours, minutes, and seconds (Format: HH.MM.SS).
++sys.datetime.time                              // the full time in hours, minutes, and seconds (Format: HH:MM:SS).
+ sys.datetime.pm                                // "AM" or "PM" based on the current time.
+ sys.datetime.hour (sys.datetime.h)             // the hour part of the current time (24-hour format).
+ sys.datetime.minute (sys.datetime.min)         // the minutes part of the current time.
+@@ -70,8 +70,8 @@ sys.datetime.second (sys.datetime.s)           // the seconds part of the curren
+ sys.datetime.milliseconds (sys.datetime.ms)    // the milliseconds part of the current time as a three-digit number.
+ 
+ sys.datetime("D")                              // the full date in a short format (Format: DD/MM/YYYY).
+-sys.datetime("Y")                              // the year part of the current date as a four-digit number.
+-sys.datetime("y")                              // the year part of the current date as a two-digit number.
++sys.datetime("y")                              // the year part of the current date as a four-digit number.
++sys.datetime("Y")                              // the year part of the current date as a two-digit number.
+ sys.datetime("m")                              // the month part of the current date as a two-digit number.
+ sys.datetime("d")                              // the day part of the current date as a two-digit number.
+ sys.datetime("P") (sys.datetime("p"))          // "AM" or "PM" based on the current time.
+diff --git a/src/Shell.sln b/src/Shell.sln
+index 23397f3..2589f75 100644
+--- a/src/Shell.sln
++++ b/src/Shell.sln
+@@ -11,6 +11,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "exe", "exe\exe.vcxproj", "{
+ EndProject
+ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ca", "setup\ca\ca.vcxproj", "{F72D34CA-48DA-4DFD-91A9-A0C78BEF6981}"
+ EndProject
++Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tests", "tests\tests.vcxproj", "{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}"
++EndProject
+ Project("{B7DD6F7E-DEF8-4E67-B5B7-07EF123DB6F0}") = "setup", "setup\wix\setup.wixproj", "{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}"
+ 	ProjectSection(ProjectDependencies) = postProject
+ 		{BAF011AC-D5E9-42C5-BA26-BA6115A45DAC} = {BAF011AC-D5E9-42C5-BA26-BA6115A45DAC}
+@@ -43,6 +45,12 @@ Global
+ 		{F72D34CA-48DA-4DFD-91A9-A0C78BEF6981}.release|x64.Build.0 = release|x64
+ 		{F72D34CA-48DA-4DFD-91A9-A0C78BEF6981}.release|x86.ActiveCfg = release|Win32
+ 		{F72D34CA-48DA-4DFD-91A9-A0C78BEF6981}.release|x86.Build.0 = release|Win32
++		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|ARM64.ActiveCfg = release|ARM64
++		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|ARM64.Build.0 = release|ARM64
++		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|x64.ActiveCfg = release|x64
++		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|x64.Build.0 = release|x64
++		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|x86.ActiveCfg = release|Win32
++		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|x86.Build.0 = release|Win32
+ 		{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}.release|ARM64.ActiveCfg = Release|ARM64
+ 		{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}.release|ARM64.Build.0 = Release|ARM64
+ 		{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}.release|x64.ActiveCfg = Release|x64
+diff --git a/src/bin/imports/lang/es-ES.nss b/src/bin/imports/lang/es-ES.nss
+new file mode 100644
+index 0000000..73e92bb
+--- /dev/null
++++ b/src/bin/imports/lang/es-ES.nss
+@@ -0,0 +1,84 @@
++/*
++Spanish
++by: github.com/kevindeoz
++*/
++
++xxx="Bienvenido"
++// shell.nss
++pin_unpin="Anclar/Desanclar"
++
++// develop.nss
++develop="&Desarrollo"
++editors="Editores"
++windows_notepad="Bloc de Notas"
++
++// file-manage.nss
++file_manage="Gestión de Archivos"
++copy_multiple_paths='Copiar (@sel.count) elementos seleccionados'
++all="Todos"
++invert="Inverso"
++none="Nada"
++change_extension="Cambiar extensión"
++take_ownership="Tomar Posesión"
++show_hide="Mostrar/Ocultar"
++system_files="Archivos del Sistema"
++file_name_extensions="Extensiones de nombre de archivo"
++attributes="Atributos"
++register_server="Registrar Servicio"
++register="Registrar"
++unregister="Cancelar registro"
++hidden="Oculto"
++system="Sistema"
++readonly="Sólo Lectura"
++archive="Archivo"
++created="Creado"
++modified="Modificado"
++accessed="Acceso"
++new_folder="Nueva Carpeta"
++new_file="Nuevo Archivo"
++datetime="Fecha/Hora"
++guid="Guid"
++
++// goto.nss
++folder="Carpeta"
++all_control_panel_items="Todos los elementos del Panel de Control"
++system="Sistema"
++about="Acerca de"
++your_info="Tu Información"
++system_info="Información del Sistema"
++search="Búsqueda"
++usb="USB"
++windows_update="Windows Update"
++windows_defender="Windows Defender"
++apps="Aplicaciones"
++apps_features="Aplicaciones instaladas"
++default_apps="Aplicaciones predeterminadas"
++optional_features="Características opcionales"
++startup="Inicialización"
++personalization="Personalización"
++lockscreen="Pantalla de bloqueo"
++background="Fondo"
++colors="Colores"
++themes="Temas"
++start="Inicio"
++taskbar="Barra de tareas"
++network="Red e Internet"
++status="Estado"
++ethernet="Ethernet"
++wifi="Wi-Fi"
++connections="Conexiones de red"
++
++
++// taskbar.nss
++apps="Aplicaciones"
++paint="Paint"
++edge="Edge"
++calculator="Calculadora"
++windows="Ventanas"
++cascade_windows="Ventanas en cascada"
++Show_windows_stacked="Ventanas apiladas"
++Show_windows_side_by_side="Ventanas lado a lado"
++minimize_all_windows="Minimizar todas las ventanas"
++restore_all_windows="Restaurar todas las ventanas"
++task_manager="Administrador de tareas"
++taskbar_Settings="Configuración de barra de tareas"
+diff --git a/src/bin/shell.nss b/src/bin/shell.nss
+index 8ddaaca..9944f37 100644
+--- a/src/bin/shell.nss
++++ b/src/bin/shell.nss
+@@ -2,18 +2,23 @@
+ {
+ 	priority=1
+ 	exclude.where = !process.is_explorer
+-	showdelay = 200
++	// showdelay is intentionally unset: respect the user's system menu delay.
++	// showdelay = 200
+ 	// Options to allow modification of system items
+ 	modify.remove.duplicate=1
+ 	tip.enabled=true
+ }
+ 
+ // localization
+-$loc_path='imports\lang\'
++// path.exists() evaluates before import-relative resolution, so test an absolute path.
++$loc_path = app.dir + '\imports\lang\'
+ import lang loc_path + "en.nss"
++// Try the full locale tag, then the bare language code, then English.
+ import lang if(path.exists(loc_path + sys.lang + ".nss"),
+                loc_path + sys.lang + ".nss",
+-               loc_path + "en.nss")
++               if(path.exists(loc_path + sys.lang.name + ".nss"),
++                  loc_path + sys.lang.name + ".nss",
++                  loc_path + "en.nss"))
+ 
+ // or import lang 'imports/lang/en.nss'
+ 
+diff --git a/src/dll/src/Include/MenuItem.h b/src/dll/src/Include/MenuItem.h
+index 8b52161..08f036f 100644
+--- a/src/dll/src/Include/MenuItem.h
++++ b/src/dll/src/Include/MenuItem.h
+@@ -406,9 +406,13 @@ namespace Nilesoft
+ 				if(!title.empty())
+ 				{
+ 					this->title = title.move();
++					// normalize() splits an accelerator off at the tab and reassigns
++					// title.text from a fresh allocation, so dwTypeData and cch have to
++					// be taken after it. Taken before, they were handed to USER32 still
++					// pointing at the buffer normalize() had just freed.
++					normalize();
+ 					this->dwTypeData = this->title.text;
+ 					cch = this->title.text.length<uint32_t>();
+-					normalize();
+ 				}
+ 			}
+ 
+@@ -1269,7 +1273,12 @@ namespace Nilesoft
+ 
+ 			static uint32_t get_index(HMENU hMenu, uint32_t id)
+ 			{
+-				for(int i = 0; i < get_count(hMenu); i++)
++				// The count is read once rather than from the loop condition. It
++				// used to sit in the condition, so walking a k-item menu cost 2k
++				// transitions into win32k instead of k, to re-read a value that
++				// cannot change while we are walking it.
++				const int count = get_count(hMenu);
++				for(int i = 0; i < count; i++)
+ 				{
+ 					MENUITEMINFOW mii = { sizeof mii, MIIM_ID };
+ 					if(::GetMenuItemInfoW(hMenu, i, true, &mii))
+diff --git a/src/dll/src/Parser/Lexer.h b/src/dll/src/Parser/Lexer.h
+index 86b6c17..bc44c71 100644
+--- a/src/dll/src/Parser/Lexer.h
++++ b/src/dll/src/Parser/Lexer.h
+@@ -516,73 +516,12 @@ namespace Nilesoft
+ 			bool operator!=(wchar_t c) const { return !is(c, 0, false); }
+ 			explicit operator bool() const { return at(0) != 0; }
+ 
+-			template<typename T = size_t>
+-			bool peek_token(const wchar_t *value, T count, bool ignoreCase = true) const
+-			{
+-				if(value && count > 0 && count <= length)
+-				{
+-					auto str = &buffer[index];
+-					for(size_t i= 0; i < count; i++)
+-					{
+-						if(*str != *value)
+-						{
+-							if(ignoreCase)
+-							{
+-								if(std::towupper(*str) != std::towupper(*value))
+-									return false;
+-							}
+-							return false;
+-						}
+-						str++;
+-						value++;
+-					}
+-
+-					/*auto sz = static_cast<size_t>(count * sizeof(wchar_t));
+-					if(ignoreCase)
+-						return (0 == ::_memicmp(str, value, sz));
+-					
+-					return (0 == ::memcmp(str, value, sz));
+-						*/
+-				}
+-				return true;
+-			}
+-
+-			bool peek_token(const wchar_t *value, size_t len, bool ignoreCase = true) const
+-			{
+-				auto cbsize = len * sizeof(wchar_t);
+-				auto str = &buffer[index];
+-				if(ignoreCase)
+-					return 0==::_memicmp(value, str, cbsize);
+-				return 0== ::memcmp(value, str, cbsize);
+-			};
+-
+-			uint32_t peek_token(const wchar_t *value, bool ignoreCase = true) const
+-			{
+-				auto count = 0u;
+-				if(buffer && length > 0 && !eof && value)
+-				{
+-					auto str = &buffer[index];
+-					for(size_t i = index; *value; i++)
+-					{
+-						if(i >= length)
+-							return 0;
+-
+-						if(*str != *value)
+-						{
+-							if(ignoreCase)
+-							{
+-								if(std::towupper(*str) != std::towupper(*value))
+-									return 0;
+-							}
+-							return 0;
+-						}
+-						count++;
+-						str++;
+-						value++;
+-					}
+-				}
+-				return count;
+-			}
++			// The three peek_token overloads that lived here were unreachable: no
++			// caller existed, the size_t overload was ambiguous with the template
++			// one so a call could not have compiled, their ignoreCase branches
++			// fell through to an unconditional failure return, and the size_t
++			// overload read len units past the end of the buffer. Removed rather
++			// than repaired; add a tested equivalent if lookahead is ever needed.
+ 
+ 			uint32_t peek_ident() const
+ 			{
+diff --git a/src/dll/src/Parser/Parser.cpp b/src/dll/src/Parser/Parser.cpp
+index 81a0bd1..f857bb0 100644
+--- a/src/dll/src/Parser/Parser.cpp
++++ b/src/dll/src/Parser/Parser.cpp
+@@ -1126,11 +1126,15 @@ namespace Nilesoft
+ 			if(path.empty())
+ 				return 0;
+ 			
+-			if(path.length() > 2)
+-			{
+-				if(!((path[1] == L':' && path[2] == L'\\') || (path[0] == L'\\' && path[1] == L'\\')))
+-					path = Path::Combine(l->location, path).move();
+-			}
++			// Root every relative import against the importing file's own
++			// directory. The length > 2 guard let short names such as "a" through
++			// unrooted, where Path::Full would then resolve them against the
++			// process working directory.
++			const bool rooted = (path.length() > 2 && path[1] == L':' && path[2] == L'\\')
++							 || (path.length() > 1 && path[0] == L'\\' && path[1] == L'\\');
++
++			if(!rooted)
++				path = Path::Combine(l->location, path).move();
+ 
+ 			path = Path::FixSeparator(path).move();
+ 
+@@ -1154,6 +1158,33 @@ namespace Nilesoft
+ 				m_imports.push_back(hash);
+ 			}
+ 
++			// A file already open further up the stack is a cycle. The depth cap
++			// alone does not stop one: a file importing itself twice fans out, so
++			// bounding the depth at 32 bounds the stack but leaves up to 2^32 files
++			// to open before the recursion gives up - a hang inside Explorer rather
++			// than a crash, which is not an improvement.
++			//
++			// m_imports cannot answer this. It records every file ever imported, so
++			// it cannot tell a cycle from a shared snippet legitimately imported
++			// from two places. _imports is exactly the set currently open, and each
++			// entry keeps the path it loaded, so it is the right thing to ask.
++			for(auto &imp : _imports)
++			{
++				if(imp && !imp->path.empty() && imp->path.hash() == hash)
++				{
++					Logger::Error(L"line[%d] column[%d] circular import, '%s'",
++								  line, col, path.c_str());
++					return 0;
++				}
++			}
++
++			if(_imports.size() >= MaxImportDepth)
++			{
++				Logger::Error(L"line[%d] column[%d] import nesting deeper than %d, refusing '%s'",
++							  line, col, static_cast<int>(MaxImportDepth), path.c_str());
++				return 0;
++			}
++
+ 			auto lex = import_push();
+ 
+ 			if(hash && lex->load_File(path, ignore_failed))
+diff --git a/src/dll/src/Parser/Parser.h b/src/dll/src/Parser/Parser.h
+index a40b3e0..3b47e07 100644
+--- a/src/dll/src/Parser/Parser.h
++++ b/src/dll/src/Parser/Parser.h
+@@ -129,6 +129,15 @@ namespace Nilesoft
+ 			TokenError verify(const Ident &id, bool signer);
+ 			TokenError verify(const NativeMenu *menu, const Ident &id, bool _signed);
+ 
++			// Ceiling on import nesting. _imports is the stack of files currently
++			// open, so its depth is the nesting depth. Nothing else bounds the
++			// recursion: the duplicate check in load_import only traces and carries
++			// on, and it consults a list of every file ever imported rather than the
++			// ones still being parsed, so it cannot tell a cycle from a shared
++			// snippet legitimately imported twice. A config that imports itself
++			// therefore recursed until the stack was exhausted, inside Explorer.
++			static constexpr size_t MaxImportDepth = 32;
++
+ 			Lexer *import_push()
+ 			{
+ 				_imports.emplace_back(new Lexer);
+diff --git a/src/exe/src/Main.cpp b/src/exe/src/Main.cpp
+index d2899d5..893e7cf 100644
+--- a/src/exe/src/Main.cpp
++++ b/src/exe/src/Main.cpp
+@@ -205,9 +205,14 @@ void disable_modern(bool _register)
+ 				{
+ 					//IID_ExplorerHostCreator
+ 					string treatas = CLS_ContextMenu;
++					// +1 for the terminator. A REG_SZ written without one is not
++					// something every reader copes with - RegistryKey::ReadString
++					// assumes it is there and hands back the value one character
++					// short, which is why the ownership check in Unregister could
++					// never recognise our own redirect.
+ 					res = subkey.set_value(nullptr, REG_SZ,
+ 										   reinterpret_cast<const uint8_t *>(treatas.c_str()),
+-										   treatas.length<int>() * sizeof(wchar_t));
++										   (treatas.length<int>() + 1) * sizeof(wchar_t));
+ 				}
+ 			}
+ 			else
+@@ -336,9 +341,10 @@ bool Registration(REGOP reg)
+ 					return false;
+ 				}
+ 
+-				// is windows 11 or later
+-				if(ver->IsWindows11OrGreater() && reg.TREAT)
+-					disable_modern(false);
++				// RegistryConfig::Unregister() now clears the TreatAs redirect itself,
++				// and only when it names our CLSID. Doing it here as well meant it
++				// happened only with -treat on the command line, and deleted the key
++				// without checking whose it was.
+ 
+ 				msg = string::Extract(IDS_UNREGISTER_SUCCESS).move();
+ 			}
+diff --git a/src/setup/ca/dllmain.cpp b/src/setup/ca/dllmain.cpp
+index 0d7686b..4121bcf 100644
+--- a/src/setup/ca/dllmain.cpp
++++ b/src/setup/ca/dllmain.cpp
+@@ -209,30 +209,45 @@ static std::wstring JoinPath(const std::wstring &path1, const std::wstring &path
+ 		if(path2.size() > 0 && path2.front() != L'\\')
+ 			path += L'\\';
+ 	}
+-	return std::move(path1 + path2);
++	// path, not path1: the separator was appended to the local copy and then
++	// thrown away. It only ever worked because both callers pass a folder that
++	// already ends in a backslash.
++	return path + path2;
+ }
+ 
+ static bool InstallFolder(MSIHANDLE hInstall, std::wstring& install_folder, bool find_by_reg)
+ {
+ 	MSI msi(hInstall);
+-	DWORD length = MAX_PATH;
+ 	install_folder = msi.InstallFolder();
+ 	if(install_folder.size() == 0)
+ 	{
+ 		if(find_by_reg)
+ 		{
+ 			install_folder.resize(MAX_PATH);
++
++			// This must stay in step with CLS_ContextMenu in src/shared/Globals.h.
++			// pcbData is a byte count, not a character count.
++			DWORD length = static_cast<DWORD>(install_folder.size() * sizeof(wchar_t));
+ 			auto rc = ::RegGetValueW(HKEY_CLASSES_ROOT,
+ 									 L"CLSID\\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}\\InprocServer32",
+-									 nullptr, RRF_RT_REG_SZ | KEY_WOW64_64KEY, nullptr, static_cast<void *>(install_folder.data()), &length);
+-			if(rc == ERROR_SUCCESS)
++									 nullptr, RRF_RT_REG_SZ, nullptr,
++									 static_cast<void *>(install_folder.data()), &length);
++			if(rc == ERROR_SUCCESS && length >= sizeof(wchar_t))
+ 			{
+-				install_folder.resize(length / sizeof(wchar_t));
++				// The reported size includes the terminating null, which must not
++				// stay inside the string.
++				install_folder.resize(length / sizeof(wchar_t) - 1);
+ 				auto p = install_folder.find_last_of(L"\\");
+ 				if(p != install_folder.npos)
+-				{
+-					install_folder = std::move(install_folder.substr(0, p + 1));
+-				}
++					install_folder = install_folder.substr(0, p + 1);
++				else
++					install_folder.clear();
++			}
++			else
++			{
++				// Without this the failed read leaves MAX_PATH nulls behind and the
++				// size check below reports success.
++				install_folder.clear();
+ 			}
+ 		}
+ 	}
+diff --git a/src/setup/wix/setup.wxs b/src/setup/wix/setup.wxs
+index 1eeb6dd..b346169 100644
+--- a/src/setup/wix/setup.wxs
++++ b/src/setup/wix/setup.wxs
+@@ -84,6 +84,17 @@
+ 						<File Id='pt_BR.nss' Source='$(var.bin)\imports\lang\pt-BR.nss' />
+ 						<File Id='zh_CN.nss' Source='$(var.bin)\imports\lang\zh-CN.nss' />
+ 					</Component>
++					<Component Id='LANG2' Guid='{6DC3A708-1297-5DE2-A191-29CE26F45483}' NeverOverwrite='yes'>
++						<File Id='es_ES.nss' KeyPath='yes' Source='$(var.bin)\imports\lang\es-ES.nss' />
++						<File Id='it.nss' Source='$(var.bin)\imports\lang\it.nss' />
++						<File Id='ja.nss' Source='$(var.bin)\imports\lang\ja.nss' />
++						<File Id='ro.nss' Source='$(var.bin)\imports\lang\ro.nss' />
++						<File Id='ru.nss' Source='$(var.bin)\imports\lang\ru.nss' />
++						<File Id='sl.nss' Source='$(var.bin)\imports\lang\sl.nss' />
++						<File Id='tr.nss' Source='$(var.bin)\imports\lang\tr.nss' />
++						<File Id='ua.nss' Source='$(var.bin)\imports\lang\ua.nss' />
++						<File Id='zh_TW.nss' Source='$(var.bin)\imports\lang\zh-TW.nss' />
++					</Component>
+ 				</Directory>
+ 				</Directory>
+ 					<Component Id='APPLICATION' Guid='{ED9EFE4B-E83D-42BB-8938-F72B13A2FAD2}'>
+@@ -123,6 +134,7 @@
+ 			<ComponentRef Id='CONFIG' />
+ 			<ComponentRef Id='IMPORTS' />
+ 			<ComponentRef Id='LANG' />
++			<ComponentRef Id='LANG2' />
+ 			<ComponentRef Id='CLEANUP' />
+ 			<ComponentRef Id='StartMenuShortcut' />
+ 			<ComponentRef Id='DisplayIcon' />
+diff --git a/src/shared/RegistryConfig.h b/src/shared/RegistryConfig.h
+index 19d93cc..953191b 100644
+--- a/src/shared/RegistryConfig.h
++++ b/src/shared/RegistryConfig.h
+@@ -190,13 +190,38 @@ namespace Nilesoft
+ 				ret += Registry::DeleteSubKey(HKCR, L"CLSID\\" CLS_ContextMenu);
+ 				ret += RegisterContextMenuHandler(false);
+ 
+-				/*if(Windows::Version::Instance().IsWindows11OrGreater())
++				// The Windows 11 modern menu reaches us through a TreatAs redirect on
++				// {86ca1aa0-...}. Deleting our CLSID above without clearing it strands
++				// the redirect on a class that no longer resolves, so the user
++				// uninstalls and is left on the classic menu with nothing to explain
++				// it. This used to be handled only by shell.exe -unregister -treat, so
++				// a bare -unregister left the machine modified.
++				//
++				// Only remove it when it actually names our server, so uninstall does
++				// not destroy a redirect another component has taken ownership of.
+ 				{
+ 					string key_treatas;
+-					key_treatas.format(L"CLSID\\%s\\TreatAs", string::ToString(IID_FileExplorerContextMenu, 2).c_str());
+-					Registry::DeleteSubKey(HKCR, key_treatas);
++					key_treatas.format(L"CLSID\\%s\\TreatAs",
++									   string::ToString(IID_FileExplorerContextMenu, 2).c_str());
++
++					// RegGetValueW rather than RegistryKey::ReadString. ReadString
++					// takes the stored byte count and does release(len - 1), i.e. it
++					// assumes the value was written with its terminator. Ours was
++					// not, so it returned the CLSID one character short and this
++					// check never matched - leaving the redirect behind on every
++					// uninstall, which is worse than the unconditional delete it
++					// replaced. RegGetValueW terminates for us either way, so
++					// machines written by an older build are recognised too.
++					wchar_t treatas[64]{};
++					DWORD cb = sizeof(treatas);
++					auto ours = ERROR_SUCCESS == ::RegGetValueW(HKCR, key_treatas.c_str(), nullptr,
++																RRF_RT_REG_SZ, nullptr, treatas, &cb)
++							 && string(treatas).equals(CLS_ContextMenu);
++
++					if(ours)
++						Registry::DeleteSubKey(HKCR, key_treatas);
+ 				}
+-				*/
++
+ 				Registry::DeleteSubKey(HKCR, L".nss");
+ 
+ 				return ret > 0;// == 5;
+diff --git a/src/shared/System/Text/Encoding.h b/src/shared/System/Text/Encoding.h
+index e5c7fbc..b3fd24c 100644
+--- a/src/shared/System/Text/Encoding.h
++++ b/src/shared/System/Text/Encoding.h
+@@ -154,57 +154,58 @@ Note that:
+ 					}
+ 				}
+ 
+-				auto et = EncodingType::UTF8;
+-				size_t i = 0;
+-				while(i < l)
++				// Validate BOM-less UTF-8 strictly. The previous table-driven loop
++				// checked only the first continuation byte, treated continuation
++				// bytes (0x80-0xBF) as one-byte characters, and accepted truncated
++				// sequences at EOF. Those cases silently sent ANSI files through
++				// the UTF-8 decoder.
++				auto continuation = [](byte c) { return (c & 0xC0) == 0x80; };
++				for(size_t i = 0; i < l;)
+ 				{
+-					switch((int)utf8ByteTable[b[i]])
++					const byte c = b[i];
++					if(c <= 0x7F)
+ 					{
+-						case 4:
+-						{
+-							i++;
+-							if((i < l) && (b[i] & 0xC0) != 0x80)
+-							{
+-								et = EncodingType::ANSI;
+-								i = l;
+-							}
+-							// 10bbbbbb ?
+-							break;
+-						}
+-						case 3:
+-						{
+-							i++;
+-							if((i < l) && (b[i] & 0xC0) != 0x80)
+-							{
+-								et = EncodingType::ANSI;
+-								i = l;
+-							}
+-							// 10bbbbbb ?
+-							break;
+-						}
+-						case 2:
+-						{
+-							i++;
+-							if((i < l) && (b[i] & 0xC0) != 0x80)
+-							{
+-								et = EncodingType::ANSI;
+-								i = l;
+-							}// 10bbbbbb ?
+-							break;
+-						}
+-						case 1:
+-						{
+-							i++;
+-							break;
+-						}
+-						case 0:
+-						{
+-							i = l;
+-							break;
+-						}
++						i++;
++						continue;
++					}
++
++					if(c >= 0xC2 && c <= 0xDF)
++					{
++						if(i + 1 >= l || !continuation(b[i + 1]))
++							return EncodingType::ANSI;
++						i += 2;
++						continue;
++					}
++
++					if(c >= 0xE0 && c <= 0xEF)
++					{
++						if(i + 2 >= l || !continuation(b[i + 1]) || !continuation(b[i + 2]))
++							return EncodingType::ANSI;
++						// Reject overlong forms and UTF-16 surrogate code points.
++						if((c == 0xE0 && b[i + 1] < 0xA0) ||
++						   (c == 0xED && b[i + 1] > 0x9F))
++							return EncodingType::ANSI;
++						i += 3;
++						continue;
+ 					}
++
++					if(c >= 0xF0 && c <= 0xF4)
++					{
++						if(i + 3 >= l || !continuation(b[i + 1]) ||
++						   !continuation(b[i + 2]) || !continuation(b[i + 3]))
++							return EncodingType::ANSI;
++						// Reject overlong forms and code points above U+10FFFF.
++						if((c == 0xF0 && b[i + 1] < 0x90) ||
++						   (c == 0xF4 && b[i + 1] > 0x8F))
++							return EncodingType::ANSI;
++						i += 4;
++						continue;
++					}
++
++					// Includes lone continuation bytes, C0/C1 and F5-FF.
++					return EncodingType::ANSI;
+ 				}
+-				return et;
++				return EncodingType::UTF8;
+ 			}
+ 
+ 			/*
+diff --git a/src/shared/System/Text/StringCompare.h b/src/shared/System/Text/StringCompare.h
+new file mode 100644
+index 0000000..14c7e91
+--- /dev/null
++++ b/src/shared/System/Text/StringCompare.h
+@@ -0,0 +1,197 @@
++#pragma once
++
++// Ordinal case-insensitive comparison for UTF-16 buffers.
++//
++// This replaces ::_memicmp, which was previously used across string.h and the
++// lexer to compare wchar_t buffers. _memicmp is the *narrow* CRT routine: it
++// case-folds every byte of the buffer, including the high byte of each UTF-16
++// code unit. Two consequences, both observable:
++//
++//   * False positives. U+4E2D and U+6E2D differ only in the high byte, and
++//     0x4E/0x6E is an ASCII case pair, so they compared equal. Large parts of
++//     the CJK range collide this way.
++//   * False negatives. Real non-ASCII case pairs such as U+0410/U+0430
++//     (Cyrillic A/a) were never folded, so case-insensitive matching did not
++//     work outside ASCII at all.
++//
++// _memicmp is also locale-sensitive, which is not something we want running
++// inside a host process we do not control.
++//
++// Folding here is deliberately ASCII-only and locale-independent. That matches
++// what the original code intended (see Hash::Generate, which folds A-Z only)
++// and what the .nss language needs for identifiers and keywords. Callers that
++// need full Unicode case folding for user-facing text should use
++// ::CompareStringOrdinal(..., TRUE) instead.
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++
++#if defined(_M_IX86) || defined(_M_X64)
++#include <emmintrin.h>
++#define NSS_ORDINAL_SSE2 1
++#elif defined(_M_ARM64)
++#include <arm64_neon.h>
++#define NSS_ORDINAL_NEON 1
++#endif
++
++namespace Nilesoft
++{
++	namespace Text
++	{
++		namespace Ordinal
++		{
++			// Vector paths process 8 code units at a time. Below this many units
++			// the setup cost is not repaid, and the scalar loop's early exit wins.
++			inline constexpr size_t simd_threshold = 16;
++
++			inline constexpr wchar_t fold(wchar_t c) noexcept
++			{
++				return (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 0x20) : c;
++			}
++
++			inline bool equals_scalar(const wchar_t *a, const wchar_t *b, size_t count) noexcept
++			{
++				for(size_t i = 0; i < count; i++)
++				{
++					if(fold(a[i]) != fold(b[i]))
++						return false;
++				}
++				return true;
++			}
++
++			// Ordinal, case-insensitive, UTF-16 aware. Compares exactly `count`
++			// code units; neither buffer needs to be null terminated.
++			inline bool equals_fold(const wchar_t *a, const wchar_t *b, size_t count) noexcept
++			{
++				if(count == 0)
++					return true;
++
++				if(a == b)
++					return true;
++
++				if(!a || !b)
++					return false;
++
++				// Most comparisons in this codebase fail, and most of those fail on
++				// the first unit. Rejecting here keeps the vector path off the
++				// common case and costs one compare when it does match.
++				if(fold(a[0]) != fold(b[0]))
++					return false;
++
++				if(count < simd_threshold)
++					return equals_scalar(a + 1, b + 1, count - 1);
++
++#if defined(NSS_ORDINAL_SSE2)
++				{
++					const __m128i lo = _mm_set1_epi16(L'A' - 1);
++					const __m128i hi = _mm_set1_epi16(L'Z' + 1);
++					const __m128i bit = _mm_set1_epi16(0x20);
++
++					size_t i = 0;
++					for(; i + 8 <= count; i += 8)
++					{
++						__m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i *>(a + i));
++						__m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i *>(b + i));
++
++						// Signed compares are safe here: units >= 0x8000 read as
++						// negative, fail the (> 'A'-1) test, and are left unfolded,
++						// which is what ASCII-only folding requires.
++						__m128i ma = _mm_and_si128(_mm_cmpgt_epi16(va, lo), _mm_cmplt_epi16(va, hi));
++						__m128i mb = _mm_and_si128(_mm_cmpgt_epi16(vb, lo), _mm_cmplt_epi16(vb, hi));
++
++						va = _mm_or_si128(va, _mm_and_si128(ma, bit));
++						vb = _mm_or_si128(vb, _mm_and_si128(mb, bit));
++
++						if(_mm_movemask_epi8(_mm_cmpeq_epi16(va, vb)) != 0xFFFF)
++							return false;
++					}
++					return equals_scalar(a + i, b + i, count - i);
++				}
++#elif defined(NSS_ORDINAL_NEON)
++				{
++					const uint16x8_t lo = vdupq_n_u16(L'A');
++					const uint16x8_t hi = vdupq_n_u16(L'Z');
++					const uint16x8_t bit = vdupq_n_u16(0x20);
++
++					size_t i = 0;
++					for(; i + 8 <= count; i += 8)
++					{
++						uint16x8_t va = vld1q_u16(reinterpret_cast<const uint16_t *>(a + i));
++						uint16x8_t vb = vld1q_u16(reinterpret_cast<const uint16_t *>(b + i));
++
++						uint16x8_t ma = vandq_u16(vcgeq_u16(va, lo), vcleq_u16(va, hi));
++						uint16x8_t mb = vandq_u16(vcgeq_u16(vb, lo), vcleq_u16(vb, hi));
++
++						va = vorrq_u16(va, vandq_u16(ma, bit));
++						vb = vorrq_u16(vb, vandq_u16(mb, bit));
++
++						if(vminvq_u16(vceqq_u16(va, vb)) != 0xFFFF)
++							return false;
++					}
++					return equals_scalar(a + i, b + i, count - i);
++				}
++#else
++				return equals_scalar(a + 1, b + 1, count - 1);
++#endif
++			}
++
++			// Exact (case-sensitive) equality over `count` code units.
++			inline bool equals_exact(const wchar_t *a, const wchar_t *b, size_t count) noexcept
++			{
++				if(count == 0)
++					return true;
++				if(a == b)
++					return true;
++				if(!a || !b)
++					return false;
++				return 0 == ::memcmp(a, b, count * sizeof(wchar_t));
++			}
++
++			inline bool equals(const wchar_t *a, const wchar_t *b, size_t count, bool ignoreCase) noexcept
++			{
++				return ignoreCase ? equals_fold(a, b, count) : equals_exact(a, b, count);
++			}
++
++			// Narrow equivalent. Folds ASCII only, so unlike ::_memicmp it does not
++			// change behaviour with the active locale.
++			inline bool equals_narrow(const char *a, const char *b, size_t count, bool ignoreCase) noexcept
++			{
++				if(count == 0 || a == b)
++					return true;
++				if(!a || !b)
++					return false;
++				if(!ignoreCase)
++					return 0 == ::memcmp(a, b, count);
++
++				for(size_t i = 0; i < count; i++)
++				{
++					char ca = a[i], cb = b[i];
++					if(ca >= 'A' && ca <= 'Z') ca = static_cast<char>(ca + 0x20);
++					if(cb >= 'A' && cb <= 'Z') cb = static_cast<char>(cb + 0x20);
++					if(ca != cb)
++						return false;
++				}
++				return true;
++			}
++
++			// Dispatches on character width so the wide path never reaches the
++			// byte-oriented comparison that caused the UTF-16 defect.
++			template<typename T>
++			inline bool equals_t(const T *a, const T *b, size_t count, bool ignoreCase) noexcept
++			{
++				if constexpr(sizeof(T) == sizeof(wchar_t))
++				{
++					return equals(reinterpret_cast<const wchar_t *>(a),
++								  reinterpret_cast<const wchar_t *>(b), count, ignoreCase);
++				}
++				else
++				{
++					static_assert(sizeof(T) == 1, "unsupported character width");
++					return equals_narrow(reinterpret_cast<const char *>(a),
++										 reinterpret_cast<const char *>(b), count, ignoreCase);
++				}
++			}
++		}
++	}
++}
+diff --git a/src/shared/System/Text/string.h b/src/shared/System/Text/string.h
+index 6cde1d5..3a4c2ac 100644
+--- a/src/shared/System/Text/string.h
++++ b/src/shared/System/Text/string.h
+@@ -9,6 +9,7 @@
+ #include <deque>
+ #include "Hash.h"
+ #include "Char.h"
++#include "StringCompare.h"
+ 
+ /*
+ std::wstring s2ws(const std::string& s)
+@@ -2189,11 +2190,7 @@ std::wstring replace(std::wstring const &original,
+ 					if(l1 == 0)
+ 						return true;
+ 
+-					size_t sz = l1 * sizeof(value1[0]);
+-					if(ignoreCase)
+-						return (0 == ::_memicmp(value1, value2, sz));
+-					else
+-						return (0 == ::memcmp(value1, value2, sz));
++					return Ordinal::equals_t(value1, value2, l1, ignoreCase);
+ 				}
+ 
+ 				return false;
+@@ -2203,13 +2200,7 @@ std::wstring replace(std::wstring const &original,
+ 			static bool Equals(T const *value1, T const *value2, size_t count, bool ignoreCase)
+ 			{
+ 				if(value1 && value2)
+-				{
+-					auto sz = count * sizeof(T);
+-					if(ignoreCase)
+-						return (0 == ::_memicmp(value1, value2, sz));
+-					else
+-						return (0 == ::memcmp(value1, value2, sz));
+-				}
++					return Ordinal::equals_t(value1, value2, count, ignoreCase);
+ 				return false;
+ 			}
+ 
+@@ -2295,17 +2286,14 @@ std::wstring replace(std::wstring const &original,
+ 				if(!value || !pattern)
+ 					return nullptr;
+ 
+-				T const *v = nullptr;
+-				const auto sz = pattern_length * sizeof(T);
+-				for(auto i = start_index; i < value_length; i++)
++				// Stop at the last position where a full pattern still fits.
++				// Running to value_length read pattern_length units from within
++				// the final unit of the buffer, past the end.
++				const auto last = value_length - pattern_length;
++				for(auto i = start_index; i <= last; i++)
+ 				{
+-					v = value + i;
+-					if(ignoreCase)
+-					{
+-						if(0 == ::_memicmp(v, pattern, sz))
+-							return v;
+-					}
+-					else if(0 == ::memcmp(v, pattern, sz))
++					T const *v = value + i;
++					if(Ordinal::equals_t(v, pattern, pattern_length, ignoreCase))
+ 						return v;
+ 				}
+ 				return nullptr;
+@@ -2329,17 +2317,14 @@ std::wstring replace(std::wstring const &original,
+ 				if(!value || !pattern)
+ 					return nullptr;
+ 
+-				T const *v = nullptr;
+-				const auto sz = pattern_length * sizeof(T);
+-				for(auto i = start_index; i < value_length; i++)
++				// Stop at the last position where a full pattern still fits.
++				// Running to value_length read pattern_length units from within
++				// the final unit of the buffer, past the end.
++				const auto last = value_length - pattern_length;
++				for(auto i = start_index; i <= last; i++)
+ 				{
+-					v = value + i;
+-					if(ignoreCase)
+-					{
+-						if(0 == ::_memicmp(v, pattern, sz))
+-							return v;
+-					}
+-					else if(0 == ::memcmp(v, pattern, sz))
++					T const *v = value + i;
++					if(Ordinal::equals_t(v, pattern, pattern_length, ignoreCase))
+ 						return v;
+ 				}
+ 				return nullptr;
+@@ -2393,18 +2378,12 @@ std::wstring replace(std::wstring const &original,
+ 				if(!value || !pattern)
+ 					return nullptr;
+ 
+-				T const *v = nullptr;
+-				auto sz = pattern_length * sizeof(T);
+-				auto i = (value_length == pattern_length) ? 0 : value_length - pattern_length;
+-				for(; i >= 0 && i < value_length; i--)
++				// i is unsigned, so it wraps rather than going negative; the
++				// i < value_length test is what terminates the loop.
++				for(size_t i = value_length - pattern_length; i < value_length; i--)
+ 				{
+-					v = value + i;
+-					if(ignoreCase)
+-					{
+-						if(0 == ::_memicmp(v, pattern, sz))
+-							return v;
+-					}
+-					else if(0 == ::memcmp(v, pattern, sz))
++					T const *v = value + i;
++					if(Ordinal::equals_t(v, pattern, pattern_length, ignoreCase))
+ 						return v;
+ 				}
+ 				return nullptr;
+diff --git a/src/shared/VC-LTL.props b/src/shared/VC-LTL.props
+index 29589c1..18b6cbb 100644
+--- a/src/shared/VC-LTL.props
++++ b/src/shared/VC-LTL.props
+@@ -43,4 +43,21 @@ If you are not satisfied with the default search order, you can modify this file
+ 		<Import Project="$(VC_LTL_Root)\Config\config.props" Condition="Exists('$(VC_LTL_Root)\Config\config.props')"/>
+ 		<Import Project="$(VC_LTL_Root)\ltlvcrt.props" Condition="(!Exists('$(VC_LTL_Root)\Config\config.props')) And (Exists('$(VC_LTL_Root)\ltlvcrt.props'))"/>
+ 	</ImportGroup>
++
++	<!--
++	Both imports above are conditional on the package being present, so without a
++	restore they simply do not happen and the build silently links a different
++	CRT configuration from a restored build. That is a meaningful ABI/runtime
++	difference inside Explorer, not just a size difference.
++
++	A plain local `msbuild Shell.sln` can therefore produce a different binary
++	without saying so. Fail loudly instead.
++
++	To build deliberately without VC-LTL: -p:ShellAllowNoVCLTL=true
++	-->
++	<Target Name="ShellVerifyVCLTL" BeforeTargets="ClCompile"
++			Condition="'$(ShellAllowNoVCLTL)'!='true'">
++		<Error Condition="!Exists('$(VC_LTL_Root)\ltlvcrt.props') And !Exists('$(VC_LTL_Root)\Config\config.props')"
++			   Text="VC-LTL is not restored, so this build would silently link a different CRT than CI ships. Run: msbuild $(SolutionDir)Shell.sln -t:Restore -p:RestorePackagesConfig=true -p:Configuration=$(Configuration) -p:Platform=$(Platform)   (or use build.ps1, which does it for you). To build without VC-LTL on purpose, pass -p:ShellAllowNoVCLTL=true. Looked in: $(VC_LTL_Root)" />
++	</Target>
+ </Project>
+\ No newline at end of file
+diff --git a/src/tests/main.cpp b/src/tests/main.cpp
+new file mode 100644
+index 0000000..8d48707
+--- /dev/null
++++ b/src/tests/main.cpp
+@@ -0,0 +1,7 @@
++#include "test.h"
++
++// Usage: tests.exe [suite-substring]
++int main(int argc, char **argv)
++{
++	return ::nss_test::run(argc > 1 ? argv[1] : nullptr);
++}
+diff --git a/src/tests/test.h b/src/tests/test.h
+new file mode 100644
+index 0000000..37853af
+--- /dev/null
++++ b/src/tests/test.h
+@@ -0,0 +1,130 @@
++#pragma once
++
++// Minimal self-registering test framework. Deliberately dependency-free so the
++// test project builds anywhere the main solution does, with no package restore.
++//
++//   TEST(suite, name) { CHECK(expr); CHECK_EQ(a, b); }
++//
++// Failures are reported and counted; the process exit code is the number of
++// failed assertions, capped at 125.
++
++#include <cstdio>
++#include <cstddef>
++#include <vector>
++#include <string>
++
++namespace nss_test
++{
++	struct Registry
++	{
++		using Fn = void(*)();
++
++		struct Entry { const char *suite; const char *name; Fn fn; };
++
++		static std::vector<Entry> &entries()
++		{
++			static std::vector<Entry> v;
++			return v;
++		}
++
++		static int &failures() { static int n = 0; return n; }
++		static int &checks() { static int n = 0; return n; }
++		static const char *&current() { static const char *s = ""; return s; }
++	};
++
++	struct Registrar
++	{
++		Registrar(const char *suite, const char *name, Registry::Fn fn)
++		{
++			Registry::entries().push_back({ suite, name, fn });
++		}
++	};
++
++	inline void fail(const char *file, int line, const char *expr, const char *detail)
++	{
++		Registry::failures()++;
++		std::printf("  FAIL %s\n        %s:%d\n        %s\n",
++					Registry::current(), file, line, expr);
++		if(detail && *detail)
++			std::printf("        %s\n", detail);
++	}
++
++	// Renders a UTF-16 string as ASCII plus \uXXXX escapes so failure output is
++	// readable regardless of the console code page.
++	inline std::string escape(const wchar_t *s)
++	{
++		std::string out = "\"";
++		char buf[16];
++		for(; s && *s; s++)
++		{
++			auto c = static_cast<unsigned>(*s);
++			if(c >= 0x20 && c < 0x7F)
++				out += static_cast<char>(c);
++			else
++			{
++				std::snprintf(buf, sizeof(buf), "\\u%04X", c);
++				out += buf;
++			}
++		}
++		out += "\"";
++		return out;
++	}
++
++	inline int run(const char *filter = nullptr)
++	{
++		const char *suite = nullptr;
++		for(auto &e : Registry::entries())
++		{
++			if(filter && *filter && std::string(e.suite).find(filter) == std::string::npos)
++				continue;
++
++			if(!suite || std::string(suite) != e.suite)
++			{
++				suite = e.suite;
++				std::printf("\n[%s]\n", suite);
++			}
++
++			int before = Registry::failures();
++			Registry::current() = e.name;
++			e.fn();
++			if(Registry::failures() == before)
++				std::printf("  ok   %s\n", e.name);
++		}
++
++		std::printf("\n%d checks, %d failure(s)\n", Registry::checks(), Registry::failures());
++		return Registry::failures() > 125 ? 125 : Registry::failures();
++	}
++}
++
++#define NSS_CAT2(a, b) a##b
++#define NSS_CAT(a, b) NSS_CAT2(a, b)
++
++#define TEST(suite_, name_)                                                    \
++	static void NSS_CAT(nss_test_fn_, __LINE__)();                             \
++	static ::nss_test::Registrar NSS_CAT(nss_test_reg_, __LINE__)(             \
++		#suite_, #name_, &NSS_CAT(nss_test_fn_, __LINE__));                    \
++	static void NSS_CAT(nss_test_fn_, __LINE__)()
++
++#define CHECK(expr_)                                                           \
++	do {                                                                       \
++		::nss_test::Registry::checks()++;                                      \
++		if(!(expr_)) ::nss_test::fail(__FILE__, __LINE__, #expr_, "");         \
++	} while(0)
++
++#define CHECK_MSG(expr_, msg_)                                                 \
++	do {                                                                       \
++		::nss_test::Registry::checks()++;                                      \
++		if(!(expr_)) ::nss_test::fail(__FILE__, __LINE__, #expr_, msg_);       \
++	} while(0)
++
++#define CHECK_EQ(a_, b_)                                                       \
++	do {                                                                       \
++		::nss_test::Registry::checks()++;                                      \
++		auto va_ = (a_); auto vb_ = (b_);                                      \
++		if(!(va_ == vb_)) {                                                    \
++			char d_[128];                                                      \
++			std::snprintf(d_, sizeof(d_), "got %lld, want %lld",               \
++						  (long long)va_, (long long)vb_);                     \
++			::nss_test::fail(__FILE__, __LINE__, #a_ " == " #b_, d_);          \
++		}                                                                      \
++	} while(0)
+diff --git a/src/tests/test_encoding.cpp b/src/tests/test_encoding.cpp
+new file mode 100644
+index 0000000..7f6793b
+--- /dev/null
++++ b/src/tests/test_encoding.cpp
+@@ -0,0 +1,99 @@
++// Characterisation tests for Encoding::GetType.
++//
++// Config files are read by Lexer::load_File, which picks a decoder purely from
++// what this function returns. Guessing wrong does not fail loudly; it silently
++// decodes the file through the wrong codepage, so every non-ASCII title in a
++// user's shell.nss comes out as mojibake. These tests pin down what the
++// detector actually does today, including where it is wrong.
++
++#include "test.h"
++
++#include <windows.h>
++#include <cstdint>
++using byte = uint8_t;
++
++#include "../shared/System/Text/Encoding.h"
++
++using namespace Nilesoft::Text;
++
++static EncodingType detect(const byte *data, size_t len)
++{
++	return Encoding::GetType(const_cast<byte *>(data), len);
++}
++
++TEST(encoding, bom_forms_are_recognised)
++{
++	const byte utf8bom[]  = { 0xEF, 0xBB, 0xBF, 'a', 'b' };
++	const byte utf16le[]  = { 0xFF, 0xFE, 'a', 0x00 };
++	const byte utf16be[]  = { 0xFE, 0xFF, 0x00, 'a' };
++
++	CHECK(detect(utf8bom, sizeof(utf8bom)) == EncodingType::UTF8BOM);
++	CHECK(detect(utf16le, sizeof(utf16le)) == EncodingType::UTF16LEBOM);
++	CHECK(detect(utf16be, sizeof(utf16be)) == EncodingType::UTF16BEBOM);
++}
++
++// The important case: modern editors, git and Notepad all default to UTF-8
++// without a BOM, so this is what a user's config most often looks like.
++TEST(encoding, bomless_utf8_is_detected)
++{
++	// item(title='A_<U+4E2D>')
++	const byte cjk[] = { 'i','t','e','m','(', '\'', 'A', 0xE4, 0xB8, 0xAD, '\'', ')', '\r', '\n' };
++	CHECK_MSG(detect(cjk, sizeof(cjk)) == EncodingType::UTF8, "BOM-less UTF-8 with CJK");
++
++	// Cyrillic "Papka" in UTF-8
++	const byte cyr[] = { 0xD0,0x9F, 0xD0,0xB0, 0xD0,0xBF, 0xD0,0xBA, 0xD0,0xB0, '\r','\n' };
++	CHECK_MSG(detect(cyr, sizeof(cyr)) == EncodingType::UTF8, "BOM-less UTF-8, 2-byte sequences");
++
++	// 4-byte sequence (emoji U+1F600)
++	const byte emoji[] = { 'x', 0xF0, 0x9F, 0x98, 0x80, 'y', '\r', '\n' };
++	CHECK_MSG(detect(emoji, sizeof(emoji)) == EncodingType::UTF8, "BOM-less UTF-8, 4-byte sequence");
++
++	const byte ascii[] = { 'i','t','e','m','\r','\n' };
++	CHECK_MSG(detect(ascii, sizeof(ascii)) == EncodingType::UTF8, "pure ASCII");
++}
++
++TEST(encoding, legacy_codepage_bytes_are_detected_as_ansi)
++{
++	// Windows-1252 "cafe" with 0xE9, with text following. 0xE9 is a 3-byte
++	// lead in UTF-8, and the byte after it is not a continuation byte, so the
++	// detector correctly rejects UTF-8 here.
++	const byte cp1252[] = { 'c','a','f', 0xE9, ' ', 'x', '\r', '\n' };
++	CHECK(detect(cp1252, sizeof(cp1252)) == EncodingType::ANSI);
++}
++
++// Known gaps. These document real misdetections rather than asserting the
++// behaviour is correct: each one decodes a file through the wrong codepage.
++TEST(encoding, malformed_utf8_is_rejected)
++{
++	const byte trailing[] = { 'c','a','f', 0xE9 };
++	CHECK_MSG(detect(trailing, sizeof(trailing)) == EncodingType::ANSI,
++			  "truncated multibyte lead must be rejected");
++
++	const byte truncated[] = { 'x', 0xE4, 0xB8, 'A', 'y', '\r', '\n' };
++	CHECK_MSG(detect(truncated, sizeof(truncated)) == EncodingType::ANSI,
++			  "malformed 3-byte sequence must be rejected");
++
++	const byte lone[] = { 'a', 0x93, 'b', '\r', '\n' };
++	CHECK_MSG(detect(lone, sizeof(lone)) == EncodingType::ANSI,
++			  "lone continuation byte must be rejected");
++
++	const byte overlong[] = { 0xE0, 0x80, 0x80 };
++	CHECK_MSG(detect(overlong, sizeof(overlong)) == EncodingType::ANSI,
++			  "overlong UTF-8 must be rejected");
++
++	const byte surrogate[] = { 0xED, 0xA0, 0x80 };
++	CHECK_MSG(detect(surrogate, sizeof(surrogate)) == EncodingType::ANSI,
++			  "UTF-8 surrogate encoding must be rejected");
++
++	const byte too_high[] = { 0xF4, 0x90, 0x80, 0x80 };
++	CHECK_MSG(detect(too_high, sizeof(too_high)) == EncodingType::ANSI,
++			  "code point above U+10FFFF must be rejected");
++}
++
++TEST(encoding, degenerate_input)
++{
++	const byte one[] = { 'a' };
++	CHECK(detect(nullptr, 0) == EncodingType::Unknown);
++	CHECK(detect(one, 0) == EncodingType::Unknown);
++	CHECK(detect(one, 1) == EncodingType::UTF8);
++}
+diff --git a/src/tests/test_stringcompare.cpp b/src/tests/test_stringcompare.cpp
+new file mode 100644
+index 0000000..fd64f64
+--- /dev/null
++++ b/src/tests/test_stringcompare.cpp
+@@ -0,0 +1,144 @@
++// Regression tests for Ordinal::equals_fold, the replacement for the
++// _memicmp-on-UTF-16 comparison that string.h and Lexer.h used to call.
++//
++// The CJK and Cyrillic cases below are the ones the old code got wrong; they
++// are the reason this file exists.
++
++#include "test.h"
++#include "../shared/System/Text/StringCompare.h"
++
++#include <cwchar>
++#include <string>
++
++using namespace Nilesoft::Text;
++
++static bool eq(const wchar_t *a, const wchar_t *b)
++{
++	auto la = std::wcslen(a), lb = std::wcslen(b);
++	if(la != lb) return false;
++	return Ordinal::equals_fold(a, b, la);
++}
++
++TEST(ordinal_fold, ascii_case_pairs_match)
++{
++	CHECK(eq(L"Copy", L"copy"));
++	CHECK(eq(L"COPY", L"copy"));
++	CHECK(eq(L"CoPy", L"cOpY"));
++	CHECK(eq(L"", L""));
++	CHECK(eq(L"a", L"A"));
++}
++
++TEST(ordinal_fold, ascii_distinct_do_not_match)
++{
++	CHECK(!eq(L"Copy", L"Paste"));
++	CHECK(!eq(L"copy", L"copz"));
++	CHECK(!eq(L"copy", L"copy "));
++	CHECK(!eq(L"a", L"b"));
++}
++
++TEST(ordinal_fold, ascii_adjacent_bytes_are_not_folded_together)
++{
++	// '@' is 0x40, one below 'A'; '[' is 0x5B, one above 'Z'. Neither may fold.
++	CHECK(!eq(L"@", L"`"));
++	CHECK(!eq(L"[", L"{"));
++	CHECK(eq(L"@[", L"@["));
++}
++
++TEST(ordinal_fold, cjk_high_byte_collisions_rejected)
++{
++	// The _memicmp implementation folded the high byte of each code unit, so
++	// every one of these pairs compared equal. They are distinct characters.
++	CHECK_MSG(!eq(L"䄀", L"愀"), "U+4100 must not equal U+6100");
++	CHECK_MSG(!eq(L"䅁", L"慡"), "U+4141 must not equal U+6161");
++	CHECK_MSG(!eq(L"中", L"渭"), "U+4E2D must not equal U+6E2D");
++	CHECK_MSG(!eq(L"婚", L"穚"), "U+5A5A must not equal U+7A5A");
++
++	// Mixed: an ASCII-safe prefix must not mask the collision that follows.
++	CHECK(!eq(L"menu中", L"menu渭"));
++	CHECK(!eq(L"ア䄀", L"ア愀"));
++}
++
++TEST(ordinal_fold, non_ascii_is_compared_exactly)
++{
++	// ASCII-only folding is the documented contract: real non-ASCII case pairs
++	// compare unequal, but they compare *consistently*, which _memicmp did not.
++	CHECK(!eq(L"А", L"а"));          // Cyrillic A vs a
++	CHECK(eq(L"А", L"А"));           // and identical input still matches
++	CHECK(eq(L"éè", L"éè"));
++	CHECK(!eq(L"é", L"É"));          // e-acute lower vs upper
++}
++
++TEST(ordinal_fold, surrogate_pairs_compare_exactly)
++{
++	CHECK(eq(L"\U0001F600", L"\U0001F600"));
++	CHECK(!eq(L"\U0001F600", L"\U0001F601"));
++	// A surrogate half must never be folded into another.
++	CHECK(!eq(L"😀", L"😁"));
++}
++
++// The scalar path runs below Ordinal::simd_threshold and the vector path above
++// it, with a scalar tail. These lengths straddle both boundaries and the
++// 8-unit vector stride so neither path escapes coverage.
++TEST(ordinal_fold, simd_and_scalar_paths_agree)
++{
++	for(size_t len = 1; len <= 200; len++)
++	{
++		std::wstring a(len, L'a');
++		for(size_t i = 0; i < len; i += 3) a[i] = L'Q';
++
++		std::wstring b = a;
++		CHECK_MSG(Ordinal::equals_fold(a.c_str(), b.c_str(), len), "identical buffers must match");
++
++		// Flip case everywhere: still equal under ASCII folding.
++		std::wstring c = a;
++		for(auto &ch : c) ch = (ch >= L'A' && ch <= L'Z') ? wchar_t(ch + 32) : wchar_t(ch - 32);
++		CHECK_MSG(Ordinal::equals_fold(a.c_str(), c.c_str(), len), "case-flipped buffers must match");
++
++		// A single differing unit must be caught at every position, including
++		// the last, which is where a bad tail loop would let it through.
++		for(size_t pos = 0; pos < len; pos++)
++		{
++			std::wstring d = a;
++			d[pos] = L'#';
++			CHECK_MSG(!Ordinal::equals_fold(a.c_str(), d.c_str(), len),
++					  "difference must be detected at every position");
++		}
++
++		// And a CJK collision at every position, which is the vector path's
++		// version of the _memicmp bug.
++		for(size_t pos = 0; pos < len; pos += 7)
++		{
++			std::wstring e = a, f = a;
++			e[pos] = L'中';
++			f[pos] = L'渭';
++			CHECK_MSG(!Ordinal::equals_fold(e.c_str(), f.c_str(), len),
++					  "CJK collision must be rejected on the vector path too");
++		}
++	}
++}
++
++TEST(ordinal_fold, count_is_respected_without_null_termination)
++{
++	const wchar_t a[] = { L'a', L'b', L'c', L'X' };
++	const wchar_t b[] = { L'A', L'B', L'C', L'Y' };
++	CHECK(Ordinal::equals_fold(a, b, 3));
++	CHECK(!Ordinal::equals_fold(a, b, 4));
++	CHECK(Ordinal::equals_fold(a, b, 0));
++}
++
++TEST(ordinal_fold, null_and_alias_handling)
++{
++	const wchar_t *s = L"abc";
++	CHECK(Ordinal::equals_fold(s, s, 3));
++	CHECK(Ordinal::equals_fold(nullptr, nullptr, 0));
++	CHECK(!Ordinal::equals_fold(nullptr, s, 3));
++	CHECK(!Ordinal::equals_fold(s, nullptr, 3));
++}
++
++TEST(ordinal_exact, case_sensitive_path)
++{
++	CHECK(Ordinal::equals_exact(L"Copy", L"Copy", 4));
++	CHECK(!Ordinal::equals_exact(L"Copy", L"copy", 4));
++	CHECK(Ordinal::equals(L"Copy", L"copy", 4, true));
++	CHECK(!Ordinal::equals(L"Copy", L"copy", 4, false));
++}
+diff --git a/src/tests/tests.vcxproj b/src/tests/tests.vcxproj
+new file mode 100644
+index 0000000..e2a4ebd
+--- /dev/null
++++ b/src/tests/tests.vcxproj
+@@ -0,0 +1,23 @@
++<?xml version="1.0" encoding="utf-8"?>
++<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
++  <ItemGroup Label="ProjectConfigurations">
++    <ProjectConfiguration Include="release|x64"><Configuration>release</Configuration><Platform>x64</Platform></ProjectConfiguration>
++    <ProjectConfiguration Include="release|Win32"><Configuration>release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
++    <ProjectConfiguration Include="release|ARM64"><Configuration>release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
++  </ItemGroup>
++  <PropertyGroup Label="Globals">
++    <VCProjectVersion>16.0</VCProjectVersion><Keyword>Win32Proj</Keyword>
++    <ProjectGuid>{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}</ProjectGuid>
++    <CharacterSet>Unicode</CharacterSet><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
++    <ProjectName>tests</ProjectName><TargetName>tests</TargetName><GenerateManifest>false</GenerateManifest>
++    <OutDir>$(SolutionDir)bin\</OutDir><IntDir>$(ProjectDir)obj\$(Configuration.ToLower())\$(Platform)\</IntDir>
++    <ConfigurationType>Application</ConfigurationType><PlatformToolset>v143</PlatformToolset><PreferredToolArchitecture>x64</PreferredToolArchitecture>
++  </PropertyGroup>
++  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
++  <PropertyGroup Condition="'$(Configuration)'=='release'" Label="Configuration"><UseDebugLibraries>false</UseDebugLibraries></PropertyGroup>
++  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
++  <ItemDefinitionGroup><ClCompile><WarningLevel>Level4</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard><ConformanceMode>true</ConformanceMode><PrecompiledHeader>NotUsing</PrecompiledHeader><RuntimeLibrary>MultiThreaded</RuntimeLibrary><Optimization>MaxSpeed</Optimization><MultiProcessorCompilation>true</MultiProcessorCompilation><TreatWarningAsError>true</TreatWarningAsError><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile><Link><SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation></Link></ItemDefinitionGroup>
++  <ItemGroup><ClInclude Include="test.h" /><ClInclude Include="..\shared\System\Text\StringCompare.h" /></ItemGroup>
++  <ItemGroup><ClCompile Include="main.cpp" /><ClCompile Include="test_stringcompare.cpp" /><ClCompile Include="test_encoding.cpp" /></ItemGroup>
++  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
++</Project>

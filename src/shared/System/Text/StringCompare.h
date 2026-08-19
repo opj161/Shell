@@ -23,6 +23,7 @@
 // need full Unicode case folding for user-facing text should use
 // ::CompareStringOrdinal(..., TRUE) instead.
 
+#include <windows.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -148,9 +149,37 @@ namespace Nilesoft
 				return 0 == ::memcmp(a, b, count * sizeof(wchar_t));
 			}
 
+			inline bool has_non_ascii(const wchar_t *s, size_t count) noexcept
+			{
+				for(size_t i = 0; i < count; i++)
+				{
+					if(static_cast<uint16_t>(s[i]) > 0x7F)
+						return true;
+				}
+				return false;
+			}
+
 			inline bool equals(const wchar_t *a, const wchar_t *b, size_t count, bool ignoreCase) noexcept
 			{
-				return ignoreCase ? equals_fold(a, b, count) : equals_exact(a, b, count);
+				if(count == 0 || a == b)
+					return true;
+				if(!a || !b)
+					return false;
+				if(!ignoreCase)
+					return equals_exact(a, b, count);
+
+				if(equals_fold(a, b, count))
+					return true;
+
+				// If the fast ASCII SIMD fold didn't match, check if non-ASCII characters
+				// are present. If so, fall back to Win32 CompareStringOrdinal for Unicode casing.
+				if(has_non_ascii(a, count) || has_non_ascii(b, count))
+				{
+					return ::CompareStringOrdinal(a, static_cast<int>(count),
+												  b, static_cast<int>(count),
+												  TRUE) == CSTR_EQUAL;
+				}
+				return false;
 			}
 
 			// Narrow equivalent. Folds ASCII only, so unlike ::_memicmp it does not

@@ -5,6 +5,8 @@
 // real GDI objects and the live handle count as the oracle.
 
 #include <windows.h>
+#include <thread>
+#include <vector>
 #include "test.h"
 #include "../dll/src/Include/BitmapCache.h"
 
@@ -194,4 +196,50 @@ TEST(bitmapcache, empty_and_null_text_are_rejected)
 	// Nothing was stored, so the caller still owns it.
 	CHECK(alive(h));
 	::DeleteObject(h);
+}
+
+TEST(bitmapcache, bounded_capacity_evicts_on_overflow)
+{
+	BitmapCache cache;
+	std::vector<HBITMAP> handles;
+	handles.reserve(300);
+
+	for(int i = 0; i < 300; i++)
+	{
+		wchar_t buf[64];
+		swprintf_s(buf, L"<svg id='%d'/>", i);
+		auto h = cache.add(buf, wcslen(buf), 16, 16, make_bitmap());
+		handles.push_back(h);
+	}
+
+	CHECK_EQ(cache.size(), BitmapCache::MaxEntries);
+}
+
+TEST(bitmapcache, concurrent_access_is_thread_safe)
+{
+	BitmapCache cache;
+	std::vector<std::thread> workers;
+	const int thread_count = 4;
+	const int iterations = 30;
+
+	for(int t = 0; t < thread_count; t++)
+	{
+		workers.emplace_back([&cache, t]()
+		{
+			for(int i = 0; i < iterations; i++)
+			{
+				wchar_t buf[64];
+				swprintf_s(buf, L"<svg icon='%d'/>", (t * 50) + i);
+				auto h = cache.add(buf, wcslen(buf), 16, 16, make_bitmap());
+				CHECK(h != nullptr);
+				auto found = cache.find(buf, wcslen(buf), 16, 16);
+				CHECK(found != nullptr);
+			}
+		});
+	}
+
+	for(auto &w : workers)
+		w.join();
+
+	CHECK(cache.size() <= BitmapCache::MaxEntries);
 }

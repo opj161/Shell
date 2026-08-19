@@ -409,9 +409,12 @@ namespace Nilesoft
 				if(!title.empty())
 				{
 					this->title = title.move();
+					// normalize() splits an accelerator off at the tab and reassigns
+					// title.text from a fresh allocation, so dwTypeData and cch have to
+					// be taken after it.
+					normalize();
 					this->dwTypeData = this->title.text;
 					cch = this->title.text.length<uint32_t>();
-					normalize();
 				}
 			}
 
@@ -1288,7 +1291,8 @@ namespace Nilesoft
 
 			static uint32_t get_index(HMENU hMenu, uint32_t id)
 			{
-				for(int i = 0; i < get_count(hMenu); i++)
+				const int count = get_count(hMenu);
+				for(int i = 0; i < count; i++)
 				{
 					MENUITEMINFOW mii = { sizeof mii, MIIM_ID };
 					if(::GetMenuItemInfoW(hMenu, i, true, &mii))

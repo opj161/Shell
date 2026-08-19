@@ -209,30 +209,44 @@ static std::wstring JoinPath(const std::wstring &path1, const std::wstring &path
 		if(path2.size() > 0 && path2.front() != L'\\')
 			path += L'\\';
 	}
-	return std::move(path1 + path2);
+	// path, not path1: the separator was appended to the local copy and then
+	// thrown away.
+	return path + path2;
 }
 
 static bool InstallFolder(MSIHANDLE hInstall, std::wstring& install_folder, bool find_by_reg)
 {
 	MSI msi(hInstall);
-	DWORD length = MAX_PATH;
 	install_folder = msi.InstallFolder();
 	if(install_folder.size() == 0)
 	{
 		if(find_by_reg)
 		{
 			install_folder.resize(MAX_PATH);
+
+			// This must stay in step with CLS_ContextMenu in src/shared/Globals.h.
+			// pcbData is a byte count, not a character count.
+			DWORD length = static_cast<DWORD>(install_folder.size() * sizeof(wchar_t));
 			auto rc = ::RegGetValueW(HKEY_CLASSES_ROOT,
 									 L"CLSID\\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}\\InprocServer32",
-									 nullptr, RRF_RT_REG_SZ | KEY_WOW64_64KEY, nullptr, static_cast<void *>(install_folder.data()), &length);
-			if(rc == ERROR_SUCCESS)
+									 nullptr, RRF_RT_REG_SZ, nullptr,
+									 static_cast<void *>(install_folder.data()), &length);
+			if(rc == ERROR_SUCCESS && length >= sizeof(wchar_t))
 			{
-				install_folder.resize(length / sizeof(wchar_t));
+				// The reported size includes the terminating null, which must not
+				// stay inside the string.
+				install_folder.resize(length / sizeof(wchar_t) - 1);
 				auto p = install_folder.find_last_of(L"\\");
 				if(p != install_folder.npos)
-				{
-					install_folder = std::move(install_folder.substr(0, p + 1));
-				}
+					install_folder = install_folder.substr(0, p + 1);
+				else
+					install_folder.clear();
+			}
+			else
+			{
+				// Without this the failed read leaves MAX_PATH nulls behind and the
+				// size check below reports success.
+				install_folder.clear();
 			}
 		}
 	}

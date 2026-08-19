@@ -154,57 +154,58 @@ Note that:
 					}
 				}
 
-				auto et = EncodingType::UTF8;
-				size_t i = 0;
-				while(i < l)
+				// Validate BOM-less UTF-8 strictly. The previous table-driven loop
+				// checked only the first continuation byte, treated continuation
+				// bytes (0x80-0xBF) as one-byte characters, and accepted truncated
+				// sequences at EOF. Those cases silently sent ANSI files through
+				// the UTF-8 decoder.
+				auto continuation = [](byte c) { return (c & 0xC0) == 0x80; };
+				for(size_t i = 0; i < l;)
 				{
-					switch((int)utf8ByteTable[b[i]])
+					const byte c = b[i];
+					if(c <= 0x7F)
 					{
-						case 4:
-						{
-							i++;
-							if((i < l) && (b[i] & 0xC0) != 0x80)
-							{
-								et = EncodingType::ANSI;
-								i = l;
-							}
-							// 10bbbbbb ?
-							break;
-						}
-						case 3:
-						{
-							i++;
-							if((i < l) && (b[i] & 0xC0) != 0x80)
-							{
-								et = EncodingType::ANSI;
-								i = l;
-							}
-							// 10bbbbbb ?
-							break;
-						}
-						case 2:
-						{
-							i++;
-							if((i < l) && (b[i] & 0xC0) != 0x80)
-							{
-								et = EncodingType::ANSI;
-								i = l;
-							}// 10bbbbbb ?
-							break;
-						}
-						case 1:
-						{
-							i++;
-							break;
-						}
-						case 0:
-						{
-							i = l;
-							break;
-						}
+						i++;
+						continue;
 					}
+
+					if(c >= 0xC2 && c <= 0xDF)
+					{
+						if(i + 1 >= l || !continuation(b[i + 1]))
+							return EncodingType::ANSI;
+						i += 2;
+						continue;
+					}
+
+					if(c >= 0xE0 && c <= 0xEF)
+					{
+						if(i + 2 >= l || !continuation(b[i + 1]) || !continuation(b[i + 2]))
+							return EncodingType::ANSI;
+						// Reject overlong forms and UTF-16 surrogate code points.
+						if((c == 0xE0 && b[i + 1] < 0xA0) ||
+						   (c == 0xED && b[i + 1] > 0x9F))
+							return EncodingType::ANSI;
+						i += 3;
+						continue;
+					}
+
+					if(c >= 0xF0 && c <= 0xF4)
+					{
+						if(i + 3 >= l || !continuation(b[i + 1]) ||
+						   !continuation(b[i + 2]) || !continuation(b[i + 3]))
+							return EncodingType::ANSI;
+						// Reject overlong forms and code points above U+10FFFF.
+						if((c == 0xF0 && b[i + 1] < 0x90) ||
+						   (c == 0xF4 && b[i + 1] > 0x8F))
+							return EncodingType::ANSI;
+						i += 4;
+						continue;
+					}
+
+					// Includes lone continuation bytes, C0/C1 and F5-FF.
+					return EncodingType::ANSI;
 				}
-				return et;
+				return EncodingType::UTF8;
 			}
 
 			/*

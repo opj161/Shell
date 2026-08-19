@@ -142,3 +142,11 @@ TEST(ordinal_exact, case_sensitive_path)
 	CHECK(Ordinal::equals(L"Copy", L"copy", 4, true));
 	CHECK(!Ordinal::equals(L"Copy", L"copy", 4, false));
 }
+
+TEST(ordinal_exact, non_ascii_hybrid_unicode_folds)
+{
+	CHECK(Ordinal::equals(L"А", L"а", 1, true));
+	CHECK(Ordinal::equals(L"é", L"É", 1, true));
+	CHECK(Ordinal::equals(L"Папка", L"папка", 5, true));
+	CHECK(!Ordinal::equals(L"Папка", L"папка", 5, false));
+}
