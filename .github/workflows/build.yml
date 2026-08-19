@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -39,6 +40,11 @@ jobs:
     - name: Build
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{env.BUILD_PLATFORM}} ${{env.SOLUTION_FILE_PATH}}
+
+    - name: Run unit tests
+      if: matrix.platform == 'x64' || matrix.platform == 'x86'
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: ${{env.BIN_PATH}}\tests.exe
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4

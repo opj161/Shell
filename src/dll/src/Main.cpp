@@ -679,7 +679,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 						//flag.add(TPM_RETURNCMD);
 					}
 
-					invoke(hMenu, flag, { x, y });
+					invoke(ctx->MenuHandle(), flag, { x, y });
 				
 					// v = 0;
 					// SystemParametersInfoW(SPI_SETMENUANIMATION, 0, &v, SPIF_SENDCHANGE);
