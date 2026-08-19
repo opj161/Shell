@@ -37,6 +37,8 @@ src/.vs/
 src/exe/obj/
 src/dll/obj/
 src/setup/ca/obj/
+src/setup/wix/obj/
+src/tests/obj/
 src/packages/
 *.lib
 *.exp
