@@ -516,73 +516,12 @@ namespace Nilesoft
 			bool operator!=(wchar_t c) const { return !is(c, 0, false); }
 			explicit operator bool() const { return at(0) != 0; }
 
-			template<typename T = size_t>
-			bool peek_token(const wchar_t *value, T count, bool ignoreCase = true) const
-			{
-				if(value && count > 0 && count <= length)
-				{
-					auto str = &buffer[index];
-					for(size_t i= 0; i < count; i++)
-					{
-						if(*str != *value)
-						{
-							if(ignoreCase)
-							{
-								if(std::towupper(*str) != std::towupper(*value))
-									return false;
-							}
-							return false;
-						}
-						str++;
-						value++;
-					}
-
-					/*auto sz = static_cast<size_t>(count * sizeof(wchar_t));
-					if(ignoreCase)
-						return (0 == ::_memicmp(str, value, sz));
-					
-					return (0 == ::memcmp(str, value, sz));
-						*/
-				}
-				return true;
-			}
-
-			bool peek_token(const wchar_t *value, size_t len, bool ignoreCase = true) const
-			{
-				auto cbsize = len * sizeof(wchar_t);
-				auto str = &buffer[index];
-				if(ignoreCase)
-					return 0==::_memicmp(value, str, cbsize);
-				return 0== ::memcmp(value, str, cbsize);
-			};
-
-			uint32_t peek_token(const wchar_t *value, bool ignoreCase = true) const
-			{
-				auto count = 0u;
-				if(buffer && length > 0 && !eof && value)
-				{
-					auto str = &buffer[index];
-					for(size_t i = index; *value; i++)
-					{
-						if(i >= length)
-							return 0;
-
-						if(*str != *value)
-						{
-							if(ignoreCase)
-							{
-								if(std::towupper(*str) != std::towupper(*value))
-									return 0;
-							}
-							return 0;
-						}
-						count++;
-						str++;
-						value++;
-					}
-				}
-				return count;
-			}
+			// The three peek_token overloads that lived here were unreachable: no
+			// caller existed, the size_t overload was ambiguous with the template
+			// one so a call could not have compiled, their ignoreCase branches
+			// fell through to an unconditional failure return, and the size_t
+			// overload read len units past the end of the buffer. Removed rather
+			// than repaired; add a tested equivalent if lookahead is ever needed.
 
 			uint32_t peek_ident() const
 			{

@@ -205,9 +205,14 @@ void disable_modern(bool _register)
 				{
 					//IID_ExplorerHostCreator
 					string treatas = CLS_ContextMenu;
+					// +1 for the terminator. A REG_SZ written without one is not
+					// something every reader copes with - RegistryKey::ReadString
+					// assumes it is there and hands back the value one character
+					// short, which is why the ownership check in Unregister could
+					// never recognise our own redirect.
 					res = subkey.set_value(nullptr, REG_SZ,
 										   reinterpret_cast<const uint8_t *>(treatas.c_str()),
-										   treatas.length<int>() * sizeof(wchar_t));
+										   (treatas.length<int>() + 1) * sizeof(wchar_t));
 				}
 			}
 			else

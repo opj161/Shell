@@ -1,4 +1,4 @@
-﻿
+
 #include <pch.h>
 #include "Include\Hooker.h"
 #include "Include/ContextMenu.h"
@@ -16,7 +16,11 @@ namespace Nilesoft
 
 			try
 			{
-				com_initializer.initialize();
+				// COM is deliberately not touched here. This runs from DllMain
+				// under the loader lock, where CoInitializeEx is documented as
+				// unsupported, and it would initialise whichever thread happened
+				// to load the DLL rather than the one that builds menus. It is
+				// done on the menu thread in the other init() instead.
 
 				application.Name = APP_NAME;
 				application.FileName = APP_FILENAME_TITLE;
@@ -66,7 +70,6 @@ namespace Nilesoft
 				//hooker.destroy();
 				this->uninit();
 				WIC::release();
-				D2D::destroy_Factory();
 			}
 			catch(...)
 			{
@@ -76,10 +79,44 @@ namespace Nilesoft
 			}
 		}
 
+		// Brings COM up on the calling thread once, and applies the process-wide
+		// COM options that used to be set from DllMain.
+		//
+		// Never paired with CoUninitialize. A host that shows a shell context
+		// menu has already initialised an apartment on this thread, so our call
+		// only increments a count we do not own; dropping it again at an
+		// arbitrary later point risks tearing the apartment down under the host.
+		// Leaving the extra count is the safe direction to be wrong in.
+		void Initializer::ensure_com()
+		{
+			static thread_local bool done = false;
+			if(done)
+				return;
+			done = true;
+
+			// S_FALSE means the host already initialised this thread, and
+			// RPC_E_CHANGED_MODE means it did so as MTA. Either way the thread
+			// has an apartment and there is nothing more to do.
+			::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+			// DisableComExceptionHandling. This was done in DllMain, which meant
+			// a COM activation under the loader lock. It is a process-global
+			// setting and only takes effect before the process makes other COM
+			// calls, so in a long-running Explorer it was already too late; it is
+			// kept, off the loader lock, rather than silently dropped.
+			IComPtr<IGlobalOptions> globalOptions;
+			if(globalOptions.CreateInstance(CLSID_GlobalOptions, CLSCTX_SERVER))
+				globalOptions->Set(COMGLB_EXCEPTION_HANDLING, COMGLB_EXCEPTION_DONOT_HANDLE_ANY);
+		}
+
 		bool Initializer::init()
 		{
 			try
 			{
+				// First thing on this thread, before anything reaches WIC or a
+				// shell interface. Runs on the menu thread, not the loader.
+				ensure_com();
+
 				if(!cache)
 				{
 					cache = new CACHE;
@@ -87,19 +124,23 @@ namespace Nilesoft
 					// Determine the required bitmap size.
 					cache->glyph.name = FontCache::Default;
 
-					auto cur_dir = Path::CurrentDirectory();
-					Path::CurrentDirectory(application.Dirctory);
+					// The working directory is deliberately left alone. It used to be
+					// pointed at the install folder for the duration of the parse so
+					// that Path::Full could resolve relative config paths, but that
+					// mutates state shared with every other thread in the host
+					// process for as long as parsing takes. The root config path is
+					// already absolute, and load_import roots every import against
+					// the importing file's own directory.
 					Parser parser;
 
 					load_mui();
 
-					cache->Packages.load();
+					// cache->Packages is loaded on first use; see PackagesCache::all.
 
 					if(!parser.Load())
 					{
 						Status.Error = true;
 						uninit();
-						Path::CurrentDirectory(cur_dir);
 						// Release ownership of the critical section.
 						return false;
 					}
@@ -118,7 +159,6 @@ namespace Nilesoft
 						}
 					}
 
-					Path::CurrentDirectory(cur_dir);
 					cache->fonts.init(HInstance);
 					ContextMenu::FontNotFound = false;
 				}

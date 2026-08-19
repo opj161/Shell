@@ -223,6 +223,9 @@ namespace Nilesoft
 			int column = 0;
 			SIZE size = { -1,-1 };
 			bool is_system{};
+			bool is_toplevel{};
+			bool native_ownerdraw{};
+			bool native_icon_checked{};
 			struct MUID *ui{};
 
 			struct {
@@ -824,7 +827,7 @@ namespace Nilesoft
 				return h;
 			}
 
-			static HBITMAP FindImage(MENUITEMINFOW *mii)
+			static HBITMAP FindImage(MENUITEMINFOW *mii, bool scan_private_layouts = false)
 			{
 				if(mii->hbmpItem)
 				{
@@ -869,6 +872,16 @@ namespace Nilesoft
 						return false;
 					};
 
+					auto scan = [&](int begin, int end)
+					{
+						for(auto index = begin; index <= end; index += sizeof(void *))
+						{
+							if(verify(index))
+								return true;
+						}
+						return false;
+					};
+
 					//uniqueID
 					if(!IS_INTRESOURCE(mii->dwItemData))
 						//if((dwItemData >> 16) != 0)
@@ -891,6 +904,12 @@ namespace Nilesoft
 								if(verify(0x000) || verify(0x020))
 									return result;
 							}
+
+							// Third-party shell extensions do not all use the same private
+							// menu-item data layout. Keep the known offsets above fast, then
+							// fall back to a small, guarded pointer-aligned scan for root submenus.
+							if(scan_private_layouts && mii->hSubMenu && scan(0x000, 0x300))
+								return result;
 						}
 						__except(EXCEPTION_EXECUTE_HANDLER)
 						{

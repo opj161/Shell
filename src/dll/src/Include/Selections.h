@@ -16,10 +16,10 @@ namespace Nilesoft
 														//::{031E4825-7B94-4DC3-B131-E946B44C8DD5}\CameraRoll.library-ms
 /*
 
-	wnd cls=‘ShellTabWindowClass’ title=‘title*’
-	wnd aaname=‘Explorer Pane’ cls=‘DirectUIHWND’
-	wnd aaname=‘Shell Folder View’ cls=‘SHELLDLL_DefView’ title=‘ShellView’
-	wnd aaname=‘Items View’ cls=‘DirectUIHWND’
+	wnd cls=â€˜ShellTabWindowClassâ€™ title=â€˜title*â€™
+	wnd aaname=â€˜Explorer Paneâ€™ cls=â€˜DirectUIHWNDâ€™
+	wnd aaname=â€˜Shell Folder Viewâ€™ cls=â€˜SHELLDLL_DefViewâ€™ title=â€˜ShellViewâ€™
+	wnd aaname=â€˜Items Viewâ€™ cls=â€˜DirectUIHWNDâ€™
 
 */
 //Windows Explorer on XP, Vista, 7, 8
@@ -321,6 +321,8 @@ namespace Nilesoft
 			void QuerySelectionMode();
 			bool QueryShellWindow();
 			bool QuerySelected();
+			HMENU hmenu_original{};
+			bool QuerySelectedFromHandler();
 			bool Preparing();
 			bool Parse(IShellItem *shellItem);
 			bool Parse(FileProperties *prop);

@@ -1126,11 +1126,15 @@ namespace Nilesoft
 			if(path.empty())
 				return 0;
 			
-			if(path.length() > 2)
-			{
-				if(!((path[1] == L':' && path[2] == L'\\') || (path[0] == L'\\' && path[1] == L'\\')))
-					path = Path::Combine(l->location, path).move();
-			}
+			// Root every relative import against the importing file's own
+			// directory. The length > 2 guard let short names such as "a" through
+			// unrooted, where Path::Full would then resolve them against the
+			// process working directory.
+			const bool rooted = (path.length() > 2 && path[1] == L':' && path[2] == L'\\')
+							 || (path.length() > 1 && path[0] == L'\\' && path[1] == L'\\');
+
+			if(!rooted)
+				path = Path::Combine(l->location, path).move();
 
 			path = Path::FixSeparator(path).move();
 
@@ -1152,6 +1156,33 @@ namespace Nilesoft
 					}
 				}
 				m_imports.push_back(hash);
+			}
+
+			// A file already open further up the stack is a cycle. The depth cap
+			// alone does not stop one: a file importing itself twice fans out, so
+			// bounding the depth at 32 bounds the stack but leaves up to 2^32 files
+			// to open before the recursion gives up - a hang inside Explorer rather
+			// than a crash, which is not an improvement.
+			//
+			// m_imports cannot answer this. It records every file ever imported, so
+			// it cannot tell a cycle from a shared snippet legitimately imported
+			// from two places. _imports is exactly the set currently open, and each
+			// entry keeps the path it loaded, so it is the right thing to ask.
+			for(auto &imp : _imports)
+			{
+				if(imp && !imp->path.empty() && imp->path.hash() == hash)
+				{
+					Logger::Error(L"line[%d] column[%d] circular import, '%s'",
+								  line, col, path.c_str());
+					return 0;
+				}
+			}
+
+			if(_imports.size() >= MaxImportDepth)
+			{
+				Logger::Error(L"line[%d] column[%d] import nesting deeper than %d, refusing '%s'",
+							  line, col, static_cast<int>(MaxImportDepth), path.c_str());
+				return 0;
 			}
 
 			auto lex = import_push();

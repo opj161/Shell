@@ -9,6 +9,7 @@
 #include <deque>
 #include "Hash.h"
 #include "Char.h"
+#include "StringCompare.h"
 
 /*
 std::wstring s2ws(const std::string& s)
@@ -2189,11 +2190,7 @@ std::wstring replace(std::wstring const &original,
 					if(l1 == 0)
 						return true;
 
-					size_t sz = l1 * sizeof(value1[0]);
-					if(ignoreCase)
-						return (0 == ::_memicmp(value1, value2, sz));
-					else
-						return (0 == ::memcmp(value1, value2, sz));
+					return Ordinal::equals_t(value1, value2, l1, ignoreCase);
 				}
 
 				return false;
@@ -2203,13 +2200,7 @@ std::wstring replace(std::wstring const &original,
 			static bool Equals(T const *value1, T const *value2, size_t count, bool ignoreCase)
 			{
 				if(value1 && value2)
-				{
-					auto sz = count * sizeof(T);
-					if(ignoreCase)
-						return (0 == ::_memicmp(value1, value2, sz));
-					else
-						return (0 == ::memcmp(value1, value2, sz));
-				}
+					return Ordinal::equals_t(value1, value2, count, ignoreCase);
 				return false;
 			}
 
@@ -2295,17 +2286,14 @@ std::wstring replace(std::wstring const &original,
 				if(!value || !pattern)
 					return nullptr;
 
-				T const *v = nullptr;
-				const auto sz = pattern_length * sizeof(T);
-				for(auto i = start_index; i < value_length; i++)
+				// Stop at the last position where a full pattern still fits.
+				// Running to value_length read pattern_length units from within
+				// the final unit of the buffer, past the end.
+				const auto last = value_length - pattern_length;
+				for(auto i = start_index; i <= last; i++)
 				{
-					v = value + i;
-					if(ignoreCase)
-					{
-						if(0 == ::_memicmp(v, pattern, sz))
-							return v;
-					}
-					else if(0 == ::memcmp(v, pattern, sz))
+					T const *v = value + i;
+					if(Ordinal::equals_t(v, pattern, pattern_length, ignoreCase))
 						return v;
 				}
 				return nullptr;
@@ -2329,17 +2317,14 @@ std::wstring replace(std::wstring const &original,
 				if(!value || !pattern)
 					return nullptr;
 
-				T const *v = nullptr;
-				const auto sz = pattern_length * sizeof(T);
-				for(auto i = start_index; i < value_length; i++)
+				// Stop at the last position where a full pattern still fits.
+				// Running to value_length read pattern_length units from within
+				// the final unit of the buffer, past the end.
+				const auto last = value_length - pattern_length;
+				for(auto i = start_index; i <= last; i++)
 				{
-					v = value + i;
-					if(ignoreCase)
-					{
-						if(0 == ::_memicmp(v, pattern, sz))
-							return v;
-					}
-					else if(0 == ::memcmp(v, pattern, sz))
+					T const *v = value + i;
+					if(Ordinal::equals_t(v, pattern, pattern_length, ignoreCase))
 						return v;
 				}
 				return nullptr;
@@ -2393,18 +2378,12 @@ std::wstring replace(std::wstring const &original,
 				if(!value || !pattern)
 					return nullptr;
 
-				T const *v = nullptr;
-				auto sz = pattern_length * sizeof(T);
-				auto i = (value_length == pattern_length) ? 0 : value_length - pattern_length;
-				for(; i >= 0 && i < value_length; i--)
+				// i is unsigned, so it wraps rather than going negative; the
+				// i < value_length test is what terminates the loop.
+				for(size_t i = value_length - pattern_length; i < value_length; i--)
 				{
-					v = value + i;
-					if(ignoreCase)
-					{
-						if(0 == ::_memicmp(v, pattern, sz))
-							return v;
-					}
-					else if(0 == ::memcmp(v, pattern, sz))
+					T const *v = value + i;
+					if(Ordinal::equals_t(v, pattern, pattern_length, ignoreCase))
 						return v;
 				}
 				return nullptr;

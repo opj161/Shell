@@ -1,6 +1,7 @@
 #pragma once
 #include "Expression\Variable.h"
 #include "Include\Theme.h"
+#include "Include\BitmapCache.h"
 #include <Resource.h>
 
 namespace Nilesoft
@@ -30,10 +31,30 @@ namespace Nilesoft
 
 		public:
 
-			std::vector<Package> list;
-
 			PackagesCache() = default;
 			~PackagesCache() = default;
+
+			// Enumerating the package repository is expensive: on a typical
+			// machine it walks a few hundred package keys, and for every one
+			// whose DisplayName is an indirect @{...} reference it also scans
+			// MrtCache linearly. That is tens of milliseconds on the thread
+			// building the menu.
+			//
+			// Only the appx()/package()/uwp() functions ever read this, and a
+			// default configuration never calls them, so the work is skipped
+			// entirely unless a config actually asks for it.
+			const std::vector<Package> &all() const
+			{
+				std::call_once(_once, [this] { const_cast<PackagesCache *>(this)->load(); });
+				return _list;
+			}
+
+			void clear() { _list.clear(); }
+
+		private:
+
+			mutable std::once_flag _once;
+			std::vector<Package> _list;
 
 			bool load()
 			{
@@ -83,7 +104,7 @@ namespace Nilesoft
 										pk.family = _family_.move();
 									}
 								}
-								list.push_back(std::move(pk));
+								_list.push_back(std::move(pk));
 							}
 							::RegCloseKey(hkeyPackage);
 						}
@@ -205,9 +226,10 @@ namespace Nilesoft
 				return result;
 			}
 
+		public:
 			const Package *find(const wchar_t *name) const
 			{
-				for(auto &pk : list)
+				for(auto &pk : all())
 					if(pk.id.contains(name))
 						return &pk;
 				return nullptr;
@@ -295,11 +317,8 @@ namespace Nilesoft
 
 			Font *at(uint32_t id) const
 			{
-				for(auto &font : fonts)
-				{
-					if(id == font.first) return font.second;
-				}
-				return nullptr;
+				auto it = fonts.find(id);
+				return it != fonts.end() ? it->second : nullptr;
 			}
 
 			Font *at(HFONT hfont) const
@@ -428,6 +447,7 @@ namespace Nilesoft
 			FontCache					fonts;
 			PackagesCache				Packages;
 			std::vector<ImageCache>		images;
+			BitmapCache					bitmaps;
 
 			struct
 			{
@@ -452,12 +472,13 @@ namespace Nilesoft
 				}
 
 				images.clear();
+				bitmaps.clear();
 				
 				variables.global.clear(true);
 				variables.runtime.clear(true);
 				variables.loc.clear(true);
 
-				Packages.list.clear();
+				Packages.clear();
 			}
 
 			void reload(uint32_t dpi = 96)

@@ -1,4 +1,4 @@
-﻿<h5>SYS (SYSTEM)</h5>
+<h5>SYS (SYSTEM)</h5>
 
 <section id="sys.name" class="my-5">
 	<h5>sys.name</h5>
@@ -52,26 +52,25 @@ sys.version.type</code></pre>
 	<h5>sys.datetime (system.datetime)</h5>
 	<p>Date and time format</p>
 	<p>Syntax</p>
-	<pre><code>sys.datetime                                   // the date and time in a short format (Format: YYYY.MM.DD-HH.MM.SS).
-sys.datetime.short                             // the date and time in a short format (Format: YYYY.MM.DD-HH.MM.SS).
+	<pre><code>sys.datetime                                   // the date and time in a short format (Format: YYYY.MM.DD-HH:MM:SS).
+sys.datetime.short                             // the date and time in a short format (Format: YYYY.MM.DD-HH:MM:SS).
 sys.datetime.dayofweek (sys.datetime.dw)       // the day of the week as a number (Sunday as 1)
 
 sys.datetime.date                              // the full date in a long format (Format: YYYY.MM.DD).
-sys.datetime.yy                                // the year part of the current date as a two-digit number.
 sys.datetime.year (sys.datetime.y)             // the year part of the current date as a four-digit number.
 sys.datetime.month (sys.datetime.m)            // the month part of the current date.
 sys.datetime.day (sys.datetime.d)              // the day part of the current date.
 
-sys.datetime.time                              // the full time in hours, minutes, and seconds (Format: HH.MM.SS).
+sys.datetime.time                              // the full time in hours, minutes, and seconds (Format: HH:MM:SS).
 sys.datetime.pm                                // "AM" or "PM" based on the current time.
 sys.datetime.hour (sys.datetime.h)             // the hour part of the current time (24-hour format).
 sys.datetime.minute (sys.datetime.min)         // the minutes part of the current time.
-sys.datetime.second (sys.datetime.s)           // the seconds part of the current time.
+sys.datetime.seconds (sys.datetime.s)          // the seconds part of the current time.
 sys.datetime.milliseconds (sys.datetime.ms)    // the milliseconds part of the current time as a three-digit number.
 
 sys.datetime("D")                              // the full date in a short format (Format: DD/MM/YYYY).
-sys.datetime("Y")                              // the year part of the current date as a four-digit number.
-sys.datetime("y")                              // the year part of the current date as a two-digit number.
+sys.datetime("y")                              // the year part of the current date as a four-digit number.
+sys.datetime("Y")                              // the year part of the current date as a two-digit number.
 sys.datetime("m")                              // the month part of the current date as a two-digit number.
 sys.datetime("d")                              // the day part of the current date as a two-digit number.
 sys.datetime("P") (sys.datetime("p"))          // "AM" or "PM" based on the current time.

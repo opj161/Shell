@@ -37,6 +37,10 @@ src/.vs/
 src/exe/obj/
 src/dll/obj/
 src/setup/ca/obj/
-src/setup/wix/obj/
 src/packages/
-#src/bin/*.exe
+*.lib
+*.exp
+*.ilk
+*.pdb
+*.diff.txt
+*.log

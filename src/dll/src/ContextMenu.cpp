@@ -780,6 +780,8 @@ namespace Nilesoft
 
 			mii->dwItemData = item->dwItemData;
 			mii->handle = menu->handle;
+			mii->is_toplevel = item->is_toplevel;
+			mii->native_ownerdraw = item->native_ownerdraw;
 
 			this_item _this; _context._this = &_this;
 
@@ -1656,356 +1658,6 @@ namespace Nilesoft
 			}
 		};
 
-		LRESULT ContextMenu::OnDrawItem_D2D(DRAWITEMSTRUCT *di)
-		{
-			LRESULT lret = TRUE;
-
-			auto hMenu = reinterpret_cast<HMENU>(di->hwndItem);
-			auto rc = reinterpret_cast<const Rect *>(&di->rcItem);
-			DC dc = di->hDC;
-			Flag<uint32_t> faction = di->itemAction;
-			Flag<uint32_t> fState = di->itemState;
-
-			DRAWITEMSTATE state(di->itemState);
-
-			auto draw_entire = faction.has(ODA_DRAWENTIRE);
-			//state.selected = fState.has(ODS_SELECTED);
-			//state.disabled = fState.has(ODS_DISABLED) || fState.has(ODS_GRAYED);
-
-			Color back_color = _theme.back.color.nor;
-			Color text_color = _theme.text.color.nor;
-
-			_tip.hide(!draw_entire);
-
-			D2D d2d2;
-			d2d2.init_res();
-			d2d2.begin(di->hDC, *rc);
-
-			D2D1_SIZE_F size_f = { static_cast<float>(rc->width()), static_cast<float>(rc->height()) };
-
-			//d2d->render->SetDpi(ctx->dpi.val, ctx->dpi.val);
-			//d2d->render->SetTransform(D2D1::Matrix3x2F::Identity());
-
-			d2d2.render->Clear(_theme.background.color);
-
-			if(state.selected)
-			{
-				if(state.disabled)
-				{
-					back_color = _theme.back.color.sel_dis;
-					text_color = _theme.text.color.sel_dis;
-				}
-				else
-				{
-					back_color = _theme.back.color.sel;
-					text_color = _theme.text.color.sel;
-				}
-			}
-			else if(state.disabled)
-			{
-				back_color = _theme.back.color.nor_dis;
-				text_color = _theme.text.color.nor_dis;
-			}
-
-			if(di->itemID == MF_NOITEM)
-			{
-				auto rect = *rc;
-				rect.left += _theme.separator.margin.left;
-				rect.right -= _theme.separator.margin.right;
-				//rect.top += _theme.separator.margin.top;		
-				rect.top += _theme.separator.margin.top;
-				rect.bottom = rect.top + _theme.separator.size;
-				//dc.fill_rect(*rc, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-				//draw_rect(&dc, rect.point(), { rect.width(), _theme.separator.size }, _theme.separator.color);
-				//d2d2.brush->SetColor(D2D1::ColorF(0.f, 1.f, 0.f, 1.f));
-				d2d2.brush->SetColor(_theme.separator.color);
-				//d2d2.render->DrawLine(D2D1::Point2F((float)rect.left, 0), D2D1::Point2F((float)rect.right, 10),
-				//					  d2d2.brush, 0.5f);
-
-				D2D1_RECT_F rectF{};
-				rectF.left = (float)rect.left;
-				rectF.right = (float)rect.width();
-				rectF.top = ((float)(rc->height() + _theme.separator.size) / 2.f) - _theme.separator.size;
-				rectF.bottom = rectF.top + (float)_theme.separator.size;
-				
-				d2d2.render->FillRectangle(rectF, d2d2.brush);
-
-				d2d2.end(true);
-				dc.exclude_clip_rect(*rc);
-				return lret;
-			}
-
-			auto menu = &_menus[hMenu];
-
-			auto mii = get_item(di->itemID, hMenu, _items);
-
-			if(!mii || (mii->title.empty() && !ident.equals(mii->wID)))
-			{
-				lret = msg.invoke();
-				//DC dc_layer(dc.CreateCompatibleDC(), 1);
-				dc.set_back_mode(true);
-				dc.set_back(back_color);
-				dc.set_text(text_color);
-				//dc.fill_rect(di->rcItem, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-				
-				d2d2.end(true);
-				dc.exclude_clip_rect(*rc);
-				return lret;
-			}
-
-			auto is_label = mii->visibility == Visibility::Label;
-			auto is_static = mii->visibility == Visibility::Static;
-			auto is_static_or_label = is_static || is_label;
-
-			if(draw_entire)
-			{
-				mii->index = MENU::get_index(hMenu, mii->wID);
-				::GetMenuItemRect(0, hMenu, mii->index, &mii->rect);
-				
-				//dc.fill_rect(di->rcItem, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-			}
-			else
-			{
-				if(state.disabled && is_static_or_label)
-				{
-					d2d2.end(true);
-					dc.exclude_clip_rect(*rc);
-					return lret;
-				}
-			}
-
-			if(!(state.disabled && is_static_or_label))
-			{
-				if(state.selected)
-				{
-					current.select_previtem = current.selectitem;
-					current.selectitem = mii;
-					if(mii->tip)
-						current.tip = mii;
-				}
-				else
-				{
-				}
-			}
-
-			if(state.disabled)
-			{
-				if(is_static_or_label)
-				{
-					state.disabled = false;
-					back_color = _theme.back.color.nor;
-					text_color = _theme.text.color.nor;
-				}
-				else
-				{
-				}
-			}
-
-			const long image_size = _theme.image.size;
-			auto rcblock = *rc;
-
-			rcblock.top = _theme.back.margin.top;
-			rcblock.bottom = rc->height() - _theme.back.margin.bottom;
-
-			if(mii->cch > 0 || !menu->has_col)
-			{
-				rcblock.left += _theme.back.margin.left;
-				rcblock.right -= _theme.back.margin.right;
-			}
-			else
-			{
-				rcblock.left += _theme.back.margin.left + dpi(3);
-				rcblock.right -= _theme.back.margin.right + dpi(3);
-			}
-
-			//const auto width = rcblock.width();
-			const auto height = rcblock.height();
-
-			auto rcimg = rcblock;
-			auto rcText = rcblock;
-
-			rcimg.top = rcblock.top + ((height - image_size) / 2);
-			rcimg.bottom = rcimg.top + image_size;
-
-			if(mii->cch > 0 || !menu->has_col)
-			{
-				if(mii->cch == 0)
-				{
-				}
-				else
-				{
-					rcimg.left = rcblock.left + _theme.back.padding.left;
-					rcimg.right = rcimg.left + image_size;
-				}
-			}
-
-			if(!is_static_or_label)
-			{
-				uint8_t op = back_color.a;
-
-				Color border_color = _theme.back.border.nor;
-
-				if(state.selected)
-				{
-					if(state.disabled && _theme.back.color.sel_dis.a > 0)
-						op = _theme.back.color.sel_dis.a;
-					else if(!state.disabled && _theme.back.color.sel_dis.a > 0)
-						op = _theme.back.color.sel.a;
-
-					border_color = state.disabled ? _theme.back.border.sel_dis : _theme.back.border.sel;
-				}
-				else
-				{
-					if(state.disabled && _theme.back.color.nor_dis.a > 0)
-						op = _theme.back.color.nor_dis.a;
-					else if(!state.disabled && _theme.back.color.nor.a > 0)
-						op = _theme.back.color.nor.a;
-
-					if(state.disabled)
-						border_color = _theme.back.border.nor_dis;
-				}
-
-				//if(op > 0)
-				{
-					back_color.a = op;
-					//draw_rect(&dc, rcblock.point(), { width, height }, back_color, border_color, _theme.back.radius);
-
-					D2D1_RECT_F rectF = { 0, 0, size_f.width, size_f.height };
-
-					if(state.selected)
-					{
-						d2d2.brush->SetColor(_theme.background.color);
-						d2d2.render->FillRectangle(rectF, d2d2.brush);
-					}
-
-					d2d2.brush->SetColor(back_color);
-
-					if(_theme.back.radius == 0)
-					{
-						d2d2.render->FillRectangle(rectF, d2d2.brush);
-					}
-					else 
-					{
-						auto radius = (float)_theme.back.radius;
-						
-						d2d2.render->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-						d2d2.render->FillRoundedRectangle({ rectF,radius, radius }, d2d2.brush);
-					}
-				}
-			}
-
-			auto has_checked_image = menu->draw.checks && menu->draw.images && (_theme.image.display >= 2);
-			
-			if(!mii->title.empty())
-			{
-				Color clrtext = text_color;
-
-				if(!is_label && menu->draw.has_align())
-				{
-					rcText.left = rcblock.left + _theme.image.size + _theme.image.gap + _theme.back.padding.left;
-					if(has_checked_image)
-						rcText.left += _theme.image.size + _theme.image.gap;
-				}
-				else
-				{
-					rcText.left += _theme.back.padding.left;
-				}
-
-				rcText.right -= _theme.back.padding.right;
-
-				if(mii->tab >= 0 && mii->is_popup())
-					rcText.right -= _theme.image.size;
-
-				auto txtfmt = DT_NOCLIP | DT_SINGLELINE | DT_VCENTER;
-
-				if(_theme.text.prefix)
-					txtfmt |= _theme.text.prefix;
-
-
-				//rcText.top = rc->top - dpi(1);
-				//rcText.bottom = rc->bottom;
-
-				if(mii->tab <= 0 && mii->keys.empty())
-				{
-					//draw_string(dc, font.handle, &rcText, clrtext, mii->title, mii->title.length<int>(), (mii->tab < 0 ? DT_LEFT : DT_RIGHT) | txtfmt);
-					///_log.info(L"%d %s", _theme.font.lfHeight, _theme.font.lfFaceName);
-					auto tf = d2d2.createTextFormat(_theme.font.lfFaceName, std::abs(_theme.font.lfHeight));
-					if(tf)
-					{
-						d2d2.render->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE::D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-						tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-						tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-						tf->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-						//_log.info(L"%d %s", _theme.font.lfHeight, _theme.font.lfFaceName);
-						d2d2.brush->SetColor(clrtext);
-
-						D2D1_RECT_F rect_ =
-						{
-							(float)rcText.left, (float)rcText.top,
-							float(rcText.width()),
-							float(rcText.height())
-						};
-						
-					
-						d2d2.render->DrawTextW(mii->title.normalize, mii->title.normalize.length<uint32_t>(),
-											   tf,
-											   rect_,
-											   d2d2.brush);
-						tf->Release();
-					}
-				}
-				else
-				{
-					/*auto ds = [&](const string &left, const string &right)
-					{
-						if(!left.empty())
-							draw_string(dc, font.handle, &rcText, clrtext, left, left.length<int>(), DT_LEFT | txtfmt);
-
-						if(!right.empty())
-						{
-							Color c = clrtext;
-							LOGFONTW lf{};
-							std::memcpy(&lf, &_theme.font.lfHeight, sizeof lf);
-							lf.lfHeight = long(lf.lfHeight * 0.80f);
-							lf.lfWeight = FW_LIGHT;
-							//lf.lfQuality = CLEARTYPE_NATURAL_QUALITY;
-							auto_gdi<HFONT> r_hfont(::CreateFontIndirectW(&lf));
-							if(menu->id == IDENT_ID_INSERT_UNICODE_CONTROL_CHARACTER)
-								c.opacity(state.disabled ? 50 : 100);
-							else
-								c.opacity(state.disabled ? 30 : 50);
-
-							draw_string(dc, r_hfont.get(), &rcText, c, right, right.length<int>(), DT_RIGHT | txtfmt);
-						}
-					};
-
-					if(mii->keys.empty())
-					{
-						string left = mii->title.text.substr(0, mii->tab).trim_end().move();
-						string right = mii->title.text.substr(mii->tab).trim_start().move();
-						ds(left, right);
-					}
-					else
-					{
-						ds(mii->title.text, mii->keys);
-					}*/
-				}
-
-			}
-
-			if(state.selected && mii->tip)
-				//	_tip.show(mii->tip, mii->rect);
-				_tip.show(mii->tip.text, mii->tip.type, mii->tip.time, mii->rect);
-
-			d2d2.end(true);
-
-			// exlude menu item rectangle to prevent drawing by windows after us
-			dc.exclude_clip_rect(*rc);
-
-			return lret;
-		}
-
-		int ooo = 0;
 
 		LRESULT ContextMenu::OnDrawItem(DRAWITEMSTRUCT *di)
 		{
@@ -2014,9 +1666,7 @@ namespace Nilesoft
 			if(di->itemID == 0x5ffffffe)
 				return lret;
 
-			bool render_d2d = false;
-			if(render_d2d)
-				return OnDrawItem_D2D(di);
+
 
 			
 			auto hMenu = reinterpret_cast<HMENU>(di->hwndItem);
@@ -2282,6 +1932,549 @@ namespace Nilesoft
 				if(state.selected && mii->image_select.isvalid())
 					image = &mii->image_select;
 
+ 
+				auto color_luma = [](const Color &color)
+				{
+					return (int(color.r()) * 299 + int(color.g()) * 587 + int(color.b()) * 114) / 1000;
+				};
+				auto blended_luma = [](const Color &front, const Color &back)
+				{
+					auto a = int(front.a);
+					auto r = (int(front.r()) * a + int(back.r()) * (255 - a)) / 255;
+					auto g = (int(front.g()) * a + int(back.g()) * (255 - a)) / 255;
+					auto b = (int(front.b()) * a + int(back.b()) * (255 - a)) / 255;
+					return (r * 299 + g * 587 + b * 114) / 1000;
+				};
+
+				auto icon_back_luma = blended_luma(back_color, _theme.background.color);
+
+				auto light_icon_recolor_required = [&](int visible_pixels, int colorful_pixels,
+													   long long visible_luma, long long visible_spread,
+													   int min_luma, int max_luma,
+													   int image_area)
+				{
+					if(visible_pixels <= 0)
+						return false;
+
+					auto avg_luma = visible_luma / visible_pixels;
+					auto avg_spread = visible_spread / visible_pixels;
+					auto min_visible = image_area / 96;
+					if(min_visible < 4)
+						min_visible = 4;
+
+					if(max_luma - min_luma > 96)
+						return false;
+
+					return visible_pixels >= min_visible &&
+						abs(int(avg_luma) - icon_back_luma) < 80 &&
+						avg_spread < 28 &&
+						colorful_pixels <= (visible_pixels / 16 > 2 ? visible_pixels / 16 : 2);
+				};
+
+				auto readable_icon_color = [&]()
+				{
+					Color icon_color = _theme.image.color[0];
+					if(!icon_color)
+					{
+						if(state.disabled && _theme.text.color.nor_dis)
+							icon_color = _theme.text.color.nor_dis;
+						else
+							icon_color = text_color;
+					}
+
+					auto contrast = abs(color_luma(icon_color) - icon_back_luma);
+					if(contrast < 80)
+					{
+						auto text_contrast = abs(color_luma(text_color) - icon_back_luma);
+						if(text_contrast > contrast)
+						{
+							icon_color = text_color;
+							contrast = text_contrast;
+						}
+					}
+
+					if(contrast < 80)
+						icon_color = icon_back_luma > 128 ? Color(0, 0, 0, 0xFF) : Color(0xFF, 0xFF, 0xFF, 0xFF);
+
+					return icon_color;
+				};
+
+				auto recolor_icon_bits = [&](uint32_t *bits, int image_area)
+				{
+					auto icon_color = readable_icon_color();
+					for(auto i = 0; i < image_area; i++)
+					{
+						auto a = int((bits[i] >> 24) & 0xFF);
+						if(a == 0)
+							continue;
+
+						a = a * icon_color.a / 255;
+						auto pre_r = int(icon_color.r()) * a / 255;
+						auto pre_g = int(icon_color.g()) * a / 255;
+						auto pre_b = int(icon_color.b()) * a / 255;
+						bits[i] = (a << 24) | (pre_r << 16) | (pre_g << 8) | pre_b;
+					}
+				};
+
+				if(mii->is_toplevel &&
+				   mii->native_ownerdraw &&
+				   !mii->native_icon_checked &&
+				   !mii->has_image_or_draw())
+				{
+					mii->native_icon_checked = true;
+
+					if(auto_gdi<HBITMAP> hbitmap(dc.createbitmap(rc->width(), rc->height())); hbitmap)
+					{
+						DC dcmem(dc.CreateCompatibleDC(), 1);
+						dcmem.select_bitmap(hbitmap.get());
+
+						BITMAPINFOHEADER bmpInfo = { 0 };
+						bmpInfo.biSize = sizeof(bmpInfo);
+						bmpInfo.biWidth = rc->width();
+						bmpInfo.biHeight = -int(rc->height());
+						bmpInfo.biPlanes = 1;
+						bmpInfo.biBitCount = 32;
+						bmpInfo.biCompression = BI_RGB;
+
+						auto w = rc->width(), h = rc->height();
+						auto count = w * h;
+						auto capture_right = rcimg.right - rc->left + _theme.image.gap;
+						if(capture_right < long(_theme.image.size))
+							capture_right = _theme.image.size;
+						if(capture_right > w)
+							capture_right = w;
+
+						if(auto_gdi<HBRUSH> hbr(CreateSolidBrush(RGB(0x7F, 0x7F, 0x7F))); hbr)
+							dcmem.fill_rect({ 0, 0, w, h }, hbr.get());
+
+						auto_gdi<HRGN> clip(::CreateRectRgn(0, 0, capture_right, h));
+						auto old_clip = ::SaveDC(dcmem);
+						if(clip)
+							::SelectClipRgn(dcmem, clip.get());
+
+						auto old_hdc = di->hDC;
+						auto old_rcItem = di->rcItem;
+						auto old_state = di->itemState;
+						di->hDC = dcmem;
+						di->rcItem = { 0, 0, w, h };
+						di->itemState &= ~(ODS_SELECTED | ODS_FOCUS | ODS_HOTLIGHT);
+						msg.invoke();
+						di->hDC = old_hdc;
+						di->rcItem = old_rcItem;
+						di->itemState = old_state;
+						if(old_clip)
+							::RestoreDC(dcmem, old_clip);
+
+						std::vector<COLORREF> pixels(count);
+						::GetDIBits(dcmem, hbitmap.get(), 0, h, &pixels[0],
+									 (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
+
+						long zone_left = 0;
+						long zone_top = 0;
+						long zone_right = capture_right;
+						long zone_bottom = h;
+						auto icon_padding = long(_theme.image.size) / 8;
+						if(icon_padding < 2)
+							icon_padding = 2;
+
+						auto icon_right = rcimg.right - rc->left;
+						auto icon_search_right = icon_right + icon_padding;
+						if(icon_search_right > zone_right)
+							icon_search_right = zone_right;
+
+						std::vector<int> color_buckets(32768);
+						for(auto y = zone_top; y < zone_bottom; y++)
+						{
+							for(auto x = zone_left; x < zone_right; x++)
+							{
+								uint32_t p = pixels[y * w + x];
+								auto bucket = int((((p >> 16) & 0xFF) >> 3) << 10) |
+									int((((p >> 8) & 0xFF) >> 3) << 5) |
+									int(((p & 0xFF) >> 3));
+								color_buckets[bucket]++;
+							}
+						}
+
+						int bg_bucket = 0;
+						for(auto i = 1; i < int(color_buckets.size()); i++)
+						{
+							if(color_buckets[i] > color_buckets[bg_bucket])
+								bg_bucket = i;
+						}
+
+						int b0 = ((bg_bucket & 0x1F) << 3) + 4;
+						int b1 = (((bg_bucket >> 5) & 0x1F) << 3) + 4;
+						int b2 = (((bg_bucket >> 10) & 0x1F) << 3) + 4;
+
+						int max_diff = 0;
+						for(auto y = zone_top; y < zone_bottom; y++)
+						{
+							for(auto x = zone_left; x < zone_right; x++)
+							{
+								uint32_t p = pixels[y * w + x];
+								int d0 = abs(int(p & 0xFF) - b0);
+								int d1 = abs(int((p >> 8) & 0xFF) - b1);
+								int d2 = abs(int((p >> 16) & 0xFF) - b2);
+								int d = d0 > d1 ? (d0 > d2 ? d0 : d2) : (d1 > d2 ? d1 : d2);
+								if(d > max_diff)
+									max_diff = d;
+							}
+						}
+
+						if(max_diff > 16)
+						{
+							auto threshold = max_diff / 10;
+							if(threshold < 12)
+								threshold = 12;
+
+							std::vector<int> component(count);
+
+							struct Component
+							{
+								long x1{}, y1{}, x2{}, y2{};
+								int pixels{};
+								int id{};
+							};
+
+							std::vector<Component> components;
+							std::vector<int> stack;
+							stack.reserve(size_t(_theme.image.size * _theme.image.size));
+
+							auto foreground = [&](long x, long y)
+							{
+								uint32_t p = pixels[y * w + x];
+								int d0 = abs(int(p & 0xFF) - b0);
+								int d1 = abs(int((p >> 8) & 0xFF) - b1);
+								int d2 = abs(int((p >> 16) & 0xFF) - b2);
+								int d = d0 > d1 ? (d0 > d2 ? d0 : d2) : (d1 > d2 ? d1 : d2);
+								return d > threshold;
+							};
+
+							int component_id = 0;
+							for(auto y = zone_top; y < zone_bottom; y++)
+							{
+								for(auto x = zone_left; x < zone_right; x++)
+								{
+									auto start = int(y * w + x);
+									if(component[start] || !foreground(x, y))
+										continue;
+
+									component_id++;
+									Component c{ x, y, x, y, 0, component_id };
+									component[start] = component_id;
+									stack.clear();
+									stack.push_back(start);
+
+									while(!stack.empty())
+									{
+										auto pos = stack.back();
+										stack.pop_back();
+										auto px = pos % w;
+										auto py = pos / w;
+
+										c.pixels++;
+										if(px < c.x1)
+											c.x1 = px;
+										if(py < c.y1)
+											c.y1 = py;
+										if(px > c.x2)
+											c.x2 = px;
+										if(py > c.y2)
+											c.y2 = py;
+
+										for(auto oy = -1; oy <= 1; oy++)
+										{
+											for(auto ox = -1; ox <= 1; ox++)
+											{
+												if(ox == 0 && oy == 0)
+													continue;
+
+												auto nx = px + ox;
+												auto ny = py + oy;
+												if(nx < zone_left || nx >= zone_right ||
+												   ny < zone_top || ny >= zone_bottom)
+													continue;
+
+												auto np = int(ny * w + nx);
+												if(component[np] || !foreground(nx, ny))
+													continue;
+
+												component[np] = component_id;
+												stack.push_back(np);
+											}
+										}
+									}
+
+									components.push_back(c);
+								}
+							}
+
+							auto image_area = int(_theme.image.size * _theme.image.size);
+							long merged_x1 = zone_right;
+							long merged_y1 = zone_bottom;
+							long merged_x2 = zone_left;
+							long merged_y2 = zone_top;
+							int merged_pixels = 0;
+							int accepted_components = 0;
+
+							for(auto &c : components)
+							{
+								auto bw = c.x2 - c.x1 + 1;
+								auto bh = c.y2 - c.y1 + 1;
+								if(c.x1 >= icon_search_right)
+									continue;
+								if(c.pixels < image_area / 96)
+									continue;
+								if(c.pixels > image_area * 2)
+									continue;
+								if(bw > long(_theme.image.size * 2) ||
+								   bh > long(_theme.image.size + _theme.image.gap))
+									continue;
+
+								accepted_components++;
+								merged_pixels += c.pixels;
+								if(c.x1 < merged_x1)
+									merged_x1 = c.x1;
+								if(c.y1 < merged_y1)
+									merged_y1 = c.y1;
+								if(c.x2 > merged_x2)
+									merged_x2 = c.x2;
+								if(c.y2 > merged_y2)
+									merged_y2 = c.y2;
+							}
+
+							if(accepted_components > 0 && merged_pixels <= image_area * 2)
+							{
+								long bx1 = merged_x1;
+								long by1 = merged_y1;
+								long bx2 = merged_x2;
+								long by2 = merged_y2;
+								auto target_size = long(_theme.image.size);
+
+								for(auto edge = 0; edge < 3; edge++)
+								{
+									if(bx1 > 0 && bx2 - bx1 + 1 < target_size)
+										bx1--;
+									if(by1 > 0 && by2 - by1 + 1 < target_size)
+										by1--;
+									if(bx2 + 1 < w && bx2 - bx1 + 1 < target_size)
+										bx2++;
+									if(by2 + 1 < h && by2 - by1 + 1 < target_size)
+										by2++;
+								}
+
+								BITMAPINFO bmp{};
+								bmp.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+								bmp.bmiHeader.biWidth = _theme.image.size;
+								bmp.bmiHeader.biHeight = -int(_theme.image.size);
+								bmp.bmiHeader.biPlanes = 1;
+								bmp.bmiHeader.biBitCount = 32;
+								bmp.bmiHeader.biCompression = BI_RGB;
+
+								uint32_t *bits{};
+								auto hicon = ::CreateDIBSection(nullptr, &bmp, DIB_RGB_COLORS,
+																 reinterpret_cast<void **>(&bits),
+																 nullptr, 0);
+								if(hicon && bits)
+								{
+									std::fill(bits, bits + image_area, 0);
+
+									auto bw = bx2 - bx1 + 1;
+									auto bh = by2 - by1 + 1;
+									auto target_width = bw;
+									auto target_height = bh;
+
+									if(target_width > target_size || target_height > target_size)
+									{
+										if(target_width >= target_height)
+										{
+											target_width = target_size;
+											target_height = (bh * target_size) / bw;
+										}
+										else
+										{
+											target_height = target_size;
+											target_width = (bw * target_size) / bh;
+										}
+
+										if(target_width < 1)
+											target_width = 1;
+										if(target_height < 1)
+											target_height = 1;
+									}
+
+									auto dx0 = (target_size - target_width) / 2;
+									auto dy0 = (target_size - target_height) / 2;
+
+									int visible_pixels = 0;
+									int colorful_pixels = 0;
+									long long visible_luma = 0;
+									long long visible_spread = 0;
+									int min_luma = 255;
+									int max_luma = 0;
+
+									for(auto dy = 0; dy < target_height; dy++)
+									{
+										auto sy = by1 + (dy * bh) / target_height;
+
+										for(auto dx = 0; dx < target_width; dx++)
+										{
+											auto sx = bx1 + (dx * bw) / target_width;
+											auto dest_x = dx0 + dx;
+											auto dest_y = dy0 + dy;
+
+											uint32_t p = pixels[sy * w + sx];
+											int pb = p & 0xFF;
+											int pg = (p >> 8) & 0xFF;
+											int pr = (p >> 16) & 0xFF;
+											int d0 = abs(pb - b0);
+											int d1 = abs(pg - b1);
+											int d2 = abs(pr - b2);
+											int d = d0 > d1 ? (d0 > d2 ? d0 : d2) : (d1 > d2 ? d1 : d2);
+											if(d <= threshold)
+												continue;
+
+											auto divisor = max_diff - threshold;
+											if(divisor < 1)
+												divisor = 1;
+
+											int a = (d - threshold) * 255 / divisor;
+											if(a < 0)
+												a = 0;
+											if(a > 255)
+												a = 255;
+
+											auto pre_r = pr * a / 255;
+											auto pre_g = pg * a / 255;
+											auto pre_b = pb * a / 255;
+											bits[dest_y * _theme.image.size + dest_x] =
+												(a << 24) | (pre_r << 16) | (pre_g << 8) | pre_b;
+
+											if(a > 32)
+											{
+												auto maxc = pr > pg
+													? (pr > pb ? pr : pb)
+													: (pg > pb ? pg : pb);
+												auto minc = pr < pg
+													? (pr < pb ? pr : pb)
+													: (pg < pb ? pg : pb);
+												auto luma = (pr * 299 + pg * 587 + pb * 114) / 1000;
+												auto spread = maxc - minc;
+												visible_pixels++;
+												visible_luma += luma;
+												visible_spread += spread;
+												if(luma < min_luma)
+													min_luma = luma;
+												if(luma > max_luma)
+													max_luma = luma;
+												if(spread > 48)
+													colorful_pixels++;
+											}
+										}
+									}
+
+									if(light_icon_recolor_required(visible_pixels, colorful_pixels,
+																   visible_luma, visible_spread,
+																   min_luma, max_luma,
+																   image_area))
+										recolor_icon_bits(bits, image_area);
+
+									mii->image.hbitmap = hicon;
+									mii->image.size = { long(_theme.image.size), long(_theme.image.size) };
+									mii->image.import = ImageImport::Image;
+									image = &mii->image;
+								}
+							}
+						}
+					}
+				}
+
+				auto make_readable_light_bitmap = [&](HDC source, SIZE size) -> HBITMAP
+				{
+					if(!source || size.cx <= 0 || size.cy <= 0 || size.cx > 256 || size.cy > 256)
+						return nullptr;
+
+					BITMAPINFO bmp{};
+					bmp.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+					bmp.bmiHeader.biWidth = size.cx;
+					bmp.bmiHeader.biHeight = -int(size.cy);
+					bmp.bmiHeader.biPlanes = 1;
+					bmp.bmiHeader.biBitCount = 32;
+					bmp.bmiHeader.biCompression = BI_RGB;
+
+					uint32_t *bits{};
+					auto_gdi<HBITMAP> hcopy(::CreateDIBSection(nullptr, &bmp, DIB_RGB_COLORS,
+															   reinterpret_cast<void **>(&bits),
+															   nullptr, 0));
+					if(!hcopy || !bits)
+						return nullptr;
+
+					DC copyDC(::CreateCompatibleDC(dc), 1);
+					if(!copyDC || !copyDC.select_bitmap(hcopy.get()))
+						return nullptr;
+
+					::BitBlt(copyDC, 0, 0, size.cx, size.cy, source, 0, 0, SRCCOPY);
+
+					auto unpremultiply = [](int channel, int alpha)
+					{
+						if(alpha > 0 && alpha < 255 && channel <= alpha)
+						{
+							channel = channel * 255 / alpha;
+							if(channel > 255)
+								channel = 255;
+						}
+						return channel;
+					};
+
+					auto image_area = int(size.cx * size.cy);
+					int visible_pixels = 0;
+					int colorful_pixels = 0;
+					long long visible_luma = 0;
+					long long visible_spread = 0;
+					int min_luma = 255;
+					int max_luma = 0;
+
+					for(auto i = 0; i < image_area; i++)
+					{
+						auto p = bits[i];
+						auto a = int((p >> 24) & 0xFF);
+						if(a <= 32)
+							continue;
+
+						auto pb = unpremultiply(int(p & 0xFF), a);
+						auto pg = unpremultiply(int((p >> 8) & 0xFF), a);
+						auto pr = unpremultiply(int((p >> 16) & 0xFF), a);
+						auto maxc = pr > pg
+							? (pr > pb ? pr : pb)
+							: (pg > pb ? pg : pb);
+						auto minc = pr < pg
+							? (pr < pb ? pr : pb)
+							: (pg < pb ? pg : pb);
+						auto luma = (pr * 299 + pg * 587 + pb * 114) / 1000;
+						auto spread = maxc - minc;
+
+						visible_pixels++;
+						visible_luma += luma;
+						visible_spread += spread;
+						if(luma < min_luma)
+							min_luma = luma;
+						if(luma > max_luma)
+							max_luma = luma;
+						if(spread > 48)
+							colorful_pixels++;
+					}
+
+					auto recolor = light_icon_recolor_required(visible_pixels, colorful_pixels,
+																visible_luma, visible_spread,
+																min_luma, max_luma,
+																image_area);
+					if(recolor)
+						recolor_icon_bits(bits, image_area);
+
+					copyDC.reset_bitmap();
+					return recolor ? hcopy.release() : nullptr;
+				};
+
 				if(image->hbitmap)
 				{
 					DC memDC(::CreateCompatibleDC(dc), 1);
@@ -2298,9 +2491,30 @@ namespace Nilesoft
 							//else
 							{
 								bool is_16 = image->size.cx <= dpi(16) && image->size.cy <= dpi(16);
-								if(image->import == ImageImport::SVG && is_16)
-									dc.draw_image(rcim.point(), image->size, memDC, state.disabled ? 48 : 192);
-								dc.draw_image(rcim.point(), image->size, memDC, state.disabled ? 64 : 255);
+								auto draw_bitmap = [&](HDC hdc)
+								{
+									if(image->import == ImageImport::SVG && is_16)
+										dc.draw_image(rcim.point(), image->size, hdc, state.disabled ? 48 : 192);
+									dc.draw_image(rcim.point(), image->size, hdc, state.disabled ? 64 : 255);
+								};
+
+								auto_gdi<HBITMAP> readable_bitmap;
+								if(mii->is_toplevel && image->import != ImageImport::SVG)
+									readable_bitmap.reset(make_readable_light_bitmap(memDC, image->size));
+
+								if(readable_bitmap)
+								{
+									DC readableDC(::CreateCompatibleDC(dc), 1);
+									if(readableDC && readableDC.select_bitmap(readable_bitmap.get()))
+									{
+										draw_bitmap(readableDC);
+										readableDC.reset_bitmap();
+									}
+									else
+										draw_bitmap(memDC);
+								}
+								else
+									draw_bitmap(memDC);
 							}
 							memDC.reset_bitmap();
 						}
@@ -4236,6 +4450,7 @@ namespace Nilesoft
 					item->wid = mii.wID;
 					item->dwItemData = mii.dwItemData;
 					item->is_toplevel = is_root;
+					item->native_ownerdraw = (mii.fType & MFT_OWNERDRAW) == MFT_OWNERDRAW;
 
 					if(is_root)
 						;
@@ -4259,7 +4474,7 @@ namespace Nilesoft
 						item->disabled = mii.fState & MFS_DISABLED;
 						item->checked = mii.fState & MFS_CHECKED;
 						item->radio_check = mii.fType & MFT_RADIOCHECK;
-						item->image = MenuItemInfo::FindImage(&mii);
+						item->image = MenuItemInfo::FindImage(&mii, is_root);
 
 						if(item->disabled && _settings.modify_items.remove.disabled)
 							continue;
@@ -4934,8 +5149,8 @@ namespace Nilesoft
 							long x = rect.left + (rect.width() / 2) - (size.cx / 2);
 							long y = rect.top - size.cy - ctx->dpi(10);
 
-							if(x < 0) x = 0;
-							if(y < 0) y = rect.bottom + ctx->dpi(10);
+							if(x < ctx->_rcMonitor.left) x = ctx->_rcMonitor.left;
+							if(y < ctx->_rcMonitor.top) y = rect.bottom + ctx->dpi(10);
 
 							if((x + size.cx) > ctx->_rcMonitor.right)
 								x = ctx->_rcMonitor.right - size.cx;
@@ -5042,7 +5257,7 @@ namespace Nilesoft
 			}
 
 			BOOL ENABLED = TRUE;
-			::DwmSetWindowAttribute(hWnd, DWMWA_NCRENDERING_ENABLED, &ENABLED, sizeof(BOOL));
+			// DWMWA_NCRENDERING_ENABLED is documented get-only
 			::DwmSetWindowAttribute(hWnd, DWMWA_ALLOW_NCPAINT, &ENABLED, sizeof(BOOL));
 			::DwmSetWindowAttribute(hWnd, DWMWA_NONCLIENT_RTL_LAYOUT, &ENABLED, sizeof(BOOL));
 
@@ -5819,7 +6034,7 @@ namespace Nilesoft
 
 							if(wnd->has_scroll)
 							{
-								wp->y = (ctx->_rcMonitor.height() - wnd->height) / 2;
+								wp->y = ctx->_rcMonitor.top + ((ctx->_rcMonitor.height() - wnd->height) / 2);
 							}
 							else if((wnd->height + 100) > (ctx->_rcMonitor.height() / 2))
 							{
@@ -5924,35 +6139,10 @@ namespace Nilesoft
 					return lret;
 				case WM_ERASEBKGND:
 				{
-					if(++ixi == 0)
-					{
-						Rect r = hWnd;
-						D2D d2d;
-						
-						d2d.begin(wnd->hdc, { 0, 0, r.width(), r.height() });
-						
-						//auto z = (float)theme->border.size*2;
-						D2D1_RECT_F rect = { 0.0f, 0.0f, float(r.width()), float(r.height()) };
-
-						//d2d.render->SetDpi(96.f, 96.f);
-						d2d.render->SetTransform(D2D1::Matrix3x2F::Identity());
-						//d2d.render->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.f));
-						if(theme->border.radius > 0)
-						{
-							d2d.render->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-							auto radius = float(theme->border.radius);
-							d2d.brush->SetColor(theme->background.color);
-							d2d.render->FillRoundedRectangle({ rect, radius, radius }, d2d.brush);
-						}
-						else
-						{
-							d2d.brush->SetColor(theme->background.color);
-							d2d.render->FillRectangle(rect, d2d.brush);
-						}
-						d2d.end(true);
-					}
+					// The background is painted per item in OnDrawItem, so this
+					// only has to claim the message. A Direct2D rounded-rect fill
+					// used to sit here behind `if(++ixi == 0)`, which never fired.
 					lret = TRUE;
-					//lret = ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
 					return lret;
 				}
 				case WM_SETCURSOR:

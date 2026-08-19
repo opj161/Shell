@@ -129,6 +129,10 @@ namespace Nilesoft
 			TokenError verify(const Ident &id, bool signer);
 			TokenError verify(const NativeMenu *menu, const Ident &id, bool _signed);
 
+			// Ceiling on import nesting. _imports is the stack of files currently
+			// open, so its depth is the nesting depth.
+			static constexpr size_t MaxImportDepth = 32;
+
 			Lexer *import_push()
 			{
 				_imports.emplace_back(new Lexer);

@@ -1,3 +1,4 @@
+#include "Include/ShellExt.h"
 #include <pch.h>
 
 //Enable Narrow Classic Context Menu on Windows 10
@@ -582,7 +583,11 @@ namespace Nilesoft
 				else
 					Directory = Parent;
 
-				::SetCurrentDirectoryW(Directory);
+				// Deliberately not ::SetCurrentDirectoryW(Directory). The working
+				// directory is per-process, and this runs on the thread building
+				// the menu inside a host we do not own, so any other thread doing
+				// relative path work in that window saw the wrong directory.
+				// Every consumer now receives Directory explicitly.
 			}
 
 			Types[FSO_BACK] = this->Background;
@@ -894,6 +899,91 @@ namespace Nilesoft
 			return result;
 		}
 
+				// The selection a host gave us through IShellExtInit::Initialize, matched
+		// against the menu it gave IContextMenu::QueryContextMenu. Deliberately a
+		// mirror of the IShellBrowser path in QuerySelected below - same
+		// GetFileProperties for the folder, same GetItemAt/Parse loop over the
+		// items - because the whole point is that both routes hand the rest of the
+		// program the same thing.
+		//
+		// Window.id is left exactly as QueryShellWindow classified it. Supplying a
+		// selection is not grounds for reclassifying the window, and guessing at a
+		// class for a host we know nothing about is how this would break Explorer.
+		bool Selections::QuerySelectedFromHandler()
+		{
+			// One guarded read. Every field has to come from the same validated
+			// capture, or a stale one bleeds into the next menu - see match().
+			auto captured = ShellExtCapture::match(hmenu_original);
+			if(!captured)
+				return false;
+
+			IComPtr<IShellItem2> si;
+			FileProperties folderProp;
+			auto have_folder = captured.folder
+				&& S_OK == ::SHCreateItemFromIDList(captured.folder, IID_IShellItem2, si)
+				&& Selections::GetFileProperties(si, &folderProp);
+
+			if(captured.items)
+			{
+				DWORD count = 0;
+				if(S_OK == captured.items->GetCount(&count) && count > 0)
+				{
+					Items.reserve(count);
+
+					for(DWORD i = 0; i < count; i++)
+					{
+						IComPtr<IShellItem> item;
+						if(S_OK == captured.items->GetItemAt(i, item) && item)
+							Parse(item);
+					}
+				}
+			}
+
+			if(!Items.empty())
+			{
+				// Selection: the containing folder is the parent, as in the
+				// IShellBrowser path.
+				if(have_folder)
+				{
+					Parent = folderProp.Path;
+					ParentRaw = folderProp.PathRaw;
+				}
+				return true;
+			}
+
+			// Background click. Mirrors what the IShellBrowser path does for the
+			// same case: the folder itself becomes the item, and the parent is the
+			// folder's parent - not the folder. Setting Background without parsing
+			// the folder would leave Types[] and count.* empty, which is worse than
+			// not answering at all, because every type test then reads as false on
+			// a menu that claims to be a background click.
+			if(!have_folder || !captured.background)
+				return false;
+
+			if(folderProp.FileSystem || folderProp.FileSysAnceStor)
+				folderProp.Background = TRUE;
+			else
+				folderProp.Background = folderProp.DropTarget;
+
+			if(!folderProp.Background)
+				return false;
+
+			IComPtr<IShellItem> parent;
+			if(S_OK == si->GetParent(parent))
+			{
+				FileProperties fp_parent;
+				if(Selections::GetFileProperties(parent, &fp_parent))
+				{
+					Parent = fp_parent.Path.move();
+					ParentRaw = fp_parent.PathRaw.move();
+				}
+			}
+
+			Background = true;
+			Parse(&folderProp);
+			return true;
+		}
+
 		bool Selections::QuerySelected()
 		{
 			try
@@ -975,8 +1065,20 @@ namespace Nilesoft
 
 				HWND current_window{};
 				
+				// No IShellBrowser used to end the query here, and that is exactly why
+				// third-party file managers only ever got theming: they implement
+				// their own view and answer nothing to WM_GETISHELLBROWSER, so the
+				// menu was built with no selection at all. Such a host has usually
+				// already handed us the selection through IShellExtInit, so ask for
+				// that before giving up.
+				//
+				// Placed after this gate rather than before it so Explorer is not
+				// touched. Explorer always has an IShellBrowser and never reaches
+				// here, which keeps its richer handling below - the DropTarget and
+				// Home/Quick access/Libraries cases - exactly as it was. Taking the
+				// handler's selection first would have quietly bypassed all of it.
 				if(!Window.has_IShellBrowser)
-					return false;
+					return QuerySelectedFromHandler();
 
 				if(Window.desktop)
 				{

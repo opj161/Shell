@@ -1,5 +1,7 @@
-﻿#include <pch.h>
+#include <pch.h>
+#include <unordered_set>
 #include "Include/ContextMenu.h"
+#include "Include/ShellExt.h"
 #include "Library/detours.h"
 #include "RegistryConfig.h"
 #include <UIAutomation.h>
@@ -310,6 +312,16 @@ struct taskbar_t
 
 	static bool is_allowed_area(HWND hTaskbar, const Point &pt)
 	{
+		static thread_local HWND cached_hwnd = nullptr;
+		static thread_local Point cached_pt{};
+		static thread_local uint32_t cached_tick = 0;
+		static thread_local bool cached_ret = false;
+
+		const auto now = ::GetTickCount();
+		if(hTaskbar == cached_hwnd && pt.x == cached_pt.x && pt.y == cached_pt.y
+		   && (now - cached_tick) < 250)
+			return cached_ret;
+
 		bool ret = false;
 
 		if(!_IUIAutomation)
@@ -359,6 +371,11 @@ struct taskbar_t
 				}
 			}
 		}
+
+		cached_hwnd = hTaskbar;
+		cached_pt = pt;
+		cached_tick = now;
+		cached_ret = ret;
 		return ret;
 	}
 
@@ -657,6 +674,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	}
 	__finally
 	{
+		ShellExtCapture::clear();
 		invoke(hMenu, uFlags, { x, y });
 		_loader.contextmenuhandler = false;
 		is_in_taskbar = false;
@@ -975,11 +993,6 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 
 			if(_initializer.init(_hInstance))
 			{
-				// DisableComExceptionHandling
-				IComPtr<IGlobalOptions> globalOptions;
-				if(globalOptions.CreateInstance(CLSID_GlobalOptions, CLSCTX_SERVER))
-					globalOptions->Set(COMGLB_EXCEPTION_HANDLING, COMGLB_EXCEPTION_DONOT_HANDLE_ANY);
-
 				_initializer.process.hModule = _loader.handle;
 				_initializer.process.path = Path::Module(_loader.handle).move();
 				_initializer.process.name = Path::Title(_initializer.process.path).move();
@@ -994,33 +1007,28 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 					.init(L"user32.dll", "win32u.dll", "NtUserTrackPopupMenuEx", TrackPopupMenuExProc)
 					.install();
 
-				auto hook = []()
+				static auto hook = []()
 				{
 					__trace(L"hook all the modules in '%s' process", _initializer.process.name.c_str());
 
 					auto user32 = "user32.dll";
 
-					// hooh all the modules in this process.
+					std::unordered_set<HMODULE> hooked;
+					hooked.reserve(iathook_TrackPopupMenu.size() + 64);
+					for(const auto &m : iathook_TrackPopupMenu)
+						hooked.insert(m._hModule);
+
+					// hook all the modules in this process.
 					for(auto hModule : Process::Modules(_initializer.process.handle))
 					{
 						if(_hInstance == hModule)
 							continue;
 
-						bool module_exists = false;
-						for(const auto &m : iathook_TrackPopupMenu)
-						{
-							if(m._hModule == hModule)
-							{
-								module_exists = true;
-								break;
-							}
-						}
+						if(!hooked.insert(hModule).second)
+							continue;
 
-						if(!module_exists)
-						{
-							iathook_TrackPopupMenu.emplace_back(hModule, user32, ::TrackPopupMenu, TrackPopupMenuProc).install();
-							iathook_TrackPopupMenu.emplace_back(hModule, user32, ::TrackPopupMenuEx, TrackPopupMenuExProc).install();
-						}
+						iathook_TrackPopupMenu.emplace_back(hModule, user32, ::TrackPopupMenu, TrackPopupMenuProc).install();
+						iathook_TrackPopupMenu.emplace_back(hModule, user32, ::TrackPopupMenuEx, TrackPopupMenuExProc).install();
 					}
 				};
 
@@ -1042,7 +1050,7 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 
 					if(!iathook_NtUserTrackPopupMenuEx.installed())
 					{
-						std::thread([=]() { ::Sleep(2000); hook(); }).detach();
+						std::thread([]() { ::Sleep(2000); hook(); }).detach();
 					}
 
 					if(ver->IsWindows11OrGreater())
@@ -1184,6 +1192,9 @@ STDAPI DllGetClassObject(_In_ REFCLSID rclsid, [[maybe_unused]] _In_ REFIID riid
 	}
 	_log.close();
 
+	if(hr == E_NOTIMPL && rclsid == IID_ContextMenu && ppv)
+		hr = CreateShellExtFactory(riid, ppv);
+
 	return hr;
 }
 
@@ -1196,6 +1207,9 @@ STDAPI DllGetClassObject(_In_ REFCLSID rclsid, [[maybe_unused]] _In_ REFIID riid
 __control_entrypoint(DllExport)
 STDAPI DllCanUnloadNow(void)
 {
+	if(com_object_count.load(std::memory_order_relaxed) > 0)
+		return S_FALSE;
+
 	if(!_loader.explorer || !is_registered())
 		return S_OK;
 	return S_FALSE;

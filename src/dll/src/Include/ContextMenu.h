@@ -99,6 +99,7 @@ namespace Nilesoft
 			std::vector<NativeMenu*> native_items;
 			std::vector<menuitem_t *> items;
 			bool is_toplevel = false;
+			bool native_ownerdraw = false;
 			~menuitem_t()
 			{
 				for(auto item : items)
@@ -182,7 +183,6 @@ namespace Nilesoft
 
 			HWND dr = 0;
 
-			D2D d2d;
 			WND(HWND hWnd = nullptr) : handle{ hWnd }
 			{
 				//cs.lock();
@@ -806,6 +806,7 @@ plutovg_move_to(pluto, start.x, start.y);
 					auto ctx = new ContextMenu(hWnd, hMenu, pt);
 					ctx->Selected.loader.explorer = explorer;
 					ctx->Selected.loader.contextmenuhandler = contextmenuhandler;
+					ctx->Selected.hmenu_original = hMenu;
 					if(ctx->Initialize())
 						return ctx;
 					delete ctx;

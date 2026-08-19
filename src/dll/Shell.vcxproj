@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="release|x64">
@@ -148,6 +148,8 @@
     <ClInclude Include="src\Expression\LiteralExpression.h" />
     <ClInclude Include="src\Expression\Variable.h" />
     <ClInclude Include="src\Include\Cache.h" />
+    <ClInclude Include="src\Include\BitmapCache.h" />
+    <ClInclude Include="src\Include\ShellExt.h" />
     <ClInclude Include="src\Include\RegistryConfig.h" />
     <ClInclude Include="src\Include\Theme.h" />
     <ClInclude Include="src\Include\Keyboard.h" />
@@ -182,6 +184,7 @@
     <ClCompile Include="src\Parser\Verification.cpp" />
     <ClCompile Include="src\Parser\Parser.cpp" />
     <ClCompile Include="src\Selections.cpp" />
+    <ClCompile Include="src\ShellExt.cpp" />
     <ClCompile Include="src\ContextMenu.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="src\Initializer.cpp" />
