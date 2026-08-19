@@ -21,6 +21,8 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <atomic>
+#include <mutex>
+#include <unordered_map>
 #include <new>
 
 namespace Nilesoft
@@ -29,8 +31,9 @@ namespace Nilesoft
 	{
 		// Outstanding COM objects, so DllCanUnloadNow can answer honestly.
 		inline std::atomic<long> com_object_count{ 0 };
+		inline std::atomic<bool> hooks_installed{ false };
 
-		// The selection captured by the most recent IShellExtInit::Initialize and
+		// The selection captured by IShellExtInit::Initialize and
 		// the menu QueryContextMenu was handed.
 		struct ShellExtCapture
 		{
@@ -43,61 +46,198 @@ namespace Nilesoft
 				explicit operator bool() const { return items != nullptr || folder != nullptr; }
 			};
 
-			inline static thread_local HMENU hmenu{};
-			inline static thread_local IShellItemArray *items{};
-			inline static thread_local PIDLIST_ABSOLUTE folder{};
-			inline static thread_local bool background{};
-			inline static thread_local uint32_t tick{};
+			struct Entry
+			{
+				IShellItemArray *items{};
+				PIDLIST_ABSOLUTE folder{};
+				bool background{};
+				uint32_t tick{};
 
+				Entry() = default;
+				Entry(IShellItemArray *sia, PCIDLIST_ABSOLUTE pidl, bool is_bg)
+					: background(is_bg), tick(::GetTickCount())
+				{
+					if(sia)
+					{
+						sia->AddRef();
+						items = sia;
+					}
+					if(pidl)
+					{
+						folder = ::ILCloneFull(pidl);
+					}
+				}
+
+				~Entry() { release(); }
+
+				Entry(const Entry &other)
+					: background(other.background), tick(other.tick)
+				{
+					if(other.items)
+					{
+						other.items->AddRef();
+						items = other.items;
+					}
+					if(other.folder)
+					{
+						folder = ::ILCloneFull(other.folder);
+					}
+				}
+
+				Entry &operator=(const Entry &other)
+				{
+					if(this != &other)
+					{
+						release();
+						background = other.background;
+						tick = other.tick;
+						if(other.items)
+						{
+							other.items->AddRef();
+							items = other.items;
+						}
+						if(other.folder)
+						{
+							folder = ::ILCloneFull(other.folder);
+						}
+					}
+					return *this;
+				}
+
+				Entry(Entry &&other) noexcept
+					: items(other.items), folder(other.folder), background(other.background), tick(other.tick)
+				{
+					other.items = nullptr;
+					other.folder = nullptr;
+				}
+
+				Entry &operator=(Entry &&other) noexcept
+				{
+					if(this != &other)
+					{
+						release();
+						items = other.items;
+						folder = other.folder;
+						background = other.background;
+						tick = other.tick;
+						other.items = nullptr;
+						other.folder = nullptr;
+					}
+					return *this;
+				}
+
+				void release()
+				{
+					if(items)
+					{
+						items->Release();
+						items = nullptr;
+					}
+					if(folder)
+					{
+						::CoTaskMemFree(folder);
+						folder = nullptr;
+					}
+					background = false;
+					tick = 0;
+				}
+
+				bool is_valid() const
+				{
+					return (items != nullptr || folder != nullptr) && ((::GetTickCount() - tick) <= 30000);
+				}
+			};
+
+		private:
+			inline static std::mutex _mutex;
+			inline static Entry _pending;
+			inline static std::unordered_map<HMENU, Entry> _bound;
+
+			static void prune_unlocked()
+			{
+				auto now = ::GetTickCount();
+				for(auto it = _bound.begin(); it != _bound.end(); )
+				{
+					if((now - it->second.tick) > 30000)
+						it = _bound.erase(it);
+					else
+						++it;
+				}
+				if((now - _pending.tick) > 30000)
+					_pending.release();
+			}
+
+		public:
 			static void clear()
 			{
-				if(items)
-				{
-					items->Release();
-					items = nullptr;
-				}
-				if(folder)
-				{
-					::CoTaskMemFree(folder);
-					folder = nullptr;
-				}
-				hmenu = nullptr;
-				background = false;
-				tick = 0;
+				std::lock_guard<std::mutex> lock(_mutex);
+				_pending.release();
+				_bound.clear();
+			}
+
+			static void clear(HMENU h)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(h) _bound.erase(h);
 			}
 
 			static void capture(IShellItemArray *sia, bool is_background)
 			{
-				clear();
+				std::lock_guard<std::mutex> lock(_mutex);
+				_pending.release();
 				if(sia)
 				{
 					sia->AddRef();
-					items = sia;
+					_pending.items = sia;
 				}
-				background = is_background;
-				tick = ::GetTickCount();
+				_pending.background = is_background;
+				_pending.tick = ::GetTickCount();
+				prune_unlocked();
 			}
 
 			static void capture_folder(PCIDLIST_ABSOLUTE pidl)
 			{
-				if(folder)
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(_pending.folder)
 				{
-					::CoTaskMemFree(folder);
-					folder = nullptr;
+					::CoTaskMemFree(_pending.folder);
+					_pending.folder = nullptr;
 				}
 				if(pidl)
-					folder = ::ILCloneFull(pidl);
+				{
+					_pending.folder = ::ILCloneFull(pidl);
+				}
 			}
 
-			static void bind(HMENU h) { hmenu = h; }
+			static void bind(HMENU h)
+			{
+				if(!h) return;
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(_pending.items || _pending.folder)
+				{
+					_bound[h] = std::move(_pending);
+				}
+				prune_unlocked();
+			}
 
 			static view match(HMENU h)
 			{
-				if(!h || h != hmenu)
-					return {};
-				if((::GetTickCount() - tick) > 30000)
-					return {};
-				return { items, folder, background };
+				if(!h) return {};
+				std::lock_guard<std::mutex> lock(_mutex);
+				prune_unlocked();
+				auto it = _bound.find(h);
+				if(it != _bound.end() && it->second.is_valid())
+				{
+					return { it->second.items, it->second.folder, it->second.background };
+				}
+				return {};
+			}
+
+			static bool has_active_captures()
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				prune_unlocked();
+				return !_bound.empty() || _pending.is_valid();
 			}
 		};
 

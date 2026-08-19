@@ -86,39 +86,36 @@ namespace Nilesoft
 		{
 			try
 			{
-				if(!cache)
 				{
-					cache = new CACHE;
-
-					// Determine the required bitmap size.
-					cache->glyph.name = FontCache::Default;
-
-					// The working directory is deliberately left alone. It used to be
-					// pointed at the install folder for the duration of the parse so
-					// that Path::Full could resolve relative config paths, but that
-					// mutates state shared with every other thread in the host
-					// process for as long as parsing takes. The root config path is
-					// already absolute, and load_import roots every import against
-					// the importing file's own directory.
-					Parser parser;
-
-					load_mui();
-
-					// cache->Packages is loaded on first use; see PackagesCache::all.
-
-					if(!parser.Load())
+					std::lock_guard<std::mutex> lock(_cache_mutex);
+					if(_cache_snapshot && Status.Loaded.load(std::memory_order_relaxed) && !Status.Refresh.load(std::memory_order_relaxed))
 					{
-						Status.Error = true;
-						uninit();
-						// Release ownership of the critical section.
-						return false;
+						return true;
 					}
+				}
 
-					// load images cache
+				auto new_cache = std::make_shared<CACHE>();
+				new_cache->glyph.name = FontCache::Default;
+
+				load_mui();
+
+				Parser parser;
+				parser.context.Cache = new_cache.get();
+				parser.context.variables.global = &new_cache->variables.global;
+				parser.context.variables.runtime = &new_cache->variables.runtime;
+
+				if(!parser.Load())
+				{
+					Status.Error.store(true, std::memory_order_relaxed);
+					return false;
+				}
+
+				{
+					std::lock_guard<std::mutex> lock(MUTEX_MUID);
 					for(auto &id : MAP_MUID)
 					{
 						auto uid = &MAP_MUID[id.first];
-						for(auto &si : cache->images)
+						for(auto &si : new_cache->images)
 						{
 							if(si.equals(uid->id))
 							{
@@ -127,18 +124,23 @@ namespace Nilesoft
 							}
 						}
 					}
+				}
 
-					cache->fonts.init(HInstance);
-					ContextMenu::FontNotFound = false;
+				new_cache->fonts.init(HInstance);
+				ContextMenu::FontNotFound = false;
+
+				{
+					std::lock_guard<std::mutex> lock(_cache_mutex);
+					_cache_snapshot = new_cache;
+					this->cache = new_cache.get();
 				}
 
 				LastError = {};
-				Status.Loaded = true;
-				Status.Error = false;
-				Status.Refresh = false;
-				Status.Disabled = false;
+				Status.Loaded.store(true, std::memory_order_relaxed);
+				Status.Error.store(false, std::memory_order_relaxed);
+				Status.Refresh.store(false, std::memory_order_relaxed);
+				Status.Disabled.store(false, std::memory_order_relaxed);
 
-				//::SHChange_Notify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 				return true;
 			}
 			catch(...)
@@ -152,48 +154,59 @@ namespace Nilesoft
 
 		bool Initializer::uninit()
 		{
-			__try
+			try
 			{
-				if(cache)
 				{
-					delete cache;
-					cache = nullptr;
+					std::lock_guard<std::mutex> lock(_cache_mutex);
+					_cache_snapshot.reset();
+					this->cache = nullptr;
 				}
-
-				MAP_MUID.clear();
+				{
+					std::lock_guard<std::mutex> lock(MUTEX_MUID);
+					MAP_MUID.clear();
+				}
 			}
-			__except(EXCEPTION_EXECUTE_HANDLER)
+			catch(...)
 			{
 #ifdef _DEBUG
 				Logger::Exception(__func__);
 #endif
 			}
 
-			Status.Loaded = false;
-			Status.Refresh = false;
-			//Status->Unload = false;
+			Status.Loaded.store(false, std::memory_order_relaxed);
+			Status.Refresh.store(false, std::memory_order_relaxed);
 			return true;
 		}
 
 		bool Initializer::query(int ch)
 		{
-			__try
+			try
 			{
-				if(Status.Disabled)
+				if(Status.Disabled.load(std::memory_order_relaxed))
 				{
 					uninit();
 					return false;
 				}
 
-				if(Status.Error && ch < 2)
+				if(Status.Error.load(std::memory_order_relaxed) && ch < 2)
 					return false;
 
-				if(Status.Refresh)
-					uninit();
-				
+				if(Status.Refresh.load(std::memory_order_relaxed))
+					return init();
+
+				{
+					std::lock_guard<std::mutex> lock(_cache_mutex);
+					if(!_cache_snapshot)
+					{
+						goto do_init;
+					}
+				}
+				return true;
+
+			do_init:
 				return init();
 			}
-			__except(EXCEPTION_EXECUTE_HANDLER)
+			catch(...)
 			{
 #ifdef _DEBUG
 				Logger::Exception(__func__);
@@ -235,7 +248,7 @@ namespace Nilesoft
 
 		bool Initializer::has_error(bool detect_changes)
 		{
-			if(Status.Error)
+			if(Status.Error.load(std::memory_order_relaxed))
 			{
 				return detect_changes ? !config_has_changed() : true;
 			}
@@ -255,6 +268,7 @@ namespace Nilesoft
 					load_as_dynamic = true;
 				}
 
+				std::lock_guard<std::mutex> lock(MUTEX_MUID);
 				if(hModule)
 				{
 					for(auto &it : list)
@@ -278,12 +292,16 @@ namespace Nilesoft
 					for(auto &it : list)
 					{
 						auto uid = &MAP_MUID[it.id];
-						*uid = it;
-						//get_image(uid);
+						if(uid->title.empty())
+						{
+							*uid = it;
+							uid->title = it.title;
+							uid->set_hash();
+						}
 					}
 				}
 
-				if(hModule && load_as_dynamic)
+				if(load_as_dynamic)
 					::FreeLibrary(hModule);
 			};
 

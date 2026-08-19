@@ -14,11 +14,14 @@ namespace Nilesoft
 
 		Parser::Parser()
 		{
-			context.Application = &Initializer::instance->application;
+			context.Application = Initializer::instance ? &Initializer::instance->application : nullptr;
 
-			context.Cache = Initializer::instance->cache;
-			context.variables.global = &context.Cache->variables.global;
-			context.variables.runtime = &context.Cache->variables.runtime;
+			context.Cache = Initializer::instance ? Initializer::instance->get_raw_cache() : nullptr;
+			if(context.Cache)
+			{
+				context.variables.global = &context.Cache->variables.global;
+				context.variables.runtime = &context.Cache->variables.runtime;
+			}
 			context.Selections = nullptr;
 
 			string cfg;
@@ -518,7 +521,7 @@ namespace Nilesoft
 
 		void Parser::parse_modify_items(uint32_t action)
 		{
-			auto cache = Initializer::instance->cache;
+			auto cache = context.Cache;
 			std::unique_ptr<NativeMenu> item(new NativeMenu(true));
 			if(eat().parse_modify_properties(item.get(), action))
 				cache->statics.push_back(item.release());
@@ -605,7 +608,7 @@ namespace Nilesoft
 
 		void Parser::parse_settings(SETTING *setting, const Ident &id, bool imported)
 		{
-			auto cache = Initializer::instance->cache;
+			auto cache = context.Cache;
 
 			if(!setting)
 				return;
@@ -1058,7 +1061,7 @@ namespace Nilesoft
 
 		bool Parser::parse_image()
 		{
-			auto cache = Initializer::instance->cache;
+			auto cache = context.Cache;
 
 			skip();
 
@@ -1126,17 +1129,17 @@ namespace Nilesoft
 			if(path.empty())
 				return 0;
 			
-			// Root every relative import against the importing file's own
-			// directory. The length > 2 guard let short names such as "a" through
-			// unrooted, where Path::Full would then resolve them against the
-			// process working directory.
-			const bool rooted = (path.length() > 2 && path[1] == L':' && path[2] == L'\\')
-							 || (path.length() > 1 && path[0] == L'\\' && path[1] == L'\\');
+			path = Path::FixSeparator(path).move();
+
+			// Root every relative import against the importing file's own directory.
+			auto s = path.c_str();
+			const bool rooted = (path.length() > 2 && s[1] == L':' && (s[2] == L'\\' || s[2] == L'/'))
+							 || (path.length() > 1 && s[0] == L'\\' && s[1] == L'\\');
 
 			if(!rooted)
 				path = Path::Combine(l->location, path).move();
 
-			path = Path::FixSeparator(path).move();
+			path = Path::Full(path).move();
 
 			auto hash = path.hash();
 			
@@ -1146,31 +1149,18 @@ namespace Nilesoft
 				{
 					if(h == hash)
 					{
-						//if (!ignore_duplicated)
-						{
-							__trace(L"line[%d] column[%d] already imported '%s'",
-											line, col, path.c_str());
-							//return false;
-						}
+						__trace(L"line[%d] column[%d] already imported '%s'",
+										line, col, path.c_str());
 						break;
 					}
 				}
 				m_imports.push_back(hash);
 			}
 
-			// A file already open further up the stack is a cycle. The depth cap
-			// alone does not stop one: a file importing itself twice fans out, so
-			// bounding the depth at 32 bounds the stack but leaves up to 2^32 files
-			// to open before the recursion gives up - a hang inside Explorer rather
-			// than a crash, which is not an improvement.
-			//
-			// m_imports cannot answer this. It records every file ever imported, so
-			// it cannot tell a cycle from a shared snippet legitimately imported
-			// from two places. _imports is exactly the set currently open, and each
-			// entry keeps the path it loaded, so it is the right thing to ask.
+			// Cycle detection: compare canonical full paths
 			for(auto &imp : _imports)
 			{
-				if(imp && !imp->path.empty() && imp->path.hash() == hash)
+				if(imp && !imp->path.empty() && Path::Full(imp->path).equals(path, true))
 				{
 					Logger::Error(L"line[%d] column[%d] circular import, '%s'",
 								  line, col, path.c_str());

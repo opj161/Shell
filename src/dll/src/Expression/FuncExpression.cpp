@@ -3703,6 +3703,23 @@ namespace Nilesoft
 				Object obj0 = eval_arg(0).move();
 				string arg0 = obj0.to_string();
 
+				auto resolve_arg = [&](const string &p) -> string {
+					if(p.empty()) return p;
+					auto s = p.c_str();
+					const bool rooted = (p.length() > 2 && s[1] == L':' && (s[2] == L'\\' || s[2] == L'/'))
+									 || (p.length() > 1 && s[0] == L'\\' && s[1] == L'\\');
+					if(!rooted && context && context->Selections)
+					{
+						if(!context->Selections->Directory.empty())
+							return Path::Combine(context->Selections->Directory, p);
+						if(!context->Selections->Parent.empty())
+							return Path::Combine(context->Selections->Parent, p);
+					}
+					return p;
+				};
+
+				arg0 = resolve_arg(arg0);
+
 				switch(Id[1])
 				{
 					case IDENT_DELETE:
@@ -3715,17 +3732,16 @@ namespace Nilesoft
 							co = eval_arg(2).to_number();
 						
 						std::error_code err;
-						std::filesystem::copy(arg0.c_str(), eval_arg(1).to_string().c_str(),
+						std::filesystem::copy(arg0.c_str(), resolve_arg(eval_arg(1).to_string()).c_str(),
 											  (std::filesystem::copy_options)co, err);
 						_result = err.value() == 0;
-						//_result = ::CopyFileW(arg0.c_str(), eval_arg(1).to_string().c_str(), true);
 						break;
 					}
 					case IDENT_MOVE:
-						_result = ::MoveFileW(arg0.c_str(), eval_arg(1).to_string().c_str());
+						_result = ::MoveFileW(arg0.c_str(), resolve_arg(eval_arg(1).to_string()).c_str());
 						break;
 					case IDENT_RENAME:
-						_result = ::_wrename(arg0.c_str(), eval_arg(1).to_string().c_str()) == 0;
+						_result = ::_wrename(arg0.c_str(), resolve_arg(eval_arg(1).to_string()).c_str()) == 0;
 						break;
 					case IDENT_FILE:
 					{
@@ -3740,7 +3756,7 @@ namespace Nilesoft
 								if(exists == 0)
 								{
 									for(size_t i = 1; i < argc; i++)
-										exists += (uint32_t)Path::IsFileExists(eval_arg(i).to_string());
+										exists += (uint32_t)Path::IsFileExists(resolve_arg(eval_arg(i).to_string()));
 								}
 								_result = exists != 0;
 								break;
@@ -3773,7 +3789,6 @@ namespace Nilesoft
 
 											std::string utf8 = std::move(UTF8::Utf16ToUtf8(arg1.c_str(), arg1.length()));
 											DWORD lpNumberOfBytesWritten = 0;
-											//auto nNumberOfBytesToWrite = DWORD(arg1.length() * sizeof(arg1[0]));
 											if(::WriteFile(hFile, utf8.c_str(), (DWORD)utf8.size(), &lpNumberOfBytesWritten, nullptr))
 												_result = lpNumberOfBytesWritten;
 										}
@@ -3840,7 +3855,7 @@ namespace Nilesoft
 								{
 									creates = ::CreateDirectoryW(arg0.c_str(), nullptr);
 									for(size_t i = 1; i < argc; i++)
-										creates += ::CreateDirectoryW(eval_arg(i).to_string(), nullptr);
+										creates += ::CreateDirectoryW(resolve_arg(eval_arg(i).to_string()).c_str(), nullptr);
 
 									auto sel = context->Selections;
 									if(creates == 1 && sel && sel->ShellBrowser)
@@ -3878,7 +3893,6 @@ namespace Nilesoft
 								}
 								catch(...)
 								{
-									//_result = false;
 								}
 								_result = creates != 0;
 								return;
@@ -3888,7 +3902,7 @@ namespace Nilesoft
 							{
 								auto empties = (uint32_t)Path::IsDirectoryEmpty(arg0);
 								for(size_t i = 1; i < argc; i++)
-									empties += (uint32_t)Path::IsDirectoryEmpty(eval_arg(i).to_string());
+									empties += (uint32_t)Path::IsDirectoryEmpty(resolve_arg(eval_arg(i).to_string()));
 								_result = empties != 0;
 								break;
 							}
@@ -3898,7 +3912,7 @@ namespace Nilesoft
 								if(exists == 0)
 								{
 									for(size_t i = 1; i < argc; i++)
-										exists += (uint32_t)Path::IsDirectoryExists(eval_arg(i).to_string());
+										exists += (uint32_t)Path::IsDirectoryExists(resolve_arg(eval_arg(i).to_string()));
 								}
 								_result = exists != 0;
 								break;

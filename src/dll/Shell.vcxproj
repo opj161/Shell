@@ -25,8 +25,9 @@
     <TargetName>shell</TargetName>
     <TargetExt>.dll</TargetExt>
     <GenerateManifest>false</GenerateManifest>
-    <OutDir>$(SolutionDir)bin\</OutDir>
-    <IntDir>$(ProjectDir)obj\$(Configuration.ToLower())\</IntDir>
+    <Arch>$(Platform.ToLower().Replace('win32', 'x86'))</Arch>
+    <OutDir>$(SolutionDir)bin\$(Arch)\</OutDir>
+    <IntDir>$(ProjectDir)obj\$(Configuration.ToLower())\$(Arch)\</IntDir>
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <PlatformToolset>v143</PlatformToolset>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>

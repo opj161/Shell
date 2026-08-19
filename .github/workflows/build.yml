@@ -24,7 +24,7 @@ jobs:
       SOLUTION_FILE_PATH: src/Shell.sln
       BUILD_CONFIGURATION: ${{matrix.configuration}}
       BUILD_PLATFORM: ${{matrix.platform}}
-      BIN_PATH: D:\a\Shell\Shell\src\bin
+      BIN_PATH: src\bin\${{matrix.platform}}
     runs-on: windows-latest
 
     steps:
@@ -52,6 +52,8 @@ jobs:
         name: shell-${{matrix.platform}}
         path: |
           ${{env.BIN_PATH}}\*
+          src\bin\setup-${{matrix.platform}}.msi
+          src\bin\imports\
           !${{env.BIN_PATH}}\*.lib
           !${{env.BIN_PATH}}\*.exp
           !${{env.BIN_PATH}}\*.wixpdb

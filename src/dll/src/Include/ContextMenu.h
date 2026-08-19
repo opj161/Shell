@@ -649,7 +649,7 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			DPI dpi;
 			bool common = true;
-			CACHE *_cache{};
+			std::shared_ptr<CACHE> _cache;
 			Visibility _vis = Visibility::Normal;
 
 			std::vector<uint32_t> parent_level;
@@ -764,9 +764,11 @@ plutovg_move_to(pluto, start.x, start.y);
 
 		public:
 			// static variables
+			inline static std::mutex ProcessesMutex;
 			inline static std::unordered_map<ContextMenu *, bool> Processes;
 			inline static bool FontNotFound = false;
 			inline static POINT point = {};
+			inline static std::mutex HookMapMutex;
 			inline static std::unordered_map<HWINEVENTHOOK, ContextMenu *> HookMap;
 
 		public: 

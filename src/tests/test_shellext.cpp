@@ -181,16 +181,19 @@ TEST(shellext, the_folder_id_list_is_cloned_and_released)
 		ShellExtCapture::capture_folder(desktop);
 		ShellExtCapture::bind(menu);
 
-		CHECK(ShellExtCapture::folder != nullptr);
+		auto matched = ShellExtCapture::match(menu);
+		CHECK(static_cast<bool>(matched));
+		CHECK(matched.folder != nullptr);
 		// The host owns the pidl it passes to Initialize and it is not valid
 		// afterwards, so holding the same pointer would be a dangling read.
-		CHECK(ShellExtCapture::folder != desktop);
-		CHECK(ShellExtCapture::background == true);
+		CHECK(matched.folder != desktop);
+		CHECK(matched.background == true);
 
 		ShellExtCapture::clear();
-		CHECK(ShellExtCapture::folder == nullptr);
-		CHECK(ShellExtCapture::hmenu == nullptr);
-		CHECK(ShellExtCapture::background == false);
+		auto cleared = ShellExtCapture::match(menu);
+		CHECK(!static_cast<bool>(cleared));
+		CHECK(cleared.folder == nullptr);
+		CHECK(cleared.background == false);
 
 		::CoTaskMemFree(desktop);
 	}
@@ -288,4 +291,40 @@ TEST(shellext, end_to_end_selected_file_data_object_capture)
 	init->Release();
 	factory->Release();
 	ShellExtCapture::clear();
+}
+
+TEST(shellext, active_captures_reporting)
+{
+	ShellExtCapture::clear();
+	CHECK(!ShellExtCapture::has_active_captures());
+
+	auto factory = make_factory();
+	IShellExtInit *init = nullptr;
+	CHECK(factory->CreateInstance(nullptr, IID_IShellExtInit, reinterpret_cast<void **>(&init)) == S_OK);
+
+	PIDLIST_ABSOLUTE desktop = nullptr;
+	if(SUCCEEDED(::SHGetKnownFolderIDList(FOLDERID_Desktop, 0, nullptr, &desktop)))
+	{
+		CHECK(init->Initialize(desktop, nullptr, nullptr) == S_OK);
+		// Pending capture is registered
+		CHECK(ShellExtCapture::has_active_captures());
+
+		IContextMenu *cm = nullptr;
+		if(SUCCEEDED(init->QueryInterface(IID_IContextMenu, reinterpret_cast<void **>(&cm))))
+		{
+			auto menu = ::CreatePopupMenu();
+			cm->QueryContextMenu(menu, 0, 1, 0x7FFF, CMF_NORMAL);
+			// Bound capture is registered
+			CHECK(ShellExtCapture::has_active_captures());
+
+			::DestroyMenu(menu);
+			cm->Release();
+		}
+		::CoTaskMemFree(desktop);
+	}
+
+	init->Release();
+	factory->Release();
+	ShellExtCapture::clear();
+	CHECK(!ShellExtCapture::has_active_captures());
 }

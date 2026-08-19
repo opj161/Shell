@@ -179,7 +179,10 @@ namespace Nilesoft
 			Window window = hWnd;
 
 			hwnd.owner = hWnd;
-			Processes[this] = true;
+			{
+				std::lock_guard<std::mutex> lock(ProcessesMutex);
+				Processes[this] = true;
+			}
 
 			dpi.val = Theme::GetDpi(pt, hwnd.owner);
 			dpi.org = dpi.val;
@@ -193,11 +196,14 @@ namespace Nilesoft
 			_context.hMenu = hMenu;
 			_window = hwnd.owner;
 
-			_cache = Initializer::instance->cache;
-			if(Initializer::instance->dpi != dpi.val)
-				_cache->reload(dpi.val);
+			_cache = Initializer::instance ? Initializer::instance->get_mutable_cache() : nullptr;
+			if(_cache)
+			{
+				_cache->fonts.add(_cache->glyph.name, Theme::SystemMetrics(SM_CXSMICON, dpi.val), dpi.val);
+			}
 
-			Initializer::instance->dpi = dpi.val;
+			if(Initializer::instance)
+				Initializer::instance->dpi.store(dpi.val, std::memory_order_relaxed);
 
 			_tip.ctx = this;
 
@@ -248,7 +254,10 @@ namespace Nilesoft
 		{
 			try
 			{
-				Processes.erase(this);
+				{
+					std::lock_guard<std::mutex> lock(ProcessesMutex);
+					Processes.erase(this);
+				}
 				//if(_cache)
 				//	_cache->GC.clear();
 				Uninitialize();
@@ -4619,8 +4628,8 @@ namespace Nilesoft
 					return false;
 				}
 
-				_context.Cache = initializer->cache;
-				_cache = initializer->cache;
+				_cache = initializer->get_mutable_cache();
+				_context.Cache = _cache.get();
 				_context.variables.global = &_cache->variables.global;
 				_context.variables.runtime = &_cache->variables.runtime;
 				_context.variables.local = nullptr;
@@ -4678,6 +4687,7 @@ namespace Nilesoft
 				if(_winEventHook.hook(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, Initializer::HInstance,
 									  ContextMenu::WinEventProc, ProcessId, ThreadId))
 				{
+					std::lock_guard<std::mutex> lock(HookMapMutex);
 					HookMap[_winEventHook.get()] = this;
 				}
 
@@ -4770,7 +4780,10 @@ namespace Nilesoft
 				
 				if(_winEventHook)
 				{
-					HookMap.erase(_winEventHook.get());
+					{
+						std::lock_guard<std::mutex> lock(HookMapMutex);
+						HookMap.erase(_winEventHook.get());
+					}
 					_winEventHook.unhook();
 				}
 
@@ -6491,7 +6504,14 @@ namespace Nilesoft
 			{
 				if(dwEvent == EVENT_OBJECT_CREATE)
 				{
-					if(auto ctx = HookMap[hWinEventHook]; ctx)
+					ContextMenu *ctx = nullptr;
+					{
+						std::lock_guard<std::mutex> lock(HookMapMutex);
+						auto it = HookMap.find(hWinEventHook);
+						if(it != HookMap.end())
+							ctx = it->second;
+					}
+					if(ctx)
 						ctx->OnMenuCreate(hWnd);
 				}
 				else if(dwEvent == EVENT_OBJECT_SHOW)

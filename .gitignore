@@ -48,5 +48,6 @@ src/packages/
 *.log
 *.msi
 *.wixpdb
+.bin/*
 backup_installed_shell/
 deploy_fix.ps1

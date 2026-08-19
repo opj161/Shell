@@ -29,8 +29,9 @@
     <ConfigurationType>Application</ConfigurationType>
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
-    <OutDir>$(SolutionDir)bin\</OutDir>
-    <IntDir>$(ProjectDir)obj\$(Configuration.ToLower())\</IntDir>
+    <Arch>$(Platform.ToLower().Replace('win32', 'x86'))</Arch>
+    <OutDir>$(SolutionDir)bin\$(Arch)\</OutDir>
+    <IntDir>$(ProjectDir)obj\$(Configuration.ToLower())\$(Arch)\</IntDir>
     <GenerateManifest>false</GenerateManifest>
     <ClCompile>
       <PreprocessorDefinitions>_WINDOWS;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>

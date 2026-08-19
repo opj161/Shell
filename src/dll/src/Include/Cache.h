@@ -3,16 +3,18 @@
 #include "Include\Theme.h"
 #include "Include\BitmapCache.h"
 #include <Resource.h>
+#include <mutex>
+#include <memory>
 
 namespace Nilesoft
 {
 	namespace Shell
 	{
-		/*static bool SHLoadIndirectString(const wchar_t *pszSource, wchar_t *pszOutBuf, uint32_t cchOutBuf)
+		static bool SHLoadIndirectString(const wchar_t *pszSource, wchar_t *pszOutBuf, uint32_t cchOutBuf, void **ppvReserved = nullptr)
 		{
 			return SUCCEEDED(DLL::Invoke<HRESULT>(L"shlwapi.dll", "SHLoadIndirectString",
-												  pszSource, pszOutBuf, cchOutBuf, nullptr));
-		}*/
+												  pszSource, pszOutBuf, cchOutBuf, ppvReserved));
+		}
 
 		struct Package
 		{
@@ -34,26 +36,41 @@ namespace Nilesoft
 			PackagesCache() = default;
 			~PackagesCache() = default;
 
-			// Enumerating the package repository is expensive: on a typical
-			// machine it walks a few hundred package keys, and for every one
-			// whose DisplayName is an indirect @{...} reference it also scans
-			// MrtCache linearly. That is tens of milliseconds on the thread
-			// building the menu.
-			//
-			// Only the appx()/package()/uwp() functions ever read this, and a
-			// default configuration never calls them, so the work is skipped
-			// entirely unless a config actually asks for it.
 			const std::vector<Package> &all() const
 			{
-				std::call_once(_once, [this] { const_cast<PackagesCache *>(this)->load(); });
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(!_loaded)
+				{
+					const_cast<PackagesCache *>(this)->load();
+					_loaded = true;
+				}
 				return _list;
 			}
 
-			void clear() { _list.clear(); }
+			void clear()
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				_list.clear();
+				_loaded = false;
+			}
+
+			const Package *find(const wchar_t *name) const
+			{
+				for(auto &pk : all())
+					if(pk.id.contains(name))
+						return &pk;
+				return nullptr;
+			}
+
+			bool exists(const wchar_t *name) const
+			{
+				return find(name) != nullptr;
+			}
 
 		private:
 
-			mutable std::once_flag _once;
+			mutable std::mutex _mutex;
+			mutable bool _loaded = false;
 			std::vector<Package> _list;
 
 			bool load()
@@ -73,72 +90,43 @@ namespace Nilesoft
 					if(res)
 					{
 						Package pk;
-						pk.name = name.release(cchName);
+						pk.path = name.release(cchName);
+
+						std::vector<string> id;
+						pk.path.split(id, L'_');
+						if(id.size() >= 4)
+						{
+							pk.family = id[0];
+							pk.version = id[1];
+							pk.id = id[id.size() - 1];
+						}
 
 						HKEY hkeyPackage = nullptr;
-						res = ::RegOpenKeyExW(hkeyPackages, name, 0, KEY_QUERY_VALUE, &hkeyPackage);
+						res = ::RegOpenKeyExW(hkeyPackages, pk.path, 0, KEY_QUERY_VALUE, &hkeyPackage);
 						if(res)
 						{
-							pk.id = name;// get_value(L"PackageID", hkeyPackage).move();
-							//MBF(L"%s\n%s", pk.id.c_str(), name.c_str());
-							if(!pk.id.empty())
-							{
-								pk.path = get_value(L"PackageRootFolder", hkeyPackage).move();
-								//pk.name = get_value(L"DisplayName", hkeyPackage).move();
-								get_name(&pk, hkeyPackage);
-
-								auto pos = pk.id.index_of(L'_');
-								if(pos != pk.id.npos)
-								{
-									string _family_ = pk.id.substr(0, pos).move();
-									string v = pk.id.substr(pos + 1).move();
-
-									pos = v.index_of(L'_');
-									if(pos != v.npos)
-										pk.version = v.substr(0, pos).move();
-
-									pos = pk.id.last_index_of(L'_');
-									if(pos != pk.id.npos)
-									{
-										_family_ += pk.id.substr(pos);
-										pk.family = _family_.move();
-									}
-								}
-								_list.push_back(std::move(pk));
-							}
+							load_package(&pk, hkeyPackage);
 							::RegCloseKey(hkeyPackage);
 						}
+						_list.push_back(pk);
 					}
 				}
-
 				::RegCloseKey(hkeyPackages);
-				hkeyPackages = nullptr;
-
 				return true;
 			}
 
-			string get_value(const wchar_t *name, HKEY hkeyPackage)
+			string get_value(const wchar_t *name, HKEY hkey)
 			{
-				if(hkeyPackage)
-				{
-					DWORD size = 0;
-					DWORD type = REG_NONE;
-					TResult res = ::RegQueryValueExW(hkeyPackage, name, 0, &type, nullptr, &size);
-					if(res)
-					{
-						size_t length = size / sizeof(wchar_t);
-						string buf(length);
-						res = ::RegQueryValueExW(hkeyPackage, name, 0, &type, reinterpret_cast<LPBYTE>(buf.data()), &size);
-						if(res)
-						{
-							return buf.release(length - 1).move();
-						}
-					}
-				}
-				return {};
+				string str(MAX_PATH);
+				DWORD cb = MAX_PATH * sizeof(wchar_t);
+				DWORD dtype = REG_SZ;
+				TResult res = ::RegGetValueW(hkey, nullptr, name, RRF_RT_REG_SZ, &dtype, str.data(), &cb);
+				if(res)
+					return str.release(cb / sizeof(wchar_t));
+				return nullptr;
 			}
 
-			void get_name(Package *pk, HKEY hkeyPackage)
+			void load_package(Package *pk, HKEY hkeyPackage)
 			{
 				pk->name = get_value(L"DisplayName", hkeyPackage).move();
 
@@ -148,7 +136,7 @@ namespace Nilesoft
 					   pk->name.back(L'}', false))
 					{
 						wchar_t displayName[MAX_PATH]{};
-						if(S_OK != ::SHLoadIndirectString(pk->name, displayName, MAX_PATH, nullptr) || pk->name.equals(displayName))
+						if(!SHLoadIndirectString(pk->name, displayName, MAX_PATH, nullptr) || pk->name.equals(displayName))
 						{
 							displayName[0] = 0;
 							HKEY hkeyPackages_mrt = nullptr;
@@ -225,26 +213,13 @@ namespace Nilesoft
 				}
 				return result;
 			}
-
-		public:
-			const Package *find(const wchar_t *name) const
-			{
-				for(auto &pk : all())
-					if(pk.id.contains(name))
-						return &pk;
-				return nullptr;
-			}
-
-			bool exists(const wchar_t *name) const
-			{
-				return find(name);
-			};
 		};
 
 		class FontCache
 		{
 			std::unordered_map<uint32_t, Font*> fonts;
 			HANDLE _handle{};
+			mutable std::mutex _mutex;
 
 		public:
 			static constexpr auto  Default = L"Nilesoft.Shell";
@@ -253,13 +228,9 @@ namespace Nilesoft
 
 		public:
 			uint32_t _dpi = 96;
-			//HFONT shell_font{};
-			//HFONT default_font{};
 			uint32_t default_id = 0;
 
-			FontCache()
-			{
-			}
+			FontCache() = default;
 
 			~FontCache()
 			{
@@ -270,7 +241,8 @@ namespace Nilesoft
 
 			void init(HINSTANCE hinstance, uint32_t dpi = 96)
 			{
-				clear();
+				std::lock_guard<std::mutex> lock(_mutex);
+				clear_unlocked();
 				_dpi = dpi;
 				auto hRes = ::FindResourceW(hinstance, L"FONTICON", RT_RCDATA);
 				if(!hRes)
@@ -288,42 +260,23 @@ namespace Nilesoft
 						auto cjSize = ::SizeofResource(hinstance, hRes);
 						DWORD numFonts = 0;
 						_handle = ::AddFontMemResourceEx(lpFileView, cjSize, nullptr, &numFonts);
-						if(_handle)
-						{
-							//shell_font = add(Default, 16);
-						}
 						UnlockResource(lpFileView);
 					}
 					::FreeResource(hResData);
 				}
 			}
 
-			//icon.Fluent()
-			/*void add_default(const string &name, long size)
-			{
-				if(name.empty())
-				{
-					default_font = add(SegoeFluentIcons, size);
-					if(!default_font)
-					{
-						default_font = add(SegoeMDL2Assets, size);
-					}
-				}
-				else
-				{
-					default_font = add(name, size);
-				}
-			}*/
-
 			Font *at(uint32_t id) const
 			{
+				std::lock_guard<std::mutex> lock(_mutex);
 				auto it = fonts.find(id);
 				return it != fonts.end() ? it->second : nullptr;
 			}
 
 			Font *at(HFONT hfont) const
 			{
-				for(auto font : fonts)
+				std::lock_guard<std::mutex> lock(_mutex);
+				for(auto &font : fonts)
 				{
 					if(hfont == font.second->get()) 
 						return font.second;
@@ -333,12 +286,14 @@ namespace Nilesoft
 
 			bool remove(HFONT hfont)
 			{
-				for(auto font = fonts.begin(); font != fonts.end(); font++)
+				std::lock_guard<std::mutex> lock(_mutex);
+				for(auto font = fonts.begin(); font != fonts.end(); ++font)
 				{
 					if(hfont == font->second->get())
 					{
+						delete font->second;
 						fonts.erase(font);
-						break;
+						return true;
 					}
 				}
 				return false;
@@ -346,54 +301,48 @@ namespace Nilesoft
 
 			HFONT add(const string &name, int size, int charset = DEFAULT_CHARSET)
 			{
-				size = Theme::DPI(size, _dpi);
-				auto id = Hash::dohash(size, name.hash());
-				auto font = at(id);
-				if(!font)
-				{
-					font = new Font(name, size, CLEARTYPE_QUALITY, charset);
-					if(font->get())
-						fonts[id] = font;
-					else
-					{
-						delete font;
-						return nullptr;
-					}
-				}
-				return font ? font->get() : nullptr;
+				return add(name, size, _dpi, charset);
 			}
 
 			HFONT add(const string &name, int size, uint32_t dpi, int charset = DEFAULT_CHARSET)
 			{
-				//size = Theme::DPI(size, _dpi);
+				std::lock_guard<std::mutex> lock(_mutex);
 				auto id = Hash::dohash(size + dpi, name.hash());
-				auto font = at(id);
-				if(!font)
+				auto it = fonts.find(id);
+				if(it != fonts.end() && it->second)
+					return it->second->get();
+
+				auto font = new Font(name, size, CLEARTYPE_QUALITY, charset);
+				if(font->get())
 				{
-					font = new Font(name, size, CLEARTYPE_QUALITY, charset);
-					if(font->get())
-						fonts[id] = font;
-					else
-					{
-						delete font;
-						return nullptr;
-					}
+					fonts[id] = font;
+					return font->get();
 				}
-				return font ? font->get() : nullptr;
+				delete font;
+				return nullptr;
 			}
 
 			void clear()
 			{
-				for(auto font : fonts)
+				std::lock_guard<std::mutex> lock(_mutex);
+				clear_unlocked();
+			}
+
+			size_t size() const
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				return fonts.size();
+			}
+
+		private:
+			void clear_unlocked()
+			{
+				for(auto &font : fonts)
 					delete font.second;
 
 				fonts.clear();
-				//default_font = {};
-				//shell_font = {};
 				default_id = {};
 			}
-
-			size_t size() const { return fonts.size(); }
 		};
 
 		struct ImageCache
@@ -457,13 +406,14 @@ namespace Nilesoft
 			}
 			glyph;
 
-
-			CACHE()
-			{
-				//runtime_variables.Parent = &variables;
-			}
+			CACHE() = default;
 
 			~CACHE()
+			{
+				clear();
+			}
+
+			void clear()
 			{
 				while(!statics.empty())
 				{
@@ -479,13 +429,13 @@ namespace Nilesoft
 				variables.loc.clear(true);
 
 				Packages.clear();
+				fonts.clear();
 			}
 
 			void reload(uint32_t dpi = 96)
 			{
-				fonts.clear();
 				fonts._dpi = dpi;
-				fonts.add(glyph.name, Theme::SystemMetrics(SM_CXSMICON, dpi));
+				fonts.add(glyph.name, Theme::SystemMetrics(SM_CXSMICON, dpi), dpi);
 			}
 
 			Expression *get_image(uint32_t id)

@@ -1,0 +1,28 @@
+# Auto detect text files and perform CRLF normalization on checkout
+* text=auto eol=crlf
+
+# Explicit text file types
+*.cpp text eol=crlf
+*.h text eol=crlf
+*.hpp text eol=crlf
+*.c text eol=crlf
+*.wxs text eol=crlf
+*.wxi text eol=crlf
+*.nss text eol=crlf
+*.txt text eol=crlf
+*.md text eol=crlf
+*.xml text eol=crlf
+*.json text eol=crlf
+*.sln text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+
+# Binary files
+*.png binary
+*.bmp binary
+*.ico binary
+*.exe binary
+*.dll binary
+*.lib binary
+*.cab binary
+*.msi binary

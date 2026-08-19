@@ -212,7 +212,6 @@ struct
 
 struct taskbar_t
 {
-	inline static IComPtr<IUIAutomation> _IUIAutomation;
 	inline static auto wShell_TrayWnd = ::RegisterWindowMessageW(Windows::WC_Shell_TrayWnd);
 	inline static auto wShell_SecondaryTrayWnd = ::RegisterWindowMessageW(Windows::WC_Shell_SecondaryTrayWnd);
 
@@ -322,14 +321,13 @@ struct taskbar_t
 			return cached_ret;
 
 		bool ret = false;
+		IComPtr<IUIAutomation> uia;
+		uia.CreateInstance(__uuidof(CUIAutomation), CLSCTX_INPROC_SERVER);
 
-		if(!_IUIAutomation)
-			_IUIAutomation.CreateInstance(__uuidof(CUIAutomation), CLSCTX_INPROC_SERVER);
-
-		if(_IUIAutomation)
+		if(uia)
 		{
 			IComPtr<IUIAutomationElement> pIUIAutomationElement;
-			if(SUCCEEDED(_IUIAutomation->ElementFromPoint(pt, pIUIAutomationElement)) && pIUIAutomationElement)
+			if(SUCCEEDED(uia->ElementFromPoint(pt, pIUIAutomationElement)) && pIUIAutomationElement)
 			{
 				struct elem_t {
 					BSTR type = nullptr;
@@ -403,17 +401,18 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 	auto is_local_server = (dwClsContext & CLSCTX_LOCAL_SERVER) != 0;
 	auto is_inproc_server = (dwClsContext & CLSCTX_INPROC_SERVER) != 0;
 
-	if(_initializer.cache && (is_inproc_server || is_local_server))
+	auto cache = _initializer.get_cache();
+	if(cache && (is_inproc_server || is_local_server))
 	{
 		auto hr = E_NOINTERFACE; //CLASS_E_CLASSNOTAVAILABLE;
 		auto process = true;
 
 		if(rclsid == IID_FileExplorerContextMenu /*&& riid == {706461D1-AC5F-4730-BFE3-CAC6CAD5EF5E}*/)
 		{
-			if(_initializer.cache->settings.priority)
+			if(cache->settings.priority)
 			{
 				Context context;
-				Object obj = context.Eval(_initializer.cache->settings.priority).move();
+				Object obj = context.Eval(cache->settings.priority).move();
 				if(obj.is_number())
 					process = obj;
 			}
@@ -488,7 +487,7 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 					return hr;
 				}
 
-				for(auto si : _initializer.cache->statics)
+				for(auto si : cache->statics)
 				{
 					if(si->clsid.empty() || (si->where && !context.eval_bool(si->where)))
 						continue;
@@ -965,55 +964,21 @@ LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 	return ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
-//integrate 
-BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
+void BootstrapOnce()
 {
-	try
+	static std::once_flag flag;
+	std::call_once(flag, []()
 	{
-		if(dwReason == DLL_PROCESS_ATTACH)
+		try
 		{
-			::DisableThreadLibraryCalls(hInstance);
-			//InitCommonControls();
-			/*INITCOMMONCONTROLSEX icex{};
-			// Load the ToolTip class from the DLL.
-			icex.dwSize = sizeof(icex);
-			icex.dwICC = ICC_BAR_CLASSES;
-			InitCommonControlsEx(&icex);
-			*/
-
-			_hInstance = hInstance;
-			_initializer.HInstance = _hInstance;
-
-#if _DEBUG
-			// detect memory leaks
-			_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG
-						   | _CRTDBG_CHECK_ALWAYS_DF
-						   | _CRTDBG_LEAK_CHECK_DF
-						   | _CRTDBG_ALLOC_MEM_DF);
-
-			//::_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_DEBUG);
-#endif
 			_loader.init();
 
 			if(!_loader.explorer && !_loader.path.ends_with(L"\\shell.exe"))
 			{
-				
-				//	if(_loader.path.ends_with(L"\\firefox.exe") || _loader.path.ends_with(L"\\devenv.exe"))
-				//		return 0;
-				
 				int disabled_3rdparty = 0;
 				if(RegistryConfig::get(L"\\disable", L"3rdparty", disabled_3rdparty) && disabled_3rdparty == 1)
-					return 0;
-
-				/*if(RegistryConfig::IsFolderExtensions())
-				{
-					if(!hasImportTrackPopupMenu())
-						return 0;
-				}*/
+					return;
 			}
-
-			//if(!loader)
-			//	_log.info(L"Load '%s'", Path::Module(nullptr).c_str());
 
 			if(_initializer.init(_hInstance))
 			{
@@ -1023,15 +988,13 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 				_initializer.process.id = ::GetCurrentProcessId();
 				_initializer.process.handle = ::GetCurrentProcess();
 
-				//_log.info(L"%s", _initializer.process.name.c_str());
-
 				ContextMenu::RegisterLayer();
 
 				iathook_NtUserTrackPopupMenuEx
 					.init(L"user32.dll", "win32u.dll", "NtUserTrackPopupMenuEx", TrackPopupMenuExProc)
 					.install();
 
-				static auto hook = []()
+				auto hook = []()
 				{
 					__trace(L"hook all the modules in '%s' process", _initializer.process.name.c_str());
 
@@ -1042,7 +1005,6 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 					for(const auto &m : iathook_TrackPopupMenu)
 						hooked.insert(m._hModule);
 
-					// hook all the modules in this process.
 					for(auto hModule : Process::Modules(_initializer.process.handle))
 					{
 						if(_hInstance == hModule)
@@ -1056,54 +1018,19 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 					}
 				};
 
-				//_TrackPopupMenu.init(::TrackPopupMenu, TrackPopupMenuProc).hook();
-				//_TrackPopupMenuEx.init(::TrackPopupMenuEx, TrackPopupMenuExProc).hook();
-				//_CoCreateInstance.init(::CoCreateInstance, CoCreateInstanceProc).hook();
-				
 				if(_loader.explorer)
 				{
-					//_log.info(_loader.path);
-
 					_CoCreateInstance.Begin();
-					//_DllGetClassObject.init(hModule, "DllGetClassObject", DllGetClassObjectHook).hook();
 					_CoCreateInstance.init(::CoCreateInstance, CoCreateInstanceHook).hook();
-					//auto m = &_detours_ci[hModule];
-					//if(!m->installed())
-					//m->init(hModule, "api-ms-win-core-com-l1-1-0.dll", ::CoCreateInstance, CoCreateInstanceProc).install();
 					_CoCreateInstance.Commit();
 
 					if(!iathook_NtUserTrackPopupMenuEx.installed())
 					{
-						std::thread([]() { ::Sleep(2000); hook(); }).detach();
+						hook();
 					}
 
 					if(ver->IsWindows11OrGreater())
 					{
-
-						/*
-						auto keyCLSID = Registry::ClassesRoot.OpenSubKey(L"CLSID\\" CLS_FileExplorerContextMenu "\\TreatAs", false, false);
-						if(!(keyCLSID && keyCLSID.GetString(nullptr).equals(CLS_ContextMenu)))
-						{
-							auto hModule = ::GetModuleHandleW(Windows_UI_FileExplorer);
-
-							if(!hModule)
-								hModule = ::LoadLibraryW(Windows_UI_FileExplorer);
-
-							if(hModule)
-							{
-								auto r = _CoCreateInstance.Begin();
-								_log.info(L"%x", r);
-								//_DllGetClassObject.init(hModule, "DllGetClassObject", DllGetClassObjectHook).hook();
-								_CoCreateInstance.init(::CoCreateInstance, CoCreateInstanceHook).hook();
-								//auto m = &_detours_ci[hModule];
-								//if(!m->installed())
-								//m->init(hModule, "api-ms-win-core-com-l1-1-0.dll", ::CoCreateInstance, CoCreateInstanceProc).install();
-								_CoCreateInstance.Commit();
-							}
-						}
-						keyCLSID.Close();
-						*/
-
 						taskbar_t::hook_all(1000);
 					}
 				}
@@ -1111,33 +1038,54 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 				{
 					hook();
 				}
-			}
-			//IsRegistered
-			/*
-			IID iid{};
-			CLSIDFromString(L"{23170F69-40C1-278A-1000-000100020000}", &iid);
-			Guid guid = iid;
-			MB(guid.to_string(2).c_str());
-			*/
-			//UuidFromStringW
 
+				hooks_installed.store(true, std::memory_order_relaxed);
+			}
+		}
+		catch(...)
+		{
+#ifdef _DEBUG
+			_log.exception(__func__);
+			_log.close();
+#endif
+		}
+	});
+}
+
+//integrate 
+BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
+{
+	try
+	{
+		if(dwReason == DLL_PROCESS_ATTACH)
+		{
+			::DisableThreadLibraryCalls(hInstance);
+
+			_hInstance = hInstance;
+			_initializer.HInstance = _hInstance;
+
+#if _DEBUG
+			// detect memory leaks
+			_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG
+						   | _CRTDBG_CHECK_ALWAYS_DF
+						   | _CRTDBG_LEAK_CHECK_DF
+						   | _CRTDBG_ALLOC_MEM_DF);
+#endif
 			return TRUE;
 		}
 		else if(dwReason == DLL_PROCESS_DETACH)
 		{
-			if(!is_registered())
+			if(hooks_installed.load(std::memory_order_relaxed) && !is_registered())
 			{
 				if(_loader.explorer)
 				{
 					// Perform any necessary cleanup.
 					_taskbar_mouse.unhook();
 					taskbar_t::unhook_all();
-					//detour_NtUserTrackPopupMenuEx.uninstall(true);
 
 					if(ver->IsWindows11OrGreater())
 					{
 						_CoCreateInstance.Begin();
-						//_DllGetClassObject.unhook();
 						_CoCreateInstance.unhook();
 						_CoCreateInstance.Commit();
 					}
@@ -1146,19 +1094,10 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 				for(auto &d : iathook_TrackPopupMenu)
 					d.uninstall(true);
 
-				//_TrackPopupMenu.unhook();
-				//_TrackPopupMenuEx.unhook();
-				//_CoCreateInstance.unhook();
-
 				ContextMenu::UnRegisterLayer();
 			}
 
-			taskbar_t::_IUIAutomation.release();
-
 			_log.close();
-
-			//::SendNotifyMessageW(HWND_BROADCAST, WM_NULL, 0, 0);	
-
 			return TRUE;
 		}
 	}
@@ -1173,87 +1112,60 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 }
 
 //IID_FolderExtensions
-//#pragma comment(linker, "/export:DllGetClassObject=DllGetClassObject")
 _Check_return_
 STDAPI DllGetClassObject(_In_ REFCLSID rclsid, [[maybe_unused]] _In_ REFIID riid, [[maybe_unused]] _Outptr_ LPVOID FAR *ppv)
 {
-	auto hr = E_NOTIMPL;// CLASS_E_CLASSNOTAVAILABLE,E_NOTIMPL, E_OUTOFMEMORY, and E_UNEXPECTED,E_INVALIDARG
-	Guid iid = rclsid;
-	//Guid iid2 = riid;
 	if(ppv) *ppv = nullptr;
 
-	__try
+	BootstrapOnce();
+
+	Guid iid = rclsid;
+	if(iid.equals(IID_FolderExtensions))
+		return E_NOTIMPL;
+
+	if(!iid.equals({ IID_ContextMenu, IID_IconOverlay }))
+		return CLASS_E_CLASSNOTAVAILABLE;
+
+	if(Initializer::Status.Disabled.load(std::memory_order_relaxed))
+		return CLASS_E_CLASSNOTAVAILABLE;
+
+	if(!is_registered())
+		return CLASS_E_CLASSNOTAVAILABLE;
+	
+	if(_initializer.has_error())
+		return CLASS_E_CLASSNOTAVAILABLE;
+	
+	if(rclsid == IID_ContextMenu)
 	{
-		if(iid.equals(IID_FolderExtensions))
-			return E_NOTIMPL;
-
-		if(!iid.equals({ IID_ContextMenu, IID_IconOverlay }))
-			return hr;
-
-		if(Initializer::Status.Disabled)
-			return hr;
-
-		if(!is_registered())
-			return hr;
-		
-		if(_initializer.has_error())
-			return hr;
-		
-		if(rclsid == IID_ContextMenu)
-		{
-			Selections::point.GetCursorPos();
-		}
-
-		if(!_initializer.Status.Loaded)
-			_initializer.init();
+		Selections::point.GetCursorPos();
 	}
-	except
-	{
-#ifdef _DEBUG
-		_log.exception(__func__);
-#endif
-	}
-	_log.close();
 
-	if(hr == E_NOTIMPL && rclsid == IID_ContextMenu && ppv)
-		hr = CreateShellExtFactory(riid, ppv);
+	if(!_initializer.Status.Loaded.load(std::memory_order_relaxed))
+		_initializer.init();
 
-	return hr;
+	if(rclsid == IID_ContextMenu && ppv)
+		return CreateShellExtFactory(riid, ppv);
+
+	return CLASS_E_CLASSNOTAVAILABLE;
 }
 
 //DllCanUnloadNow. COM calls this function to determine whether the object is serving any clients. 
-//If not, the system can unload the DLL and free the associated memory.
-// Check if we can unload the component from the memory.
-// NOTE: The component can be unloaded from the memory when its reference 
-// count is zero (i.e. nobody is still using the component).
-//#pragma comment(linker, "/export:DllCanUnloadNow=DllCanUnloadNow")
 __control_entrypoint(DllExport)
 STDAPI DllCanUnloadNow(void)
 {
 	if(com_object_count.load(std::memory_order_relaxed) > 0)
 		return S_FALSE;
 
+	if(ShellExtCapture::has_active_captures())
+		return S_FALSE;
+
+	if(hooks_installed.load(std::memory_order_relaxed))
+		return S_FALSE;
+
 	if(!_loader.explorer || !is_registered())
 		return S_OK;
+
 	return S_FALSE;
-	/*
-	if(ContextMenu::Processes.size() == 0)
-	{
-		int p = 0;
-		EnumThreadWindows(GetCurrentThreadId(), [](HWND, LPARAM lp) {
-		(*((int *)lp))++;
-			return 0;
-		}, (LPARAM)&p);
-
-		//if(p)MBF(L"%d", p);
-		return p > 0 ? S_FALSE : S_OK;
-	}
-
-	//if(_loader.explorer)
-	//	return release() ? S_OK : S_FALSE;
-	return ContextMenu::Processes.size() == 0 ? S_OK : S_FALSE;
-	//return S_OK;
-	*/
 }
 
 // Register the COM server and the context menu handler.
