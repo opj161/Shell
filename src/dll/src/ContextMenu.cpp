@@ -1734,7 +1734,7 @@ namespace Nilesoft
 				if(auto_gdi<HBITMAP> hbitmap(dc.createbitmap(rc->width(), rc->height())); hbitmap)
 				{
 					DC dcmem(dc.CreateCompatibleDC(), 1);
-					dcmem.select_bitmap(hbitmap.get());
+					auto old_bmp = ::SelectObject(dcmem, hbitmap.get());
 
 					auto old_hdc = di->hDC;
 					di->hDC = dcmem;
@@ -1753,15 +1753,19 @@ namespace Nilesoft
 					bmpInfo.biBitCount = 32;
 					bmpInfo.biCompression = BI_RGB;
 
-					::GetDIBits(dcmem, hbitmap.get(), 0, rc->height(), &pixels[0], (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
+					// Deselect bitmap before calling GetDIBits/SetDIBits per Win32 contract
+					::SelectObject(dcmem, old_bmp);
+					::GetDIBits(dc, hbitmap.get(), 0, rc->height(), &pixels[0], (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
 
 					std::for_each(pixels.begin(), pixels.end(), [](COLORREF &pixel) {
 						if(pixel != 0) // black pixels stay transparent
 							pixel |= 0xFF000000; // set alpha channel to 100%
 					});
 
-					::SetDIBits(dcmem, hbitmap.get(), 0, rc->height(), &pixels[0], (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
+					::SetDIBits(dc, hbitmap.get(), 0, rc->height(), &pixels[0], (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
+					::SelectObject(dcmem, hbitmap.get());
 					dc.draw_image(rc->point(), rc->size(), dcmem);
+					::SelectObject(dcmem, old_bmp);
 
 					return lret;
 				}
@@ -2027,7 +2031,7 @@ namespace Nilesoft
 					if(auto_gdi<HBITMAP> hbitmap(dc.createbitmap(rc->width(), rc->height())); hbitmap)
 					{
 						DC dcmem(dc.CreateCompatibleDC(), 1);
-						dcmem.select_bitmap(hbitmap.get());
+						auto old_bmp = ::SelectObject(dcmem, hbitmap.get());
 
 						BITMAPINFOHEADER bmpInfo = { 0 };
 						bmpInfo.biSize = sizeof(bmpInfo);
@@ -2066,8 +2070,10 @@ namespace Nilesoft
 						if(old_clip)
 							::RestoreDC(dcmem, old_clip);
 
+						// Deselect bitmap before GetDIBits
+						::SelectObject(dcmem, old_bmp);
 						std::vector<COLORREF> pixels(count);
-						::GetDIBits(dcmem, hbitmap.get(), 0, h, &pixels[0],
+						::GetDIBits(dc, hbitmap.get(), 0, h, &pixels[0],
 									 (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
 
 						long zone_left = 0;
@@ -4477,7 +4483,7 @@ namespace Nilesoft
 						item->disabled = mii.fState & MFS_DISABLED;
 						item->checked = mii.fState & MFS_CHECKED;
 						item->radio_check = mii.fType & MFT_RADIOCHECK;
-						item->image = MenuItemInfo::FindImage(&mii, is_root);
+						item->image = MenuItemInfo::FindImage(&mii, false);
 
 						if(item->disabled && _settings.modify_items.remove.disabled)
 							continue;
@@ -4516,7 +4522,7 @@ namespace Nilesoft
 												if(!item->disabled)
 												{
 													found_duplicate = 2;
-													delete menu->items[indexof];
+													__replaced_system_items.push_back(menu->items[indexof]);
 													menu->items[indexof] = item.release();
 												}
 											}
@@ -4549,6 +4555,17 @@ namespace Nilesoft
 						}
 
 						menu->items.push_back(item.release());
+					}
+					else
+					{
+						// For the replacement item, also register its path in __map_system_menu
+						if(itemPtr->is_menu())
+						{
+							string sub_path = itemPtr->name;
+							if(!itemPtr->path.empty())
+								sub_path = itemPtr->path + L'/' + sub_path;
+							__map_system_menu[sub_path.hash()] = itemPtr;
+						}
 					}
 				}
 			}
@@ -4762,7 +4779,13 @@ namespace Nilesoft
 
 				_tip.destroy();
 
+				for(auto it : __replaced_system_items)
+					delete it;
+				__replaced_system_items.clear();
+				__map_system_menu.clear();
+
 				delete __system_menu_tree;
+				__system_menu_tree = nullptr;
 
 				__trace(L"ContextMenu.Uninitialized");
 				_uninitialized = true;

@@ -16,6 +16,17 @@ namespace Nilesoft
 		// Rasterised menu icons, keyed on the resolved SVG text and the pixel
 		// size it was rendered at. Synchronized and bounded to prevent unbounded
 		// memory growth across multithreaded third-party hosts.
+		//
+		// Ownership model:
+		// When an icon is cached, the BitmapCache owns the HBITMAP until the
+		// cache itself is cleared/destroyed (e.g. on config reload or process exit).
+		// Borrowing callers mark their item `inherited = true`.
+		//
+		// To ensure memory safety with borrowed raw handles, the cache NEVER
+		// destructively evicts entries while live borrowers can exist. Once the
+		// capacity bound (MaxEntries = 256) is reached, new entries are simply
+		// not cached; callers retain exclusive ownership and destroy their bitmap
+		// on item teardown.
 		struct BitmapCache
 		{
 			static constexpr size_t MaxEntries = 256;
@@ -52,9 +63,15 @@ namespace Nilesoft
 				return it != _items.end() ? it->second : nullptr;
 			}
 
-			// Takes ownership of hbmp. Returns it back for convenience.
-			HBITMAP add(const wchar_t *text, size_t length, long cx, long cy, HBITMAP hbmp)
+			// Takes ownership of hbmp if cached. Returns the active HBITMAP handle.
+			// If out_cached is provided, sets *out_cached to true if the handle is
+			// owned by the cache, or false if capacity is reached and the caller
+			// retains ownership.
+			HBITMAP add(const wchar_t *text, size_t length, long cx, long cy, HBITMAP hbmp, bool *out_cached = nullptr)
 			{
+				if(out_cached)
+					*out_cached = false;
+
 				if(hbmp && text && length)
 				{
 					Key k = make_key(text, length, cx, cy);
@@ -64,19 +81,21 @@ namespace Nilesoft
 					{
 						if(it->second != hbmp)
 							::DeleteObject(hbmp);
+						if(out_cached)
+							*out_cached = true;
 						return it->second;
 					}
 
-					// Bounded capacity: evict one entry if limit is reached.
+					// Bounded capacity: once full, do not insert or destructively evict.
+					// The caller retains ownership of hbmp (out_cached = false).
 					if(_items.size() >= MaxEntries)
 					{
-						auto first = _items.begin();
-						if(first->second)
-							::DeleteObject(first->second);
-						_items.erase(first);
+						return hbmp;
 					}
 
 					_items.emplace(std::move(k), hbmp);
+					if(out_cached)
+						*out_cached = true;
 				}
 				return hbmp;
 			}

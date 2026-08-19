@@ -86,15 +86,23 @@ Note that:
 				if(!b || l <= 0)
 					return EncodingType::Unknown;
 
-				if(l >= 2)
+				if(l >= 4)
 				{
-					if((b[0] == 0xff) && (b[1] == 0xfe))
+					if((b[0] == 0x00) && (b[1] == 0x00) && (b[2] == 0xFE) && (b[3] == 0xFF))
 					{
-						return EncodingType::UTF16LEBOM;
+						return EncodingType::UTF32BE;
 					}
-					else if((b[0] == 0xfe) && (b[1] == 0xff))
+					else if((b[0] == 0xFF) && (b[1] == 0xFE) && (b[2] == 0x00) && (b[3] == 0x00))
 					{
-						return EncodingType::UTF16BEBOM;
+						return EncodingType::UTF32LE;
+					}
+					else if(b[0] && !b[1] && b[2] && !b[3])
+					{
+						return EncodingType::UTF16LE;
+					}
+					else if(!b[0] && b[1] && !b[2] && b[3])
+					{
+						return EncodingType::UTF16BE;
 					}
 				}
 
@@ -110,31 +118,20 @@ Note that:
 					}
 				}
 
-				if(l >= 4)
+				if(l >= 2)
 				{
 					if((b[0] == 0xff) && (b[1] == 0xfe))
 					{
-						if(!b[2] && !b[3])
-						{
-							return EncodingType::UTF32LE;
-						}
+						return EncodingType::UTF16LEBOM;
 					}
-					else if(b[0] && !b[1] && b[2] && !b[3])
+					else if((b[0] == 0xfe) && (b[1] == 0xff))
 					{
-						return EncodingType::UTF16LE;
+						return EncodingType::UTF16BEBOM;
 					}
-					else if(!b[0])
-					{
-						if(b[1] && !b[2] && b[3])
-						{
-							return EncodingType::UTF16BE;
-						}
-						else if(!b[1] && (b[2] == 0xfe) && (b[3] == 0xff))
-						{
-							return EncodingType::UTF32BE;
-						}
-					}
+				}
 
+				if(l >= 4)
+				{
 					if((b[0] == 0x2B) && (b[1] == 0x2F) && (b[2] == 0x76))
 					{
 						if(l >= 5)

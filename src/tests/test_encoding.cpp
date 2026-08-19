@@ -25,10 +25,14 @@ TEST(encoding, bom_forms_are_recognised)
 	const byte utf8bom[]  = { 0xEF, 0xBB, 0xBF, 'a', 'b' };
 	const byte utf16le[]  = { 0xFF, 0xFE, 'a', 0x00 };
 	const byte utf16be[]  = { 0xFE, 0xFF, 0x00, 'a' };
+	const byte utf32le[]  = { 0xFF, 0xFE, 0x00, 0x00, 'a', 0x00, 0x00, 0x00 };
+	const byte utf32be[]  = { 0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 'a' };
 
 	CHECK(detect(utf8bom, sizeof(utf8bom)) == EncodingType::UTF8BOM);
 	CHECK(detect(utf16le, sizeof(utf16le)) == EncodingType::UTF16LEBOM);
 	CHECK(detect(utf16be, sizeof(utf16be)) == EncodingType::UTF16BEBOM);
+	CHECK(detect(utf32le, sizeof(utf32le)) == EncodingType::UTF32LE);
+	CHECK(detect(utf32be, sizeof(utf32be)) == EncodingType::UTF32BE);
 }
 
 // The important case: modern editors, git and Notepad all default to UTF-8

@@ -44,7 +44,6 @@ namespace Nilesoft
 			bool query(int ch = 0);
 			bool init(HINSTANCE hInstance);
 			bool init();
-			static void ensure_com();
 			// Clean up resources allocated during initialization.
 			bool uninit();
 

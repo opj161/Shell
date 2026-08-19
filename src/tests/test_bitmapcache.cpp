@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <thread>
 #include <vector>
+#include <atomic>
 #include "test.h"
 #include "../dll/src/Include/BitmapCache.h"
 
@@ -43,8 +44,10 @@ TEST(bitmapcache, identical_text_and_size_hits)
 
 	CHECK(cache.find(svg, len, 16, 16) == nullptr);
 
-	auto first = cache.add(svg, len, 16, 16, make_bitmap());
+	bool cached = false;
+	auto first = cache.add(svg, len, 16, 16, make_bitmap(), &cached);
 	CHECK(first != nullptr);
+	CHECK(cached == true);
 	CHECK_EQ(cache.size(), size_t(1));
 	CHECK(cache.find(svg, len, 16, 16) == first);
 }
@@ -198,42 +201,59 @@ TEST(bitmapcache, empty_and_null_text_are_rejected)
 	::DeleteObject(h);
 }
 
-TEST(bitmapcache, bounded_capacity_evicts_on_overflow)
+TEST(bitmapcache, bounded_capacity_stops_caching_at_limit)
 {
 	BitmapCache cache;
-	std::vector<HBITMAP> handles;
-	handles.reserve(300);
+	std::vector<HBITMAP> unowned_handles;
 
 	for(int i = 0; i < 300; i++)
 	{
 		wchar_t buf[64];
 		swprintf_s(buf, L"<svg id='%d'/>", i);
-		auto h = cache.add(buf, wcslen(buf), 16, 16, make_bitmap());
-		handles.push_back(h);
+		bool cached = false;
+		auto h = cache.add(buf, wcslen(buf), 16, 16, make_bitmap(), &cached);
+		if(i < int(BitmapCache::MaxEntries))
+		{
+			CHECK(cached == true);
+		}
+		else
+		{
+			CHECK(cached == false);
+			unowned_handles.push_back(h);
+		}
 	}
 
 	CHECK_EQ(cache.size(), BitmapCache::MaxEntries);
+
+	// Clean up the un-cached handles that caller owns
+	for(auto h : unowned_handles)
+		::DeleteObject(h);
 }
 
 TEST(bitmapcache, concurrent_access_is_thread_safe)
 {
 	BitmapCache cache;
 	std::vector<std::thread> workers;
+	std::atomic<int> errors{ 0 };
 	const int thread_count = 4;
-	const int iterations = 30;
+	const int iterations = 50;
 
 	for(int t = 0; t < thread_count; t++)
 	{
-		workers.emplace_back([&cache, t]()
+		workers.emplace_back([&cache, &errors, t]()
 		{
 			for(int i = 0; i < iterations; i++)
 			{
 				wchar_t buf[64];
-				swprintf_s(buf, L"<svg icon='%d'/>", (t * 50) + i);
-				auto h = cache.add(buf, wcslen(buf), 16, 16, make_bitmap());
-				CHECK(h != nullptr);
+				swprintf_s(buf, L"<svg icon='%d'/>", (t * 100) + i);
+				bool cached = false;
+				auto h = cache.add(buf, wcslen(buf), 16, 16, make_bitmap(), &cached);
+				if(!h)
+					errors.fetch_add(1, std::memory_order_relaxed);
+
 				auto found = cache.find(buf, wcslen(buf), 16, 16);
-				CHECK(found != nullptr);
+				if(cached && found != h)
+					errors.fetch_add(1, std::memory_order_relaxed);
 			}
 		});
 	}
@@ -241,5 +261,6 @@ TEST(bitmapcache, concurrent_access_is_thread_safe)
 	for(auto &w : workers)
 		w.join();
 
+	CHECK_EQ(errors.load(), 0);
 	CHECK(cache.size() <= BitmapCache::MaxEntries);
 }

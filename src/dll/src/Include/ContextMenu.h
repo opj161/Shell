@@ -701,6 +701,7 @@ plutovg_move_to(pluto, start.x, start.y);
 			std::unordered_map<uint32_t, menuitem_t *> __map_system_menu;
 
 			std::vector<menuitem_t *> __movable_system_items;
+			std::vector<menuitem_t *> __replaced_system_items;
 
 		public:// functions
 

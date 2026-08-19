@@ -82,41 +82,10 @@ namespace Nilesoft
 		// Brings COM up on the calling thread once, and applies the process-wide
 		// COM options that used to be set from DllMain.
 		//
-		// Never paired with CoUninitialize. A host that shows a shell context
-		// menu has already initialised an apartment on this thread, so our call
-		// only increments a count we do not own; dropping it again at an
-		// arbitrary later point risks tearing the apartment down under the host.
-		// Leaving the extra count is the safe direction to be wrong in.
-		void Initializer::ensure_com()
-		{
-			static thread_local bool done = false;
-			if(done)
-				return;
-			done = true;
-
-			// S_FALSE means the host already initialised this thread, and
-			// RPC_E_CHANGED_MODE means it did so as MTA. Either way the thread
-			// has an apartment and there is nothing more to do.
-			::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-
-			// DisableComExceptionHandling. This was done in DllMain, which meant
-			// a COM activation under the loader lock. It is a process-global
-			// setting and only takes effect before the process makes other COM
-			// calls, so in a long-running Explorer it was already too late; it is
-			// kept, off the loader lock, rather than silently dropped.
-			IComPtr<IGlobalOptions> globalOptions;
-			if(globalOptions.CreateInstance(CLSID_GlobalOptions, CLSCTX_SERVER))
-				globalOptions->Set(COMGLB_EXCEPTION_HANDLING, COMGLB_EXCEPTION_DONOT_HANDLE_ANY);
-		}
-
 		bool Initializer::init()
 		{
 			try
 			{
-				// First thing on this thread, before anything reaches WIC or a
-				// shell interface. Runs on the menu thread, not the loader.
-				ensure_com();
-
 				if(!cache)
 				{
 					cache = new CACHE;

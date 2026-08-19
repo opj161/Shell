@@ -698,9 +698,10 @@ namespace Nilesoft
 							if(plutovg)
 							{
 								//plutovg.rgba0();
+								bool cached = false;
 								image->hbitmap = cache->bitmaps.add(value.c_str(), value.length(),
-																	image_size, image_size, plutovg.tobitmap());
-								image->inherited = true;
+																	image_size, image_size, plutovg.tobitmap(), &cached);
+								image->inherited = cached;
 								image->import = ImageImport::SVG;
 								image->size = { image_size, image_size };
 								return true;
@@ -782,9 +783,10 @@ namespace Nilesoft
 					plutovg.load_from_memory(vutf8.c_str(), (int)vutf8.size(), width, height);
 					if(plutovg)
 					{
+						bool cached = false;
 						image->hbitmap = cache->bitmaps.add(value.c_str(), value.length(),
-															width, height, plutovg.tobitmap());
-						image->inherited = true;
+															width, height, plutovg.tobitmap(), &cached);
+						image->inherited = cached;
 						image->import = ImageImport::SVG;
 						image->size = { width, height };
 						return true;
@@ -1078,10 +1080,11 @@ namespace Nilesoft
 									{
 										//plutovg.rgba0();
 										auto raster = plutovg.tobitmap();
+										bool cached = false;
 										image->hbitmap = cacheable
-											? cache->bitmaps.add(value.c_str(), value.length(), width, height, raster)
+											? cache->bitmaps.add(value.c_str(), value.length(), width, height, raster, &cached)
 											: raster;
-										image->inherited = cacheable;
+										image->inherited = cached;
 										image->import = ImageImport::SVG;
 										image->size = { image_size, image_size };
 										return true;

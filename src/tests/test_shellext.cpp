@@ -209,7 +209,9 @@ TEST(shellext, end_to_end_initialize_and_query_context_menu)
 	CHECK(init != nullptr);
 
 	PIDLIST_ABSOLUTE desktop = nullptr;
-	if(SUCCEEDED(::SHGetKnownFolderIDList(FOLDERID_Desktop, 0, nullptr, &desktop)))
+	auto hr_desktop = ::SHGetKnownFolderIDList(FOLDERID_Desktop, 0, nullptr, &desktop);
+	CHECK(SUCCEEDED(hr_desktop));
+	if(SUCCEEDED(hr_desktop))
 	{
 		CHECK(init->Initialize(desktop, nullptr, nullptr) == S_OK);
 
@@ -230,6 +232,56 @@ TEST(shellext, end_to_end_initialize_and_query_context_menu)
 
 		::DestroyMenu(menu);
 		cm->Release();
+		::CoTaskMemFree(desktop);
+	}
+
+	init->Release();
+	factory->Release();
+	ShellExtCapture::clear();
+}
+
+TEST(shellext, end_to_end_selected_file_data_object_capture)
+{
+	ShellExtCapture::clear();
+	auto factory = make_factory();
+	CHECK(factory != nullptr);
+
+	IShellExtInit *init = nullptr;
+	CHECK(factory->CreateInstance(nullptr, IID_IShellExtInit, reinterpret_cast<void **>(&init)) == S_OK);
+	CHECK(init != nullptr);
+
+	PIDLIST_ABSOLUTE desktop = nullptr;
+	if(SUCCEEDED(::SHGetKnownFolderIDList(FOLDERID_Desktop, 0, nullptr, &desktop)))
+	{
+		IShellItem *item = nullptr;
+		if(SUCCEEDED(::SHCreateItemFromIDList(desktop, IID_PPV_ARGS(&item))))
+		{
+			IDataObject *dto = nullptr;
+			if(SUCCEEDED(item->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&dto))))
+			{
+				CHECK(init->Initialize(nullptr, dto, 0) == S_OK);
+
+				IContextMenu *cm = nullptr;
+				CHECK(init->QueryInterface(IID_IContextMenu, reinterpret_cast<void **>(&cm)) == S_OK);
+				CHECK(cm != nullptr);
+
+				auto menu = ::CreatePopupMenu();
+				auto hr = cm->QueryContextMenu(menu, 0, 1, 0x7FFF, CMF_NORMAL);
+				CHECK(SUCCEEDED(hr));
+				CHECK_EQ(HRESULT_CODE(hr), 0);
+
+				auto matched = ShellExtCapture::match(menu);
+				CHECK(static_cast<bool>(matched));
+				CHECK(matched.items != nullptr);
+				CHECK(matched.folder == nullptr);
+				CHECK(matched.background == false);
+
+				::DestroyMenu(menu);
+				cm->Release();
+				dto->Release();
+			}
+			item->Release();
+		}
 		::CoTaskMemFree(desktop);
 	}
 

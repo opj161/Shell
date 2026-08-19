@@ -5,23 +5,14 @@
 // This replaces ::_memicmp, which was previously used across string.h and the
 // lexer to compare wchar_t buffers. _memicmp is the *narrow* CRT routine: it
 // case-folds every byte of the buffer, including the high byte of each UTF-16
-// code unit. Two consequences, both observable:
+// code unit, causing false positives in CJK and locale sensitivity.
 //
-//   * False positives. U+4E2D and U+6E2D differ only in the high byte, and
-//     0x4E/0x6E is an ASCII case pair, so they compared equal. Large parts of
-//     the CJK range collide this way.
-//   * False negatives. Real non-ASCII case pairs such as U+0410/U+0430
-//     (Cyrillic A/a) were never folded, so case-insensitive matching did not
-//     work outside ASCII at all.
-//
-// _memicmp is also locale-sensitive, which is not something we want running
-// inside a host process we do not control.
-//
-// Folding here is deliberately ASCII-only and locale-independent. That matches
-// what the original code intended (see Hash::Generate, which folds A-Z only)
-// and what the .nss language needs for identifiers and keywords. Callers that
-// need full Unicode case folding for user-facing text should use
-// ::CompareStringOrdinal(..., TRUE) instead.
+// Hybrid design:
+//   * ASCII text and identifiers are handled by the SIMD fast path (SSE2 / NEON).
+//   * Non-ASCII mismatches containing code points > 0x7F automatically fall back
+//     to Windows non-linguistic ordinal ignore-case comparison
+//     (::CompareStringOrdinal(..., TRUE)), ensuring correct matching for
+//     international filenames, Cyrillic, Greek, and extended Unicode pairs.
 
 #include <windows.h>
 #include <cstddef>
