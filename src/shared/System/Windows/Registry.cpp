@@ -718,6 +718,86 @@ CString Registry::GetDataAsString(CRegKey& key, const RegistryItem& item) {
 		return SetKeyValue(hkey, subKey, name, value, string::Length(value), expand);
 	}
 
+	/*
+		Enumerating names, without a fixed buffer.
+
+		reg.keys and reg.values used to allocate 260 characters and loop while the
+		result was ERROR_SUCCESS. A value name longer than that answers
+		ERROR_MORE_DATA, which is neither success nor ERROR_NO_MORE_ITEMS - so the
+		loop ended there and the script saw a key that stopped at the first long
+		name, with every later value missing too. Nothing reported an error; the
+		list was simply short.
+
+		A value name may be 16,383 characters and a key name 255:
+
+		  https://learn.microsoft.com/en-us/windows/win32/sysinfo/registry-element-size-limits
+
+		and the documented way to size the buffer is to ask:
+
+		    To determine the maximum size of the name and data buffers, use the
+		    RegQueryInfoKey function.
+
+		  https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumvaluew
+
+		The length is an in/out parameter, so it is reset for every call rather
+		than left holding the previous name's length. A key can also gain a longer
+		name between the query and the enumeration, so ERROR_MORE_DATA grows the
+		buffer and retries the same index instead of skipping it.
+	*/
+	std::vector<string> Registry::EnumNames(HKEY key, bool subkeys)
+	{
+		std::vector<string> names;
+		if(!is_valid(key))
+			return names;
+
+		DWORD max_subkey_name = 0;
+		DWORD max_value_name = 0;
+		if(ERROR_SUCCESS != ::RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, nullptr,
+											   &max_subkey_name, nullptr, nullptr,
+											   &max_value_name, nullptr, nullptr, nullptr))
+		{
+			max_subkey_name = 0;
+			max_value_name = 0;
+		}
+
+		// Neither count includes the terminator.
+		DWORD capacity = (subkeys ? max_subkey_name : max_value_name) + 1;
+		if(capacity < 16)
+			capacity = 16;
+
+		// A key name cannot exceed 255 and a value name 16,383, so anything past
+		// that is a key being rewritten faster than it can be read.
+		const DWORD limit = subkeys ? 512u : 32768u;
+
+		for(DWORD index = 0; ; index++)
+		{
+			string name(capacity);
+			DWORD length = capacity;
+
+			LSTATUS rc = subkeys
+				? ::RegEnumKeyExW(key, index, name.data(), &length,
+								  nullptr, nullptr, nullptr, nullptr)
+				: ::RegEnumValueW(key, index, name.data(), &length,
+								  nullptr, nullptr, nullptr, nullptr);
+
+			if(rc == ERROR_MORE_DATA)
+			{
+				if(capacity >= limit)
+					break;
+				capacity = (capacity * 2 < limit) ? capacity * 2 : limit;
+				index--;            // the same entry, with room for it this time
+				continue;
+			}
+
+			if(rc != ERROR_SUCCESS)  // ERROR_NO_MORE_ITEMS ends it normally
+				break;
+
+			names.push_back(name.release(length).move());
+		}
+
+		return names;
+	}
+
 	bool Registry::Exists(HKEY hKeyRoot, const wchar_t* subKey, uint32_t view)
 	{
 		bool result = false;

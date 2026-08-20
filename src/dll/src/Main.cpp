@@ -376,16 +376,26 @@ private:
 		if(_started.load(std::memory_order_relaxed))
 			return true;
 
+		// Anything that fails from here has to put back what it took. _started
+		// stays false on every failure path, so a later menu tries again - and
+		// leaked a fresh pair of event handles each time it did.
+		auto abandon = [this]
+		{
+			if(_work) { ::CloseHandle(_work); _work = nullptr; }
+			if(_done) { ::CloseHandle(_done); _done = nullptr; }
+			return false;
+		};
+
 		_work = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		_done = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
 		if(!_work || !_done)
-			return false;
+			return abandon();
 
 		// The module is already pinned for process lifetime, so this thread
 		// outliving any caller is safe.
 		auto thread = ::CreateThread(nullptr, 0, &TaskbarUiaWorker::thread_main, this, 0, nullptr);
 		if(!thread)
-			return false;
+			return abandon();
 		::CloseHandle(thread);
 
 		_started.store(true, std::memory_order_release);

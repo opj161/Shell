@@ -594,6 +594,69 @@ _ => throw new InvalidOperationException(),
 				return reinterpret_cast<T>(::SetWindowLongPtrW(hWnd, GWL_EXSTYLE, reinterpret_cast<LONG_PTR>(value)));
 			}
 
+			/*
+				A window's title, however long it is.
+
+				window.title and the parent/owner variants read into wchar_t[250]
+				and passed 250, so every title from the 250th character on was
+				silently lost - and a window title is exactly the sort of string
+				that gets long: a document path in an editor, a URL in a browser.
+
+				GetWindowTextLength gives the size to allocate:
+
+				    Under certain conditions, the GetWindowTextLength function may
+				    return a value that is larger than the actual length of the
+				    text. [...] The return value, however, will always be at least
+				    as large as the actual length of the text; you can thus always
+				    use it to guide buffer allocation.
+
+				  https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowtextlengthw
+
+				so the length to keep is the one GetWindowText returns, never the
+				one used to size the buffer. The window belongs to another process
+				and its title can grow between the two calls, so a fill that
+				exactly fills the buffer is retried a bounded number of times.
+			*/
+			static string text(HWND hWnd)
+			{
+				if(!hWnd)
+					return {};
+
+				// A title longer than this is not a title.
+				constexpr int limit = 65536;
+
+				for(int attempt = 0; attempt < 4; attempt++)
+				{
+					int length = ::GetWindowTextLengthW(hWnd);
+					if(length <= 0)
+						return {};
+					if(length > limit)
+						length = limit;
+
+					// One character more than the reported length, deliberately.
+					// GetWindowText returns the count it copied, and truncating to
+					// exactly `length` would return `length` as well - the same
+					// number a complete title of that length returns. The extra slot
+					// is what tells the two apart.
+					const int capacity = length + 2;
+					string title(static_cast<size_t>(capacity));
+					int written = ::GetWindowTextW(hWnd, title.buffer(capacity), capacity);
+					if(written <= 0)
+						return {};
+
+					// Anything up to `length` is the whole title, and `written` is its
+					// real length rather than the over-estimate it was sized from.
+					if(written <= length || length >= limit)
+						return title.release(written).move();
+
+					// Longer than the window said: it grew between the two calls.
+					// Ask again.
+
+				}
+
+				return {};
+			}
+
 			static string class_name(HWND hWnd)
 			{
 				if(hWnd)

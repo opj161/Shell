@@ -1438,11 +1438,7 @@ namespace Nilesoft
 					else if(Id[1] == IDENT_TITLE)
 					{
 						if(auto h = hWnd_owner ? hWnd_owner : hWnd; h)
-						{
-							wchar_t title[250]{};
-							::GetWindowTextW(h, title, 250);
-							_result = title;
-						}
+							_result = Window::text(h);
 					}
 					else if(Id[1] == IDENT_PARENT || Id[1] == IDENT_OWNER)
 					{
@@ -1455,9 +1451,7 @@ namespace Nilesoft
 							}
 							else if(Id[2] == IDENT_TITLE)
 							{
-								wchar_t title[250]{};
-								::GetWindowTextW(h, title, 250);
-								_result = title;
+								_result = Window::text(h);
 							}
 							else
 							{
@@ -5355,22 +5349,10 @@ namespace Nilesoft
 					auto keybase = RegistryKey::OpenBaseKey(root_key, false, 0);
 					if(auto key = keybase.OpenSubKey(sub_key); key)
 					{
-						std::vector<string> list;
-
-						LSTATUS retCode = ERROR_SUCCESS;
-						for(auto i = 0u; retCode == ERROR_SUCCESS; i++)
-						{
-							DWORD name_length = 260;
-							string name(name_length);
-
-							if(Id[1] == IDENT_KEYS)
-								retCode = ::RegEnumKeyExW(key, i, name.data(), &name_length, nullptr, nullptr, nullptr, nullptr);
-							else
-								retCode = ::RegEnumValueW(key, i, name.data(), &name_length, nullptr, nullptr, nullptr, nullptr);
-							
-							if(retCode == ERROR_SUCCESS)
-								list.push_back(name.release(name_length).move());
-						}
+						// Sized from the key itself; see Registry::EnumNames. The 260
+						// characters this used to allocate silently truncated the whole
+						// list at the first longer name.
+						auto list = Registry::EnumNames(key, Id[1] == IDENT_KEYS);
 
 						key.Close();
 

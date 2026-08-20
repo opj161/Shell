@@ -204,9 +204,13 @@ namespace Nilesoft::Shell
 
 		~IATHook()
 		{
+			// uninstall(true) clears _hModule, so reading it afterwards always
+			// found null and the reference GetModuleHandleExW took in init() was
+			// never released. Every hooked module stayed pinned for the life of
+			// the process on top of the pin Shell already holds deliberately.
+			HMODULE module = _hModule;
 			uninstall(true);
-			// free when use GetModuleHandleExW
-			if(_hModule) ::FreeLibrary(_hModule);
+			if(module) ::FreeLibrary(module);
 		}
 
 		IATHook &init(HMODULE hModule, const char *import, void *orignal, void *detour)

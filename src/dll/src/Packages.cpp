@@ -307,6 +307,7 @@ namespace Nilesoft
 		{
 			std::vector<std::wstring> names;
 			IPackageSource *source = nullptr;
+			uint64_t generation = 0;
 
 			{
 				std::unique_lock<std::mutex> lock(_mutex);
@@ -316,13 +317,23 @@ namespace Nilesoft
 				_cv.wait(lock, [this] { return _state != State::Loading; });
 
 				if(_state == State::Ready)
-					return true;
+				{
+					// Still fresh enough. GetTickCount64 does not wrap in any
+					// process lifetime that matters here, but the subtraction is
+					// unsigned so it would survive it anyway.
+					if(now() - _ready_at < _ttl_ms)
+						return true;
+
+					// Expired. Keep the list so callers racing this scan still get
+					// the old answer rather than nothing, and rescan.
+				}
 
 				if(!_source)
 					return false;
 
 				_state = State::Loading;
 				source = _source;
+				generation = _generation;
 			}
 
 			// If the scan throws - it allocates once per package - the state must
@@ -350,7 +361,16 @@ namespace Nilesoft
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 
-				if(ok)
+				if(ok && _generation != generation)
+				{
+					// Something invalidated the index while this scan was running,
+					// so what it just enumerated describes the machine before that
+					// change. Publishing it would cache the stale answer under a
+					// fresh timestamp - exactly the bug being fixed.
+					_state = State::Empty;
+					ok = false;
+				}
+				else if(ok)
 				{
 					_list.clear();
 					_list.reserve(names.size());
@@ -361,6 +381,7 @@ namespace Nilesoft
 							_list.push_back(std::move(e));
 					}
 					_state = State::Ready;
+					_ready_at = now();
 				}
 				else
 				{
@@ -506,6 +527,23 @@ namespace Nilesoft
 			_cv.wait(lock, [this] { return _state != State::Loading; });
 			_list.clear();
 			_state = State::Empty;
+			_generation++;
+		}
+
+		// Unlike clear(), this does not wait for a scan in flight and does not
+		// throw the current list away - it just guarantees the next call rescans,
+		// and that whatever is scanning right now will not publish.
+		void PackageIndex::invalidate()
+		{
+			std::lock_guard<std::mutex> lock(_mutex);
+			_generation++;
+
+			// Not _ready_at = 0: freshness is `now() - _ready_at < ttl`, and at a
+			// small tick count that still reads as fresh. Drop straight out of
+			// Ready instead. The list is left alone - nothing reads it without
+			// going through ensure_index first.
+			if(_state == State::Ready)
+				_state = State::Empty;
 		}
 	}
 }

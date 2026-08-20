@@ -258,3 +258,125 @@ TEST(packages, an_index_without_a_source_answers_rather_than_crashes)
 	CHECK(!index.display_name(L"anything").has_value());
 	CHECK_EQ(index.all_identities().size(), size_t(0));
 }
+
+// Freshness.
+//
+// ensure_index returned true forever once the first scan succeeded, and the
+// process holding that index is Explorer - which outlives package installs,
+// updates and uninstalls by days. Every package.* answer after the first
+// context menu described the machine as it had been at that moment.
+//
+// The clock is injected rather than slept on, so these are deterministic.
+namespace
+{
+	uint64_t fake_now = 0;
+	uint64_t fake_clock() { return fake_now; }
+}
+
+TEST(packages, a_fresh_index_is_not_rescanned)
+{
+	auto source = sample();
+	PackageIndex index(&source);
+	fake_now = 1000;
+	index.set_clock(&fake_clock);
+	index.set_ttl(30000);
+
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_EQ(source.enumerations, 1);
+
+	fake_now = 1000 + 29999;
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_MSG(source.enumerations == 1, "still inside the time to live");
+}
+
+TEST(packages, an_expired_index_is_rescanned_once)
+{
+	auto source = sample();
+	PackageIndex index(&source);
+	fake_now = 1000;
+	index.set_clock(&fake_clock);
+	index.set_ttl(30000);
+
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_EQ(source.enumerations, 1);
+
+	fake_now = 1000 + 30000;
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_MSG(source.enumerations == 2, "the time to live expired");
+
+	// And the rescan resets the clock rather than rescanning every call.
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_EQ(source.enumerations, 2);
+}
+
+// A package installed after the index was built shows up once it expires.
+TEST(packages, a_package_added_later_is_found_after_expiry)
+{
+	auto source = sample();
+	PackageIndex index(&source);
+	fake_now = 0;
+	index.set_clock(&fake_clock);
+	index.set_ttl(1000);
+
+	CHECK(!index.exists(L"Notepad"));
+
+	source.names.push_back(L"Microsoft.WindowsNotepad_11.2306.16.0_x64__8wekyb3d8bbwe");
+	CHECK_MSG(!index.exists(L"Notepad"), "still inside the time to live");
+
+	fake_now = 1000;
+	CHECK_MSG(index.exists(L"Notepad"), "and visible once it expires");
+}
+
+TEST(packages, invalidate_forces_a_rescan_without_waiting_for_expiry)
+{
+	auto source = sample();
+	PackageIndex index(&source);
+	fake_now = 0;
+	index.set_clock(&fake_clock);
+	index.set_ttl(60000);
+
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_EQ(source.enumerations, 1);
+
+	index.invalidate();
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_MSG(source.enumerations == 2, "invalidate must not wait for the clock");
+}
+
+// A scan already running when the index is invalidated has enumerated the
+// machine as it was before the change, so it must not publish.
+TEST(packages, a_scan_invalidated_while_running_does_not_publish)
+{
+	struct InvalidatingSource : IPackageSource
+	{
+		PackageIndex *index{};
+		int enumerations = 0;
+
+		bool enumerate_full_names(std::vector<std::wstring> &out) override
+		{
+			enumerations++;
+			// Something changed the package set while this scan was in flight.
+			if(enumerations == 1)
+				index->invalidate();
+			out.push_back(L"Microsoft.WindowsTerminal_1.18.3181.0_x64__8wekyb3d8bbwe");
+			return true;
+		}
+
+		std::wstring resolve_path(const std::wstring &) override { return {}; }
+		std::wstring resolve_display_name(const std::wstring &) override { return {}; }
+	} source;
+
+	PackageIndex index(&source);
+	source.index = &index;
+	fake_now = 0;
+	index.set_clock(&fake_clock);
+
+	// The first attempt throws its own result away and reports failure, so the
+	// caller sees "no answer" rather than a stale one.
+	CHECK(!index.exists(L"WindowsTerminal"));
+	CHECK_EQ(source.enumerations, 1);
+
+	// The next call scans again and this time nothing interferes.
+	CHECK(index.exists(L"WindowsTerminal"));
+	CHECK_EQ(source.enumerations, 2);
+}

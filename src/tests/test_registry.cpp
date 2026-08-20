@@ -28,6 +28,7 @@
 #include "test.h"
 
 #include <windows.h>
+#include <string>
 #include "System.h"
 
 using namespace Nilesoft;
@@ -421,4 +422,74 @@ TEST(registry, a_length_too_large_for_cbdata_is_refused)
 	CHECK(!Registry::SetKeyValue(HKEY_CURRENT_USER, TESTKEY, L"overflow2",
 								 L"x", SIZE_MAX, false));
 	CHECK_EQ(stored_bytes(key.handle, L"overflow2"), -1);
+}
+
+// Enumeration, with names longer than the buffer that used to be hard-coded.
+//
+// reg.keys and reg.values allocated 260 characters and looped while the result
+// was ERROR_SUCCESS. A value name longer than that answers ERROR_MORE_DATA,
+// which is neither success nor ERROR_NO_MORE_ITEMS, so the loop stopped there -
+// hiding that name and every name after it, with nothing reported. Value names
+// go up to 16,383 characters:
+//
+//   https://learn.microsoft.com/en-us/windows/win32/sysinfo/registry-element-size-limits
+TEST(registry, enumeration_survives_a_name_longer_than_the_old_buffer)
+{
+	ScopedTestKey key;
+	CHECK(key.handle != nullptr);
+
+	// Deliberately either side of the old 260-character buffer, and written in
+	// an order that puts the long one first so a truncating enumerator loses
+	// the short ones too.
+	std::wstring long_name(400, L'L');
+	std::wstring longer_name(1200, L'M');
+
+	CHECK(ERROR_SUCCESS == ::RegSetValueExW(key.handle, long_name.c_str(), 0, REG_SZ,
+											reinterpret_cast<const BYTE *>(L"1"), sizeof(wchar_t) * 2));
+	CHECK(ERROR_SUCCESS == ::RegSetValueExW(key.handle, longer_name.c_str(), 0, REG_SZ,
+											reinterpret_cast<const BYTE *>(L"2"), sizeof(wchar_t) * 2));
+	CHECK(ERROR_SUCCESS == ::RegSetValueExW(key.handle, L"short", 0, REG_SZ,
+											reinterpret_cast<const BYTE *>(L"3"), sizeof(wchar_t) * 2));
+
+	auto names = Registry::EnumNames(key.handle, false);
+	CHECK_MSG(names.size() == 3, "every value must be listed, whatever its name is");
+
+	bool saw_long = false, saw_longer = false, saw_short = false;
+	for(auto &n : names)
+	{
+		if(n.length() == 400) saw_long = true;
+		else if(n.length() == 1200) saw_longer = true;
+		else if(same(n, L"short")) saw_short = true;
+	}
+	CHECK_MSG(saw_long, "a 400-character value name");
+	CHECK_MSG(saw_longer, "a 1200-character value name");
+	CHECK_MSG(saw_short, "and the ordinary one that used to be lost with them");
+}
+
+TEST(registry, subkey_enumeration_lists_them_all)
+{
+	ScopedTestKey key;
+
+	for(int i = 0; i < 5; i++)
+	{
+		HKEY sub = nullptr;
+		std::wstring name = L"sub" + std::to_wstring(i);
+		if(ERROR_SUCCESS == ::RegCreateKeyExW(key.handle, name.c_str(), 0, nullptr, 0,
+											  KEY_WRITE, nullptr, &sub, nullptr))
+			::RegCloseKey(sub);
+	}
+
+	auto names = Registry::EnumNames(key.handle, true);
+	CHECK_EQ((int)names.size(), 5);
+
+	for(int i = 0; i < 5; i++)
+		::RegDeleteKeyExW(key.handle, (L"sub" + std::to_wstring(i)).c_str(), KEY_WOW64_64KEY, 0);
+}
+
+TEST(registry, enumerating_an_empty_key_is_an_empty_list)
+{
+	ScopedTestKey key;
+	CHECK_EQ((int)Registry::EnumNames(key.handle, true).size(), 0);
+	CHECK_EQ((int)Registry::EnumNames(key.handle, false).size(), 0);
+	CHECK_EQ((int)Registry::EnumNames(nullptr, false).size(), 0);
 }

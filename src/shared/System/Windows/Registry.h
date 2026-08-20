@@ -312,6 +312,16 @@ namespace Nilesoft
 		static bool SetKeyValue(HKEY hkey, const wchar_t* subKey, const wchar_t* name,
 								  const wchar_t* value, bool expand = false);
 
+		// Names of the subkeys, or of the values, of an open key.
+		//
+		// Sized from RegQueryInfoKey rather than a fixed buffer: a value name may
+		// be up to 16,383 characters, and a name that does not fit stops the
+		// whole enumeration rather than just being skipped.
+		//
+		//   https://learn.microsoft.com/en-us/windows/win32/sysinfo/registry-element-size-limits
+		//   https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumvaluew
+		static std::vector<Text::string> EnumNames(HKEY key, bool subkeys);
+
 		static bool Exists(HKEY hKeyRoot, const wchar_t* subKey, uint32_t view = 0);
 		static bool ExistsValue(HKEY hKeyRoot, const wchar_t* subKey, const wchar_t* name, uint32_t view = 0);
 		static bool DeleteSubKey(HKEY hKeyRoot, const wchar_t* subKey);

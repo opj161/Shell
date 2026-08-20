@@ -121,8 +121,41 @@ namespace Nilesoft
 
 			void clear();
 
+			/*
+				Freshness.
+
+				Once the index reached Ready it stayed there for the life of the
+				process, and the process here is Explorer - which outlives any
+				number of package installs, updates and uninstalls. Every package.*
+				answer after the first menu was built described the machine as it
+				had been at that moment, with no way back short of clearing the
+				whole configuration cache.
+
+				A time-to-live is the cheap half of the fix: the scan is one
+				registry subkey enumeration, so paying for it occasionally is not
+				the cost that mattered - the cost that mattered was doing it for
+				every menu, which is what the index exists to avoid.
+
+				invalidate() is the exact half, for when something knows the
+				package set has changed. A generation counter means a scan already
+				in flight when it is called does not publish its now-stale results.
+			*/
+			static constexpr uint64_t DefaultTtlMs = 30000;
+
+			// Marks the index stale without discarding it, so a scan in progress
+			// cannot publish over the top of the change that caused this.
+			void invalidate();
+
+			// Test seams. The clock is injectable so freshness can be tested
+			// without a test that sleeps.
+			void set_ttl(uint64_t milliseconds) noexcept { _ttl_ms = milliseconds; }
+			void set_clock(uint64_t (*now)()) noexcept { _clock = now; }
+
 		private:
 			enum class State { Empty, Loading, Ready };
+
+			static uint64_t default_clock() { return ::GetTickCount64(); }
+			uint64_t now() const { return _clock ? _clock() : default_clock(); }
 
 			struct Entry
 			{
@@ -145,6 +178,11 @@ namespace Nilesoft
 			mutable State _state{ State::Empty };
 			mutable std::vector<Entry> _list;
 			IPackageSource *_source{};
+
+			mutable uint64_t _ready_at{};
+			mutable uint64_t _generation{};
+			uint64_t _ttl_ms{ DefaultTtlMs };
+			uint64_t (*_clock)(){};
 		};
 	}
 }

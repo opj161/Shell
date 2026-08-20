@@ -37,10 +37,23 @@
 	stock config - install to a different target location per architecture, and
 	the 64-bit attribute differs too.
 
-	It is reachable, not theoretical: the Upgrade table removes versions below
-	$(var.Version), so an x86 and an x64 package of the *same* version can be
-	installed side by side, at which point one component code would name two
-	different key paths.
+	The reason is not side-by-side installation, whatever this comment used to
+	say. Reading the emitted Upgrade table:
+
+	    VersionMin 1.9.20, no max, attributes 258  -> NEWPRODUCTFOUND, detect only
+	    VersionMin 1.0.0, VersionMax 1.9.20, 256   -> UPGRADEFOUND, removes
+
+	258 is VersionMinInclusive plus OnlyDetect, so a package of the *same*
+	version under the same UpgradeCode - which is what the other architecture
+	is - trips NEWPRODUCTFOUND and the install is refused. One architecture at
+	a time is the actual policy, and the right one: registration is machine-
+	global, so two architectures would be fighting over the same CLSID.
+
+	The component codes still have to differ. A major upgrade from another
+	architecture is supported, and RemoveExistingProducts removes the old
+	product before the new one installs; distinct codes are what stop the
+	removal half from reference-counting against components the new package is
+	about to own.
 
 	x64 keeps the historical codes, so an x64 upgrade - the overwhelmingly
 	common one - replaces nothing it does not have to. x86 and ARM64 get their

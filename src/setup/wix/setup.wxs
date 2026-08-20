@@ -217,7 +217,14 @@
 		<Property Id='NEWPRODUCTFOUND' Secure='yes' />
 		<Property Id='UPGRADEFOUND' Secure='yes' />
 		
-		<CustomAction Id='OnDowngrading' Error='A newer version of [ProductName] is already installed. Setup will now exit.' />
+		<!--
+			NEWPRODUCTFOUND is VersionMinInclusive + OnlyDetect at $(var.Version),
+			so it fires for the same version as well as a newer one - and the same
+			version under this UpgradeCode is how the other architecture presents
+			itself. Saying "a newer version" sends anyone who hits that case
+			looking for a version they have not got.
+		-->
+		<CustomAction Id='OnDowngrading' Error='This or a newer version of [ProductName] is already installed, possibly for a different architecture. Uninstall it first, then run this installer again.' />
 		
 		<Upgrade Id='$(var.UpgradeCode)'>
 			<UpgradeVersion Property='NEWPRODUCTFOUND' Minimum='$(var.Version)' OnlyDetect='yes' />
