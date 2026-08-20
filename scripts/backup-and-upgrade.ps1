@@ -45,7 +45,12 @@ param(
     [string]$Platform,
 
     [switch]$ResetConfig,
-    [switch]$NoTreat
+    [switch]$NoTreat,
+
+    # Set by the elevated relaunch below. The elevated process gets its own
+    # console, which closes with it, so it transcribes to a file the launching
+    # session can read back - otherwise a failed deployment says nothing at all.
+    [string]$LogPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,13 +61,25 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]$identity
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host 'Elevating...' -ForegroundColor Yellow
-    $argv = @('-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', "`"$PSCommandPath`"")
+
+    $transcript = Join-Path $env:TEMP ("nilesoft-deploy-{0}.log" -f (Get-Date -Format 'yyyyMMddHHmmss'))
+    $argv = @('-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', "`"$PSCommandPath`"", '-LogPath', "`"$transcript`"")
     if ($Platform)    { $argv += @('-Platform', $Platform) }
     if ($ResetConfig) { $argv += '-ResetConfig' }
     if ($NoTreat)     { $argv += '-NoTreat' }
+
     $elevated = Start-Process powershell.exe -ArgumentList $argv -Verb RunAs -Wait -PassThru
+
+    if (Test-Path $transcript) {
+        Get-Content $transcript |
+            Where-Object { $_ -notmatch '^\*{10,}$' -and $_ -notmatch '^(Windows PowerShell transcript|Start time|End time|Username|RunAs User|Configuration Name|Machine|Host Application|Process ID|PSVersion|PSEdition|PSCompatibleVersions|BuildVersion|CLRVersion|WSManStackVersion|PSRemotingProtocolVersion|SerializationVersion|Transcript started|Transcript stopped)' }
+        Write-Host "`n(full transcript: $transcript)" -ForegroundColor DarkGray
+    }
+
     exit $elevated.ExitCode
 }
+
+if ($LogPath) { Start-Transcript -Path $LogPath -Force | Out-Null }
 
 $repoRoot   = Split-Path $PSScriptRoot -Parent
 $installDir = 'C:\Program Files\Nilesoft Shell'
@@ -231,20 +248,52 @@ try {
     & (Join-Path $installDir 'shell.exe') @regArgs
     Start-Sleep -Seconds 1
 
-    $clsid = 'HKCU:\Software\Classes\CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}'
-    if (-not (Test-Path $clsid)) { throw 'Registration did not create the context-menu CLSID.' }
+    # A per-machine install registers under HKLM. Both hives are checked because
+    # that is what COM resolves against - asserting one of them is how a
+    # successful deployment previously got reported as a failure.
+    # Not "| Select-Object -First 1": stopping a pipeline early makes PowerShell
+    # 5.1 write "The pipeline has been stopped" into the transcript, which reads
+    # like a failure in a deployment log.
+    function Get-FirstRegistryDefault([string[]]$paths) {
+        foreach ($path in $paths) {
+            if (Test-Path $path) {
+                $value = (Get-ItemProperty $path -Name '(default)' -ErrorAction SilentlyContinue).'(default)'
+                if ($value) { return $value }
+            }
+        }
+        return $null
+    }
+
+    $contextMenu = '{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}'
+    $inproc = Get-FirstRegistryDefault @(
+        "HKLM:\SOFTWARE\Classes\CLSID\$contextMenu\InprocServer32",
+        "HKCU:\Software\Classes\CLSID\$contextMenu\InprocServer32"
+    )
+
+    if (-not $inproc) { throw 'Registration did not create the context-menu CLSID in either hive.' }
     Write-Host "[OK] Registered ($($regArgs -join ' '))" -ForegroundColor Green
+    Write-Host "     InprocServer32 -> $inproc" -ForegroundColor DarkGray
+
+    if ($inproc -ne (Join-Path $installDir 'shell.dll')) {
+        Write-Host "[WARN] Registered DLL is not the one just deployed." -ForegroundColor Yellow
+    }
 
     if ($isWin11 -and -not $NoTreat) {
-        # -treat sets this, but assert it: without the redirect Shell only shows
-        # up under "Show more options".
-        $treatAs = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\TreatAs'
-        $expected = '{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}'
-        if ((Get-ItemProperty -Path $treatAs -Name '(default)' -ErrorAction SilentlyContinue).'(default)' -ne $expected) {
-            New-Item -Path $treatAs -Force | Out-Null
-            Set-ItemProperty -Path $treatAs -Name '(default)' -Value $expected
+        # Verified, not written. -treat owns this key; writing it here by hand
+        # would put a copy in HKCU that shadows the real one in HKLM, and a
+        # stale value there outlives any future unregister.
+        $treatAs = Get-FirstRegistryDefault @(
+            'HKLM:\SOFTWARE\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\TreatAs',
+            'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\TreatAs'
+        )
+
+        if ($treatAs -eq $contextMenu) {
+            Write-Host '[OK] Windows 11 context-menu redirect in place.' -ForegroundColor Green
         }
-        Write-Host '[OK] Windows 11 context-menu redirect in place.' -ForegroundColor Green
+        else {
+            Write-Host "[WARN] TreatAs redirect missing or unexpected ('$treatAs'); Shell will" -ForegroundColor Yellow
+            Write-Host '       appear under "Show more options" rather than as the main menu.' -ForegroundColor Yellow
+        }
     }
 
     Write-Host "`nDeployment complete ($Platform)." -ForegroundColor Green
@@ -256,4 +305,5 @@ finally {
         Start-Process explorer.exe
         Start-Sleep -Seconds 2
     }
+    if ($LogPath) { try { Stop-Transcript | Out-Null } catch { } }
 }
