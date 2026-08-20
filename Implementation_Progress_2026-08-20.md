@@ -29,7 +29,7 @@ cannot run on an x64 host and `build.ps1` says so rather than skipping quietly.
 | F-12 | Package index never refreshed | done | `b2795ab` |
 | F-13 | Start Menu component GUID per architecture | done | `c2e0ad6` |
 | F-14 | Upgrade policy comment contradicted the table | done | `b2795ab` |
-| F-15 | CFG enabled; signing is a pipeline blocker | partial | `d28b6d7` |
+| F-15 | CFG enabled; signing not done, and not blocking | partial | `d28b6d7` |
 | F-16 | WPO / `/OPT:REF` disabled | **not done — see below** | |
 | F-17 | UIA worker leaked event handles | done | `b2795ab` |
 | F-18 | `IATHook` leaked its module reference | done | `b2795ab` |
