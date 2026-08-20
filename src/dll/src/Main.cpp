@@ -311,11 +311,21 @@ public:
 		if(!ensure_started())
 			return false;
 
+		// One question at a time. Taskbars on several monitors can be serviced by
+		// different threads, and without this the second caller would overwrite
+		// the first one's request, both would wake on the same answer, and each
+		// would cache the other's result against its own point.
+		std::lock_guard<std::mutex> caller(_caller_mutex);
+
+		// A caller that gave up leaves the worker still running; the sequence
+		// number is what stops its late answer being read as this one's.
+		uint64_t ticket = 0;
 		{
 			std::lock_guard<std::mutex> lock(_mutex);
-			_request = { taskbar, pt, secondary };
+			ticket = ++_sequence;
+			_request = { taskbar, pt, secondary, ticket };
 			_answer = false;
-			_answered = false;
+			_answered_ticket = 0;
 		}
 
 		::ResetEvent(_done);
@@ -329,14 +339,15 @@ public:
 		bool answered = false;
 		{
 			std::lock_guard<std::mutex> lock(_mutex);
+			answered = (_answered_ticket == ticket);
 			answer = _answer;
-			answered = _answered;
 		}
 
-		if(FAILED(hr) || hr == RPC_S_CALLPENDING || !answered)
+		if(FAILED(hr) || !answered)
 		{
-			// Timed out or the wait could not run. Let Windows handle this
-			// click; the worker will still publish its answer to the cache.
+			// Timed out, or the wait could not run, or what is on the slot
+			// belongs to an earlier request. Let Windows handle this click; the
+			// worker still publishes its answer to the cache for next time.
 			return false;
 		}
 
@@ -350,6 +361,7 @@ private:
 		HWND taskbar{};
 		POINT pt{};
 		bool secondary{};
+		uint64_t ticket{};
 	};
 
 	TaskbarUiaWorker() = default;
@@ -379,20 +391,28 @@ private:
 		return true;
 	}
 
+	// run() serves requests for the life of the process and does not return, so
+	// the result a ThreadProc has to name is unreachable (C4702).
+#pragma warning(push)
+#pragma warning(disable: 4702)
 	static DWORD WINAPI thread_main(void *param)
 	{
 		static_cast<TaskbarUiaWorker *>(param)->run();
 		return 0;
 	}
+#pragma warning(pop)
 
 	void run()
 	{
-		// MTA, and this thread deliberately creates no windows.
-		if(FAILED(::CoInitializeEx(nullptr, COINIT_MULTITHREADED)))
-			return;
+		// MTA, and this thread deliberately creates no windows. If either step
+		// fails the loop still runs: a worker that exits here would leave every
+		// caller waiting out the full budget for an answer nobody will ever
+		// produce, for the life of the process.
+		auto com = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
 		IComPtr<IUIAutomation> uia;
-		uia.CreateInstance(__uuidof(CUIAutomation), CLSCTX_INPROC_SERVER);
+		if(SUCCEEDED(com))
+			uia.CreateInstance(__uuidof(CUIAutomation), CLSCTX_INPROC_SERVER);
 
 		for(;;)
 		{
@@ -409,7 +429,7 @@ private:
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				_answer = allowed;
-				_answered = true;
+				_answered_ticket = request.ticket;
 			}
 
 			// Published even if the caller has already given up, so the next
@@ -476,10 +496,14 @@ private:
 	HANDLE _work{};
 	HANDLE _done{};
 
+	// Serialises callers; _mutex only guards the request/answer slot.
+	std::mutex _caller_mutex;
+
 	std::mutex _mutex;
 	Request _request;
+	uint64_t _sequence{};
+	uint64_t _answered_ticket{};
 	bool _answer{};
-	bool _answered{};
 };
 
 LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);

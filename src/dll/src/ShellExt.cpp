@@ -67,11 +67,15 @@ namespace Nilesoft
 														 UINT uFlags)
 		{
 			// CMF_DEFAULTONLY means the host wants the default verb, not a menu
-			// the user will see - a double-click, typically.
+			// the user will see - a double-click, typically. The capture is kept
+			// rather than dropped: a host is free to ask for the default verb and
+			// then build the real menu on this same handler, and discarding it
+			// here would leave that menu with no selection.
 			if(!(uFlags & CMF_DEFAULTONLY))
+			{
 				ShellExtCapture::bind(hmenu, std::move(m_pending));
-
-			m_pending.reset();
+				m_pending.reset();
+			}
 
 			// Zero items added.
 			return MAKE_HRESULT(SEVERITY_SUCCESS, FACILITY_NULL, 0);

@@ -56,6 +56,7 @@
 #include <mutex>
 #include <type_traits>
 #include <unordered_map>
+#include <vector>
 #include <utility>
 #include <new>
 
@@ -267,13 +268,20 @@ namespace Nilesoft
 			inline static std::mutex _mutex;
 			inline static std::unordered_map<HMENU, Entry> _bound;
 
-			static void prune_unlocked()
+			// Moves expired entries out of the map. The caller destroys them after
+			// dropping the lock: an entry that fell back to holding the interface
+			// directly releases a possibly-proxied pointer, and no foreign COM
+			// call may run while the registry is held.
+			static void prune_unlocked(std::vector<Entry> &expired)
 			{
 				auto now = ::GetTickCount();
 				for(auto it = _bound.begin(); it != _bound.end(); )
 				{
 					if((now - it->second.tick) > TTL_MS)
+					{
+						expired.push_back(std::move(it->second));
 						it = _bound.erase(it);
+					}
 					else
 						++it;
 				}
@@ -292,9 +300,13 @@ namespace Nilesoft
 				entry.background = pending.background;
 				entry.tick = ::GetTickCount();
 
-				std::lock_guard<std::mutex> lock(_mutex);
-				prune_unlocked();
-				_bound[h] = std::move(entry);
+				std::vector<Entry> expired;
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					prune_unlocked(expired);
+					_bound[h] = std::move(entry);
+				}
+				// `expired` releases here, outside the lock.
 			}
 
 			// The capture for one menu, as an owning copy. Resolving the interface
@@ -306,10 +318,11 @@ namespace Nilesoft
 
 				CapturedSelection items;
 				ShellExtMatch result;
+				std::vector<Entry> expired;
 
 				{
 					std::lock_guard<std::mutex> lock(_mutex);
-					prune_unlocked();
+					prune_unlocked(expired);
 
 					auto it = _bound.find(h);
 					if(it == _bound.end() || !it->second.is_valid())
@@ -363,9 +376,14 @@ namespace Nilesoft
 
 			static bool has_active_captures()
 			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				prune_unlocked();
-				return !_bound.empty();
+				std::vector<Entry> expired;
+				bool any = false;
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					prune_unlocked(expired);
+					any = !_bound.empty();
+				}
+				return any;
 			}
 
 			static size_t bound_count()

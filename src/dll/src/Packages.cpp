@@ -325,6 +325,26 @@ namespace Nilesoft
 				source = _source;
 			}
 
+			// If the scan throws - it allocates once per package - the state must
+			// not be left at Loading, or every later caller waits on a condition
+			// variable nobody will notify, hanging the thread building the menu.
+			struct loading_guard
+			{
+				PackageIndex const *self;
+				bool done;
+				~loading_guard()
+				{
+					if(done)
+						return;
+					{
+						std::lock_guard<std::mutex> lock(self->_mutex);
+						if(self->_state == State::Loading)
+							self->_state = State::Empty;
+					}
+					self->_cv.notify_all();
+				}
+			} guard{ this, false };
+
 			auto ok = source->enumerate_full_names(names);
 
 			{
@@ -350,6 +370,7 @@ namespace Nilesoft
 				}
 			}
 
+			guard.done = true;
 			_cv.notify_all();
 			return ok;
 		}
