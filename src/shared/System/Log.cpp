@@ -60,7 +60,24 @@ namespace Nilesoft
 		if(hFile != INVALID_HANDLE_VALUE)
 			return true;
 
-		hFile = ::CreateFileW(_path.c_str(), GENERIC_WRITE, FILE_SHARE_WRITE,
+		/*
+			FILE_APPEND_DATA without FILE_WRITE_DATA, rather than GENERIC_WRITE:
+
+				"For a file object, the right to append data to the file. (For
+				local files, write operations will not overwrite existing data if
+				this flag is specified without FILE_WRITE_DATA.)"
+
+			https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants
+
+			Shell is loaded into every process that has raised a shell menu - two
+			dozen on a normal desktop - and they all append to this one file.
+			Seek-to-end then write from separate handles is not atomic between
+			processes, so writers could land on top of each other. Appending is.
+
+			FILE_SHARE_READ so the log can be read while Shell holds it open.
+		*/
+		hFile = ::CreateFileW(_path.c_str(), FILE_APPEND_DATA | SYNCHRONIZE,
+							  FILE_SHARE_READ | FILE_SHARE_WRITE,
 							  nullptr, creation,
 							  FILE_ATTRIBUTE_NORMAL, nullptr);
 
@@ -100,7 +117,9 @@ namespace Nilesoft
 			_write(LogLevel::Write, msg.c_str());
 		}
 		close_if_not_new = true;
-		::SetFilePointer(hFile, 0, nullptr, FILE_END);
+		// No seek: the handle is append-only, so every write already goes to the
+		// end of the file, atomically with respect to the other processes doing
+		// the same thing.
 		return true;
 	}
 

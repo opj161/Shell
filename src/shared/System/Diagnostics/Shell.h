@@ -72,20 +72,43 @@ namespace Nilesoft
 
 			static string getpath(const wchar_t *file)
 			{
-				wchar_t szfile[MAX_PATH]{};
-				auto len = ::SearchPathW(nullptr, file, nullptr, MAX_PATH, szfile, nullptr);
+				/*
+					SearchPath reports the buffer it *needs* when the one it was
+					given is too small, and leaves that buffer untouched:
+
+						"If the return value is greater than nBufferLength, the
+						return value is the size of the buffer required to hold
+						the path."
+
+					https://learn.microsoft.com/en-us/windows/win32/api/processenv/nf-processenv-searchpathw
+
+					Testing only for zero therefore treated a too-long result as a
+					hit and launched an empty path. Retry once at the size asked
+					for instead.
+				*/
+				auto search = [](const wchar_t *name, const wchar_t *ext, string &out) -> uint32_t
+				{
+					auto len = ::SearchPathW(nullptr, name, ext, MAX_PATH, out.buffer(MAX_PATH), nullptr);
+					if(len > MAX_PATH)
+						len = ::SearchPathW(nullptr, name, ext, len, out.buffer(len), nullptr);
+					out.release(len);
+					return len;
+				};
+
+				string found;
+				auto len = search(file, nullptr, found);
 				if(len == 0)
 				{
 					if(!string::FindLast(file, L'.', false))
 					{
-						len = ::SearchPathW(nullptr, file, L".exe", MAX_PATH, szfile, nullptr);
+						len = search(file, L".exe", found);
 						if(len == 0)
-							len = ::SearchPathW(nullptr, file, L".cmd", MAX_PATH, szfile, nullptr);
+							len = search(file, L".cmd", found);
 						if(len == 0)
-							len = ::SearchPathW(nullptr, file, L".bat", MAX_PATH, szfile, nullptr);
+							len = search(file, L".bat", found);
 					}
 				}
-				return len == 0 ? file : szfile;
+				return len == 0 ? string(file) : found.move();
 			}
 
 			static uint32_t Run(const wchar_t* file, const wchar_t* parameters,

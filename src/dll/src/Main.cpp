@@ -814,7 +814,12 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	return (BOOL)XXX::OnContextMenu(hWnd, x, y, hMenu);;
 #endif
 
-	HRESULT hr_com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	// COINIT_DISABLE_OLE1DDE is what Microsoft recommends for new code, and this
+	// is the one apartment initialisation that had been left without it.
+	// S_FALSE (the thread was already initialised) counts as success and still
+	// needs its CoUninitialize.
+	// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex
+	HRESULT hr_com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 	bool need_uninit_com = SUCCEEDED(hr_com);
 
 	auto result = FALSE;
