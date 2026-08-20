@@ -117,27 +117,68 @@
 					<File Id='license.txt' Name='LICENSE' Source='$(var.bin)\license.txt' />
 				</Component>
 				<!--
-					shell.nss is the user's own file. NeverOverwrite already meant an
-					existing one is kept rather than replaced; Permanent means the
-					removal half of a major upgrade cannot take it either, now that
-					the old product is uninstalled before the new one is laid down.
-					The cost is that a genuine uninstall leaves it behind, which is
-					the right way round for a file the user wrote.
+					shell.nss is the user's own file, and three separate mechanisms keep
+					it that way, in order of how much has to work.
+
+					Permanent: the removal half of a major upgrade does not take it, so a
+					1.9.20-or-later upgrade never reaches the problem at all. The cost is
+					that a genuine uninstall leaves the file behind - the right way round
+					for a file the user wrote.
+
+					The documented file rule: shell.nss is unversioned, and "if the
+					Modified date is later than the Create date for the file on the
+					computer, do not install the file because user customizations would be
+					deleted". That test is applied at InstallFiles, against what is on disk
+					by then. An untouched config still gets refreshed with the new
+					defaults, which is what should happen.
+
+					  https://learn.microsoft.com/en-us/windows/win32/msi/file-versioning-rules
+
+					And the custom action pair, for the one case neither covers: upgrading
+					from a package built before Permanent was set, whose own uninstall
+					logic governs during the removal.
+
+					NeverOverwrite is deliberately *not* set. It resolves the component to
+					"install nothing" during costing, which is before
+					RemoveExistingProducts deletes the old product's copy - so the two
+					cancelled out and the config vanished, proven in an upgrade log. It is
+					also documented for components "being registered by the Registry
+					table", which this is not. Without it, the worst case is the stock
+					config rather than no config.
+
+					  https://learn.microsoft.com/en-us/windows/win32/msi/component-table
 				-->
-				<Component Id='CONFIG' Guid='$(var.ConfigComponentGuid)' NeverOverwrite='yes' Permanent='yes'>
+				<Component Id='CONFIG' Guid='$(var.ConfigComponentGuid)' Permanent='yes'>
 					<File Id='shell.nss' Name='shell.nss' KeyPath='yes' Source='$(var.bin)\shell.nss' />
 				</Component>
 				<!--
-					Named files, not '*.*'. A wildcard here removes everything in the
-					directory whenever this component is removed, and during a major
-					upgrade the component being removed belongs to the *old* product -
-					so the purge could take the new product's freshly installed
-					binaries with it. Windows Installer removes the files it installed
-					on its own; this only has to cover what Shell creates at run time.
+					Targeted patterns, not '*.*'. A bare wildcard here removes everything
+					in the directory whenever this component is removed, and during a
+					major upgrade the component being removed belongs to the *old*
+					product - so the purge could take the new product's freshly installed
+					binaries with it. Windows Installer removes the files it installed on
+					its own; this only has to cover what Shell and the custom action
+					create at run time.
+
+					The '.old.*' patterns are the rotated copies of a shell.dll that was
+					still mapped when a previous install needed its path. Each carries a
+					timestamp, so a fixed name cannot match them - and RemoveFile's
+					FileName column is a WildCardFilename, where "all of the files that
+					match the wildcard will be removed from the specified directory".
+
+					  https://learn.microsoft.com/en-us/windows/win32/msi/removefile-table
+
+					WiX pairs each of those with a generated 8.3 short name, because the
+					pattern is not one - the emitted FileName reads '8elsxnvg.old|shell.dll.old*'.
+					Windows Installer uses the long half unless SHORTFILENAMES is set, and
+					the generated half is a literal that matches nothing, so the worst it
+					can do is remove no files.
 				-->
 				<Component Id='CLEANUP' Guid='$(var.CleanupComponentGuid)' KeyPath='yes'>
 					<RemoveFile Id='PurgeLog' Name='shell.log' On='uninstall' Directory='INSTALLFOLDER' />
-					<RemoveFile Id='PurgeDllOld' Name='shell.dll.old' On='uninstall' Directory='INSTALLFOLDER' />
+					<RemoveFile Id='PurgeStockConfig' Name='shell.nss.stock-new' On='uninstall' Directory='INSTALLFOLDER' />
+					<RemoveFile Id='PurgeDllOld' Name='shell.dll.old*' On='uninstall' Directory='INSTALLFOLDER' />
+					<RemoveFile Id='PurgeExeRotated' Name='shell.exe.old*' On='uninstall' Directory='INSTALLFOLDER' />
 					<RemoveFile Id='PurgeExeOld' Name='shell.old' On='uninstall' Directory='INSTALLFOLDER' />
 					<RemoveFolder Id='PurgeAppFolder' On='uninstall' Directory='INSTALLFOLDER' />
 				</Component>
@@ -187,14 +228,59 @@
 		</InstallUISequence>
 		<!-- End Upgrade -->
 		
+		<!--
+			shell.dll is mapped into every process that has ever raised a shell
+			context menu and cannot be overwritten, so it is renamed aside before
+			the new one is written. This runs twice on purpose.
+
+			The immediate one runs before RemoveExistingProducts, which is what
+			matters most: with the file already rotated away, removing the old
+			product finds nothing at that path and so never schedules a
+			delete-on-reboot that would later take the newly installed binary with
+			it. But an immediate action runs in the client process, which is not
+			elevated when the package was started that way, and renaming inside
+			Program Files needs elevation.
+
+			The deferred one runs in the installer's own elevated process, before
+			InstallFiles, and catches the case where the first could not. Rotation
+			is a no-op when the path is already free, so running both is harmless.
+		-->
 		<CustomAction Id='OnUpdate' Return='ignore' BinaryRef='CA' DllEntry='Update' />
+		<CustomAction Id='OnUpdateElevatedData' Property='OnUpdateElevated' Value='[INSTALLFOLDER]' />
+		<CustomAction Id='OnUpdateElevated' Execute='deferred' Impersonate='no' Return='ignore'
+					  BinaryRef='CA' DllEntry='Update' />
+		<!--
+			The other half of the config rescue. OnUpdate saved shell.nss before the
+			removal could reach it; this puts it back once the package's own files are
+			on disk. Deferred and non-impersonating, because writing into Program Files
+			needs the installer's elevated context, and a deferred action can read only
+			CustomActionData - hence the type 51 action that hands it the path.
+
+			  https://learn.microsoft.com/en-us/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
+		-->
+		<CustomAction Id='OnRestoreConfigData' Property='OnRestoreConfig' Value='[INSTALLFOLDER]' />
+		<CustomAction Id='OnRestoreConfig' Execute='deferred' Impersonate='no' Return='ignore'
+					  BinaryRef='CA' DllEntry='RestoreConfig' />
 		<CustomAction Id='OnInstall' Return='ignore' BinaryRef='CA' DllEntry='Install' />
 		<CustomAction Id='OnUninstall' Execute='firstSequence' Return='asyncWait' BinaryRef='CA' DllEntry='Uninstall' />
 		
 		<InstallExecuteSequence>
 			<Custom Action='OnDowngrading' After='FindRelatedProducts' Condition='NEWPRODUCTFOUND' />
 			<Custom Action='OnUninstall' After='FindRelatedProducts' Condition='(REMOVE ="ALL") AND (NOT UPGRADINGPRODUCTCODE)' />
-			<Custom Action='OnUpdate' After='FindRelatedProducts' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<!--
+				After CostFinalize, not after FindRelatedProducts. Directory properties
+				are not resolved until CostFinalize, so an action scheduled earlier reads
+				INSTALLFOLDER as empty whenever no UI sequence set it - a silent install,
+				for one - and the custom action then falls back to locating Shell by its
+				registered CLSID. Observed rotating the shell.dll of an entirely
+				different installation than the one being serviced. CostFinalize is 1000
+				and RemoveExistingProducts is 1401, so this is still ahead of the removal.
+			-->
+			<Custom Action='OnUpdate' After='CostFinalize' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnUpdateElevatedData' Before='OnUpdateElevated' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnUpdateElevated' Before='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnRestoreConfigData' Before='OnRestoreConfig' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnRestoreConfig' After='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
 			<Custom Action='OnInstall' After='InstallFinalize' Condition='(NOT Installed) AND (NOT REMOVE)' />
 			<!--
 				The old product is removed entirely before the new one is installed.

@@ -159,6 +159,16 @@ through `ContextMenu::WindowSubclassProc` first. The target handle is published 
 `_native_notify` so the hook passes it through instead of treating a host menu as
 one of Shell's own popups.
 
+**Custom actions and `INSTALLFOLDER`.** Directory properties are not resolved
+until `CostFinalize` (sequence 1000). An immediate custom action scheduled before
+that reads `INSTALLFOLDER` as empty whenever no UI sequence set it — a silent
+install, for instance — and `InstallFolder()` in `src/setup/ca/dllmain.cpp` then
+falls back to locating Shell by its registered CLSID. That silently services
+*whatever Shell is registered on the machine* rather than the one being installed:
+it was caught renaming the live installation's `shell.dll` aside while an entirely
+different product was installing. Schedule after `CostFinalize`; a deferred action
+gets the path through `CustomActionData` instead and never sees the property.
+
 **Line endings.** Some committed blobs are CRLF while `.gitattributes` asks for LF
 in the index, so the first edit to such a file shows as a whole-file diff. Say so
 in the commit message and compare with `--ignore-space-at-eol`. Never normalise
@@ -177,9 +187,20 @@ than implying you did.
   the hosts that reach Shell through `IShellExtInit`/`IContextMenu` rather than
   `IShellBrowser`. Nothing here exercises that path.
 - **The MSI upgrade matrix.** Component identity and sequencing changes need real
-  installs on clean VMs across the upgrade combinations. Reading the emitted
-  tables proves the package is authored as intended; it does not prove an upgrade
-  behaves.
+  installs on clean VMs across the full set of upgrade combinations. Reading the
+  emitted tables proves the package is authored as intended; it does not prove an
+  upgrade behaves.
+
+  One row of it *is* verifiable here, and worth repeating whenever the setup
+  changes. Build a throwaway pair from the real WiX sources with a different
+  `UpgradeCode`, `ProductCode` and product name — so `INSTALLFOLDER` and the Start
+  Menu shortcut differ — and with the `OnInstall`/`OnUninstall` actions stripped,
+  because those run `shell.exe -register` and restart Explorer. Keep the *component*
+  codes identical across the pair: that is what a same-architecture upgrade looks
+  like. Shape the older one like whatever package you are upgrading from. Then
+  install, edit its `shell.nss`, upgrade, and read the verbose log rather than the
+  outcome alone — `Component: CONFIG;` and `Executing op: FileRemove` say what
+  Windows Installer decided, which is the part that keeps being surprising.
 
 ARM64 is not one of these: the v143 ARM64 cross tools
 (`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) are installed, so

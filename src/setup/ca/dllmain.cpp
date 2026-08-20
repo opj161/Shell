@@ -97,6 +97,9 @@ bool streq(const std::wstring &s1, const wchar_t *s2)
 constexpr auto FILEEXE = L"shell.exe";
 constexpr auto FILEDLL = L"shell.dll";
 constexpr auto FILEOLD = L"shell.old";
+constexpr auto FILECONFIG = L"shell.nss";
+constexpr auto FILECONFIGBACKUP = L"shell.nss.upgrade";
+constexpr auto FILECONFIGSTOCK = L"shell.nss.stock-new";
 
 constexpr auto upgrading = L"UPGRADINGPRODUCTCODE";
 
@@ -226,6 +229,13 @@ static bool InstallFolder(MSIHANDLE hInstall, std::wstring& install_folder, bool
 {
 	MSI msi(hInstall);
 	install_folder = msi.InstallFolder();
+
+	// A deferred custom action runs in the installer's own elevated process and
+	// cannot read INSTALLFOLDER - the only property it can see is the
+	// CustomActionData its immediate counterpart set for it.
+	if(install_folder.size() == 0)
+		msi.get(L"CustomActionData", install_folder);
+
 	if(install_folder.size() == 0)
 	{
 		if(find_by_reg)
@@ -283,17 +293,258 @@ bool start(MSIHANDLE hInstall, const wchar_t *parameters, bool run_as_admin, boo
 
 //constexpr auto UninstallKey = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\";
 
+/*
+	shell.nss is the user's file, and a major upgrade destroys it.
+
+	The new product cannot simply decline to overwrite it, which is what CONFIG
+	used to ask for with NeverOverwrite. Whether a component installs at all is
+	resolved during costing, and costing happens before RemoveExistingProducts
+	runs - so with the old product's config still on disk the new product resolved
+	CONFIG to "install nothing", and the removal that followed took the file away.
+	An upgrade log of that authoring shows the two halves cancelling:
+
+		Component: CONFIG; Installed: Absent; Request: Local;  Action: Null
+		Component: CONFIG; Installed: Local;  Request: Absent; Action: Absent
+		Executing op: FileRemove(,FileName=shell.nss,,)
+
+	So the file is copied out before the removal and copied back after the new
+	files land. There is no elevated slot for the first half: RemoveExistingProducts
+	sits between InstallValidate and InstallInitialize, and a deferred action -
+	the only kind that runs outside the user's security context - "must come after
+	InstallInitialize".
+
+		https://learn.microsoft.com/en-us/windows/win32/msi/removeexistingproducts-action
+		https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
+
+	The backup therefore runs immediately, as the invoking user, and writes under
+	%ProgramData%, whose default ACL grants BUILTIN\Users (CI)(WD,AD) and gives the
+	creator full control of what it makes there. Not into the install folder: the
+	outgoing product's own cleanup wipes that directory.
+
+	Every config is carried across, not just one that looks edited. Windows
+	Installer's own test for that - "if the Modified date is later than the Create
+	date ... do not install the file" - reports a config restored by a script or a
+	backup tool as untouched, because those preserve the write time and set a new
+	creation time. Losing the user's menu is the failure this exists to prevent,
+	so the version's own config is written beside the restored one as
+	shell.nss.stock-new when the two differ, rather than instead of it.
+
+		https://learn.microsoft.com/en-us/windows/win32/msi/file-versioning-rules
+
+	The copy is not deleted once restored. If the transaction rolls back after the
+	restore, file-level rollback takes the restored config with it and this copy is
+	the only one left. It is overwritten by the next upgrade that finds a config,
+	and removed on a real uninstall.
+*/
+static std::wstring ProgramDataFolder()
+{
+	wchar_t root[MAX_PATH]{};
+	auto length = ::ExpandEnvironmentStringsW(L"%ProgramData%", root, ARRAYSIZE(root));
+
+	// The return is a character count including the terminator, and zero on
+	// failure; anything larger than the buffer means it was truncated.
+	if(length == 0 || length > ARRAYSIZE(root))
+		return {};
+
+	return root;
+}
+
+static std::wstring ConfigBackupPath()
+{
+	auto root = ProgramDataFolder();
+	if(root.empty())
+		return {};
+
+	return JoinPath(JoinPath(JoinPath(root, L"Nilesoft"), L"Shell"), FILECONFIGBACKUP);
+}
+
+static void BackupUserConfig(const std::wstring &install_folder)
+{
+	auto config = JoinPath(install_folder, FILECONFIG);
+
+	// Nothing to save. An earlier backup is deliberately left where it is - this
+	// also runs after the removal, where the file is already gone.
+	if(!::PathFileExistsW(config.c_str()))
+		return;
+
+	auto root = ProgramDataFolder();
+	if(root.empty())
+		return;
+
+	// Two levels, and CreateDirectory on one that already exists is harmless.
+	// SHCreateDirectoryEx would pull shell32 into a DLL that otherwise needs
+	// only shlwapi and msi.
+	auto vendor = JoinPath(root, L"Nilesoft");
+	auto folder = JoinPath(vendor, L"Shell");
+	::CreateDirectoryW(vendor.c_str(), nullptr);
+	::CreateDirectoryW(folder.c_str(), nullptr);
+
+	::CopyFileW(config.c_str(), JoinPath(folder, FILECONFIGBACKUP).c_str(), FALSE);
+}
+
+// Byte-for-byte, so a config that only moved is not reported as changed.
+static bool SameContent(const std::wstring &a, const std::wstring &b)
+{
+	WIN32_FILE_ATTRIBUTE_DATA fa{}, fb{};
+	if(!::GetFileAttributesExW(a.c_str(), GetFileExInfoStandard, &fa)
+	   || !::GetFileAttributesExW(b.c_str(), GetFileExInfoStandard, &fb))
+		return false;
+
+	if(fa.nFileSizeHigh != fb.nFileSizeHigh || fa.nFileSizeLow != fb.nFileSizeLow)
+		return false;
+
+	auto open = [](const std::wstring &path)
+	{
+		return ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+							 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	};
+
+	auto ha = open(a);
+	auto hb = open(b);
+
+	auto same = (ha != INVALID_HANDLE_VALUE && hb != INVALID_HANDLE_VALUE);
+	while(same)
+	{
+		char ba[4096], bb[4096];
+		DWORD ra = 0, rb = 0;
+		if(!::ReadFile(ha, ba, sizeof(ba), &ra, nullptr)
+		   || !::ReadFile(hb, bb, sizeof(bb), &rb, nullptr))
+		{
+			same = false;
+			break;
+		}
+		if(ra != rb || ::memcmp(ba, bb, ra) != 0)
+		{
+			same = false;
+			break;
+		}
+		if(ra == 0)
+			break;
+	}
+
+	if(ha != INVALID_HANDLE_VALUE) ::CloseHandle(ha);
+	if(hb != INVALID_HANDLE_VALUE) ::CloseHandle(hb);
+	return same;
+}
+
+static void RestoreUserConfig(const std::wstring &install_folder)
+{
+	auto backup = ConfigBackupPath();
+	if(backup.empty() || !::PathFileExistsW(backup.c_str()))
+		return;
+
+	auto config = JoinPath(install_folder, FILECONFIG);
+
+	// The user's file is about to win, so anything new in the version's own
+	// config would be lost silently. Leave that copy beside theirs instead -
+	// the same thing scripts/backup-and-upgrade.ps1 does.
+	if(::PathFileExistsW(config.c_str()) && !SameContent(config, backup))
+		::CopyFileW(config.c_str(), JoinPath(install_folder, FILECONFIGSTOCK).c_str(), FALSE);
+
+	// Failing here leaves the stock config in place, which is a working menu -
+	// the state this whole path exists to avoid is no config file at all.
+	::CopyFileW(backup.c_str(), config.c_str(), FALSE);
+}
+
+static void DiscardUserConfigBackup()
+{
+	auto backup = ConfigBackupPath();
+	if(backup.empty())
+		return;
+
+	::DeleteFileW(backup.c_str());
+
+	// Both refuse when the directory is not empty, which is the wanted answer.
+	auto root = ProgramDataFolder();
+	if(!root.empty())
+	{
+		auto vendor = JoinPath(root, L"Nilesoft");
+		::RemoveDirectoryW(JoinPath(vendor, L"Shell").c_str());
+		::RemoveDirectoryW(vendor.c_str());
+	}
+}
+
+/*
+	Frees the canonical shell.dll path so Windows Installer can write the new
+	binary instead of demanding a reboot.
+
+	Windows will not let a mapped image be overwritten or deleted, but it will
+	let it be renamed within its volume - and shell.dll is mapped into every
+	process that has ever raised a shell context menu, because Shell pins its own
+	module for the life of that process. On an ordinary desktop that is a couple
+	of dozen processes, none of which the installer can close.
+
+	This used to rotate to a fixed "shell.old", which worked exactly once. After
+	that the name was taken by a rotation that was itself still mapped, so
+	MoveFileW refused to overwrite it and the DeleteFileW that followed could not
+	remove a mapped file either - and neither result was checked. The rotated
+	shell.old sitting in install folders dated years back is what that looks like.
+*/
+static bool RotateOutOfTheWay(const std::wstring &path)
+{
+	if(!::PathFileExistsW(path.c_str()))
+		return true;
+
+	SYSTEMTIME st{};
+	::GetLocalTime(&st);
+
+	// A name that cannot already be taken, however many times this has run.
+	// No MOVEFILE_REPLACE_EXISTING: a name that is already there belongs to an
+	// earlier rotation that something may still have mapped, so the next
+	// candidate is wanted rather than a destroyed one.
+	for(int attempt = 0; attempt < 64; attempt++)
+	{
+		wchar_t suffix[96]{};
+		::swprintf(suffix, ARRAYSIZE(suffix), L".old.%04u%02u%02u%02u%02u%02u_%lu_%d",
+				   st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+				   ::GetCurrentProcessId(), attempt);
+
+		std::wstring rotated = path + suffix;
+		if(::PathFileExistsW(rotated.c_str()))
+			continue;
+
+		if(::MoveFileExW(path.c_str(), rotated.c_str(), 0))
+			return true;
+	}
+
+	return false;
+}
+
+// Rotations left by earlier installs, once nothing maps them any more. Deleting
+// one that is still mapped fails harmlessly and it is tried again next time.
+static void PruneRotations(const std::wstring &install_folder)
+{
+	const wchar_t *patterns[] = { L"shell.dll.old*", L"shell.exe.old*", FILEOLD };
+
+	for(auto pattern : patterns)
+	{
+		WIN32_FIND_DATAW fd{};
+		auto find = ::FindFirstFileW(JoinPath(install_folder, pattern).c_str(), &fd);
+		if(find == INVALID_HANDLE_VALUE)
+			continue;
+
+		do
+		{
+			if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				::DeleteFileW(JoinPath(install_folder, fd.cFileName).c_str());
+		}
+		while(::FindNextFileW(find, &fd));
+
+		::FindClose(find);
+	}
+}
+
 UINT __stdcall Install(MSIHANDLE hInstall)
 {
 	std::wstring install_folder;
 	if(InstallFolder(hInstall, install_folder, false))
 	{
-		ShellExec(JoinPath(install_folder, FILEEXE).c_str(), 
+		ShellExec(JoinPath(install_folder, FILEEXE).c_str(),
 				  L"-r -s -t -restart", install_folder.c_str(), true, SW_HIDE, true);
 
-		std::wstring old = std::move(JoinPath(install_folder, FILEOLD));
-		if(::PathFileExistsW(old.c_str()))
-			::DeleteFileW(old.c_str());
+		// Explorer has just been restarted, so the rotation this install made
+		// may already be unmapped.
+		PruneRotations(install_folder);
 	}
 	return ERROR_SUCCESS;
 	//return ERROR_INSTALL_FAILURE;
@@ -307,6 +558,12 @@ UINT __stdcall Uninstall(MSIHANDLE hInstall)
 		ShellExec(JoinPath(install_folder, FILEEXE).c_str(), 
 				  L"-u -s -t -restart", install_folder.c_str(), true, SW_HIDE, true);
 	}
+
+	// A real uninstall, not the removal half of an upgrade - the condition on
+	// this action in InstallExecuteSequence excludes UPGRADINGPRODUCTCODE. So
+	// nothing is going to ask for the saved config again.
+	DiscardUserConfigBackup();
+
 	return ERROR_SUCCESS;
 	//return res ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
 }
@@ -316,15 +573,34 @@ UINT __stdcall Update(MSIHANDLE hInstall)
 	std::wstring install_folder;
 	if(InstallFolder(hInstall, install_folder, true))
 	{
-		std::wstring dll = std::move(JoinPath(install_folder, FILEDLL));
-		std::wstring old = std::move(JoinPath(install_folder, FILEOLD));
+		// This entry point is scheduled twice - see the sequencing comment in
+		// setup.wxs - but only the immediate one runs before RemoveExistingProducts,
+		// and only that one can still see the config. MSIRUNMODE_SCHEDULED is "a
+		// custom action called from install script execution", which is exactly the
+		// deferred half:
+		//
+		//   https://learn.microsoft.com/en-us/windows/win32/api/msiquery/nf-msiquery-msigetmode
+		//
+		// Letting the deferred half run this too would have it create the backup
+		// directory as LocalSystem, whose inherited ACL leaves Users read-only -
+		// and every later upgrade's immediate half then fails to write into it.
+		if(!::MsiGetMode(hInstall, MSIRUNMODE_SCHEDULED))
+			BackupUserConfig(install_folder);
 
-		if(::PathFileExistsW(dll.c_str()))
-			::MoveFileW(dll.c_str(), old.c_str());
-
-		if(::PathFileExistsW(old.c_str()))
-			::DeleteFileW(old.c_str());
+		RotateOutOfTheWay(JoinPath(install_folder, FILEDLL));
+		PruneRotations(install_folder);
 	}
+	return ERROR_SUCCESS;
+}
+
+// Deferred, after InstallFiles: the package's own files are on disk by now, so
+// this is the point at which the saved config can be put back over them.
+UINT __stdcall RestoreConfig(MSIHANDLE hInstall)
+{
+	std::wstring install_folder;
+	if(InstallFolder(hInstall, install_folder, true))
+		RestoreUserConfig(install_folder);
+
 	return ERROR_SUCCESS;
 }
 
