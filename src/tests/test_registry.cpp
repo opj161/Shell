@@ -264,3 +264,161 @@ TEST(registry, the_fixed_buffer_overload_refuses_a_buffer_it_cannot_use)
 	wchar_t one[1]{ L'#' };
 	CHECK_EQ((int)k.GetString(L"plain", static_cast<wchar_t *>(one), 0u), 0);
 }
+
+// The write side of the same contract. Registry::SetKeyValue used to write
+// REG_SZ / REG_EXPAND_SZ without a terminator (length * sizeof(wchar_t), where
+// length excludes the null), which is exactly the shape RegQueryValueEx warns
+// other readers cannot rely on. reg.set() in scripts and the ContextMenuHandler
+// registration both went through it, so their values arrived unterminated.
+// The bytes in the hive must now include the terminator, like RegistryKey::
+// SetString always did.
+TEST(registry, values_written_through_set_key_value_are_terminated)
+{
+	ScopedTestKey key;
+	CHECK(Registry::SetKeyValue(HKEY_CURRENT_USER, TESTKEY, L"term",
+								L"written", false));
+	CHECK(Registry::SetKeyValue(HKEY_CURRENT_USER, TESTKEY, L"expterm",
+								L"%SystemRoot%", true));
+
+	wchar_t raw[64]{};
+	DWORD cb = sizeof(raw);
+	DWORD type = 0;
+	CHECK(ERROR_SUCCESS == ::RegQueryValueExW(key.handle, L"term", nullptr,
+											  &type,
+											  reinterpret_cast<LPBYTE>(raw), &cb));
+	CHECK_EQ((int)type, (int)REG_SZ);
+	// Size includes the terminator the writer must have stored.
+	CHECK_MSG(cb == (::wcslen(L"written") + 1) * sizeof(wchar_t),
+			  "the stored size must include the terminating null");
+	CHECK(::wcscmp(raw, L"written") == 0);
+
+	cb = sizeof(raw);
+	CHECK(ERROR_SUCCESS == ::RegQueryValueExW(key.handle, L"expterm", nullptr,
+											  &type,
+											  reinterpret_cast<LPBYTE>(raw), &cb));
+	CHECK_EQ((int)type, (int)REG_EXPAND_SZ);
+	CHECK_MSG(cb == (::wcslen(L"%SystemRoot%") + 1) * sizeof(wchar_t),
+			  "an expandable value must keep its terminator too");
+	CHECK(::wcscmp(raw, L"%SystemRoot%") == 0);
+}
+
+// The write side of the *empty* string, which the terminator fix above missed.
+// Both writers guarded on `value && *value && length > 0`, so L"" fell through
+// with cbData 0 - a REG_SZ containing no terminator at all. RegSetValueEx
+// separates the two cases explicitly:
+//
+//     For string-based types, such as REG_SZ, the string must be
+//     null-terminated. [...] cbData must include the size of the terminating
+//     null character or characters.
+//
+//     lpData indicating a null value is valid, however, if this is the case,
+//     cbData must be set to '0'.
+//
+//   https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regsetvalueexw
+//
+// An empty string is one terminator. A null pointer is zero bytes. They are
+// different values. These read the raw bytes back rather than going through
+// this project's readers, which were deliberately hardened to forgive exactly
+// the shape being tested for.
+namespace
+{
+	// Returns the stored byte count, or -1 if the value is missing.
+	int stored_bytes(HKEY key, const wchar_t *name, DWORD *type = nullptr)
+	{
+		DWORD cb = 0;
+		DWORD t = 0;
+		if(::RegQueryValueExW(key, name, nullptr, &t, nullptr, &cb) != ERROR_SUCCESS)
+			return -1;
+		if(type)
+			*type = t;
+		return static_cast<int>(cb);
+	}
+}
+
+TEST(registry, an_empty_string_is_written_as_one_terminator)
+{
+	ScopedTestKey key;
+	auto k = Registry::CurrentUser.OpenSubKey(TESTKEY, false, true);
+	CHECK(k);
+
+	CHECK(k.SetString(L"empty_sz", L"", false));
+
+	DWORD type = 0;
+	CHECK_MSG(stored_bytes(key.handle, L"empty_sz", &type) == (int)sizeof(wchar_t),
+			  "an empty REG_SZ is two bytes: the terminator");
+	CHECK_EQ((int)type, (int)REG_SZ);
+
+	wchar_t raw[4]{ L'#', L'#', L'#', L'#' };
+	DWORD cb = sizeof(raw);
+	CHECK(ERROR_SUCCESS == ::RegQueryValueExW(key.handle, L"empty_sz", nullptr, nullptr,
+											  reinterpret_cast<LPBYTE>(raw), &cb));
+	CHECK_EQ((int)raw[0], 0);
+}
+
+TEST(registry, an_empty_expandable_string_is_written_as_one_terminator)
+{
+	ScopedTestKey key;
+	auto k = Registry::CurrentUser.OpenSubKey(TESTKEY, false, true);
+	CHECK(k);
+
+	CHECK(k.SetString(L"empty_exp", L"", true));
+
+	DWORD type = 0;
+	CHECK_EQ(stored_bytes(key.handle, L"empty_exp", &type), (int)sizeof(wchar_t));
+	CHECK_EQ((int)type, (int)REG_EXPAND_SZ);
+}
+
+// reg.set(key, name, "", reg.sz) in a script reaches the hive through this one.
+TEST(registry, an_empty_string_through_set_key_value_is_terminated)
+{
+	ScopedTestKey key;
+	CHECK(Registry::SetKeyValue(HKEY_CURRENT_USER, TESTKEY, L"empty_skv", L"", false));
+
+	DWORD type = 0;
+	CHECK_EQ(stored_bytes(key.handle, L"empty_skv", &type), (int)sizeof(wchar_t));
+	CHECK_EQ((int)type, (int)REG_SZ);
+}
+
+// The other half of the documented pair: a null pointer really is zero bytes,
+// and must not acquire a terminator it has no buffer for.
+TEST(registry, a_null_string_is_written_as_no_data)
+{
+	ScopedTestKey key;
+	auto k = Registry::CurrentUser.OpenSubKey(TESTKEY, false, true);
+	CHECK(k);
+
+	CHECK(k.SetString(L"null_sz", nullptr, false));
+	CHECK_EQ(stored_bytes(key.handle, L"null_sz"), 0);
+}
+
+// An empty value must still read back as empty afterwards - the point of the
+// fix is the bytes in the hive, not a change in what callers see.
+TEST(registry, an_empty_written_value_reads_back_empty)
+{
+	ScopedTestKey key;
+	auto k = Registry::CurrentUser.OpenSubKey(TESTKEY, false, true);
+	CHECK(k);
+	CHECK(k.SetString(L"round_trip", L"", false));
+
+	auto r = Registry::CurrentUser.OpenSubKey(TESTKEY, false, false);
+	CHECK(r.ReadString(L"round_trip").empty());
+	CHECK_EQ((int)r.ReadString(L"round_trip").length(), 0);
+}
+
+// cbData is a DWORD. A length that cannot fit must be refused rather than
+// narrowed into some other, shorter string - no allocation needed to test it,
+// because the guard runs before the pointer is touched.
+TEST(registry, a_length_too_large_for_cbdata_is_refused)
+{
+	ScopedTestKey key;
+	auto k = Registry::CurrentUser.OpenSubKey(TESTKEY, false, true);
+	CHECK(k);
+
+	CHECK(!k.SetString(L"overflow", L"x", SIZE_MAX, false));
+	CHECK_MSG(stored_bytes(key.handle, L"overflow") == -1,
+			  "a refused write must not leave a value behind");
+
+	CHECK(!Registry::SetKeyValue(HKEY_CURRENT_USER, TESTKEY, L"overflow2",
+								 L"x", SIZE_MAX, false));
+	CHECK_EQ(stored_bytes(key.handle, L"overflow2"), -1);
+}

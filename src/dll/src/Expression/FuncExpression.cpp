@@ -5248,7 +5248,17 @@ namespace Nilesoft
 						}
 
 						if(argc == 3)
+						{
 							dwtype = eval_arg(2).move();
+							// The explicit-type form skips the sizing call above.
+							// Reading straight into a fresh buffer with cbData = 0
+							// fails with ERROR_MORE_DATA for any non-empty value
+							// (probe: RegQueryValueExW rc=234 with cbData=0), so
+							// reg.get(key, name, type) used to return empty.
+							// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regqueryvalueexw
+							if(!key.get_value(name, &dwtype, &cbdata))
+								return;
+						}
 						else if(!key.get_value(name, &dwtype, &cbdata))
 							return;
 

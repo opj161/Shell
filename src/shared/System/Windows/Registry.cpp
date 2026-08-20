@@ -10,6 +10,50 @@
 #include "Registry.h"
 */
 
+namespace
+{
+	// RegSetValueEx's contract for the string types, in one place because two
+	// writers implement it:
+	//
+	//     For string-based types, such as REG_SZ, the string must be
+	//     null-terminated. [...] If the data is of type REG_SZ, REG_EXPAND_SZ, or
+	//     REG_MULTI_SZ, cbData must include the size of the terminating null
+	//     character or characters.
+	//
+	// and, separately:
+	//
+	//     lpData indicating a null value is valid, however, if this is the case,
+	//     cbData must be set to '0'.
+	//
+	// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regsetvalueexw
+	//
+	// So a null pointer and an empty string are two different values, not one:
+	// zero bytes, and one terminator. Both writers used to collapse them, testing
+	// `value && *value && length > 0` and passing cbData 0 for L"" - which stores
+	// a REG_SZ with no terminator in it at all, the exact malformed shape
+	// RegQueryValueEx warns its callers about. The readers here were hardened to
+	// survive it; regedit, .reg exports and every other tool on the machine were
+	// not.
+	//
+	// Returns false if the byte count will not fit in the DWORD the API takes,
+	// rather than narrowing and writing some other string entirely.
+	bool string_value_bytes(const wchar_t *value, size_t length, DWORD &bytes)
+	{
+		if(!value)
+		{
+			bytes = 0;
+			return true;
+		}
+
+		constexpr size_t limit = (static_cast<size_t>(MAXDWORD) / sizeof(wchar_t)) - 1;
+		if(length > limit)
+			return false;
+
+		bytes = static_cast<DWORD>((length + 1) * sizeof(wchar_t));
+		return true;
+	}
+}
+
 namespace Nilesoft
 {
 	using namespace Text;
@@ -497,14 +541,12 @@ CString Registry::GetDataAsString(CRegKey& key, const RegistryItem& item) {
 
 	bool RegistryKey::SetString(const wchar_t* name, const wchar_t* value, size_t length, bool expand) const
 	{
-		if(value && *value && length > 0)
-		{
-			length++;
-			length *= sizeof(wchar_t);
-		}
+		DWORD bytes = 0;
+		if(!string_value_bytes(value, length, bytes))
+			return false;
 
 		uint32_t type = expand ? REG_EXPAND_SZ : REG_SZ;
-		return SetValue(name, type, (LPBYTE)value, length);
+		return SetValue(name, type, (LPBYTE)value, bytes);
 	}
 
 	bool RegistryKey::SetString(const wchar_t* name, const wchar_t* value, bool expand) const
@@ -659,9 +701,16 @@ CString Registry::GetDataAsString(CRegKey& key, const RegistryItem& item) {
 	bool Registry::SetKeyValue(HKEY hkey, const wchar_t* subKey, const wchar_t* name,
 							 const wchar_t* value, size_t length, bool expand)
 	{
+		// The terminator is part of the value; see string_value_bytes. reg.set()
+		// in scripts and the ContextMenuHandler registration both write through
+		// this overload, so their values used to arrive unterminated.
+		DWORD bytes = 0;
+		if(!string_value_bytes(value, length, bytes))
+			return false;
+
 		return SetKeyValue(hkey, subKey, name,
 								   expand ? REG_EXPAND_SZ : REG_SZ,
-									   (LPBYTE)value, length * sizeof(wchar_t));
+									   (LPBYTE)value, bytes);
 	}
 
 	bool Registry::SetKeyValue(HKEY hkey, const wchar_t* subKey, const wchar_t* name, const wchar_t* value, bool expand)

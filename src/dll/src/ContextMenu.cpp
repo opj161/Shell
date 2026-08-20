@@ -4504,10 +4504,12 @@ namespace Nilesoft
 				string title;
 				MENUITEMINFOW mii{ sizeof(MENUITEMINFOW) };
 				mii.fMask = MenuItemInfo::FMASK;
-				mii.dwTypeData = title.buffer((1024));
-				mii.cch = 1024;
 
-				if(::GetMenuItemInfoW(hMenu, i, true, &mii))
+				// Sizes the string first, so an item longer than any fixed buffer
+				// still arrives whole - a 1024-char buffer truncates silently, the
+				// same defect Include\MenuText.h was written to remove.
+				if(read_menu_text(hMenu, static_cast<UINT>(i), TRUE, &mii,
+								  [&title](UINT count) { return title.buffer(count + 1); }))
 				{
 					std::unique_ptr<menuitem_t> item(new menuitem_t);
 					auto itemPtr = item.get();

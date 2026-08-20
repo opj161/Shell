@@ -833,7 +833,20 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		if(!invoked)
 		{
 			if(tfunc == 0)
-				result = ::TrackPopupMenu(hmenu, flag, pt.x, pt.y, 0, hWnd, nullptr);
+			{
+				// Calling the real TrackPopupMenu here would re-enter this hook:
+				// user32 forwards to win32u!NtUserTrackPopupMenuEx through user32's
+				// import table, which is the very slot iathook_NtUserTrackPopupMenuEx
+				// patched - so the whole hook body (menu build included) would run a
+				// second time for a menu that is about to be discarded. Verified with
+				// a probe against the real user32/win32u pair. Call the saved
+				// original directly instead; NtUserTrackPopupMenuEx with a null
+				// TPMPARAMS is what TrackPopupMenu does internally anyway.
+				if(iathook_NtUserTrackPopupMenuEx.installed())
+					result = iathook_NtUserTrackPopupMenuEx.invoke<decltype(TrackPopupMenuExProc)>(hmenu, flag, pt.x, pt.y, hWnd, nullptr);
+				else
+					result = ::TrackPopupMenu(hmenu, flag, pt.x, pt.y, 0, hWnd, nullptr);
+			}
 			else if(iathook_NtUserTrackPopupMenuEx.installed())
 				result = iathook_NtUserTrackPopupMenuEx.invoke<decltype(TrackPopupMenuExProc)>(hmenu, flag, pt.x, pt.y, hWnd, lptpm);
 			else
