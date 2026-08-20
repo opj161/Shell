@@ -2,6 +2,7 @@
 #include "Include/Theme.h"
 #include "Include/ContextMenu.h"
 #include "Include/stb_image_write.h"
+#include "Include/Diagnostics/MenuPerf.h"
 
 using namespace Nilesoft::Diagnostics;
 #include <mutex>
@@ -4588,6 +4589,8 @@ namespace Nilesoft
 
 				__trace(L"ContextMenu init");
 
+				Diagnostics::MenuPerfScope perf_init(L"context.initialize");
+
 				auto initializer = Initializer::instance;
 
 				_context.Selections = &Selected;
@@ -4597,10 +4600,13 @@ namespace Nilesoft
 				Selected.Window.handle = hwnd.owner;
 				Selected.Window.hInstance = _window.instance();
 
-				if(!Selected.QueryShellWindow())
 				{
-					__trace(L"QueryShellWindow");
-					return false;
+					Diagnostics::MenuPerfScope perf(L"selection.query_shell_window");
+					if(!Selected.QueryShellWindow())
+					{
+						__trace(L"QueryShellWindow");
+						return false;
+					}
 				}
 
 				if(Selected.Window.id == WINDOW_UI)
@@ -4614,10 +4620,13 @@ namespace Nilesoft
 					}
 				}
 
-				if(!initializer || !initializer->query())
 				{
-					__trace(L"initializer query");
-					return false;
+					Diagnostics::MenuPerfScope perf(L"initializer.query");
+					if(!initializer || !initializer->query())
+					{
+						__trace(L"initializer query");
+						return false;
+					}
 				}
 
 				_cache = initializer->acquire_snapshot();
@@ -4642,11 +4651,15 @@ namespace Nilesoft
 						Selected.Directory = Path::GetKnownFolder(FOLDERID_Desktop).move();
 						break;
 					default:
+					{
+						Diagnostics::MenuPerfScope perf(L"selection.query_selected");
 						if(!Selected.QuerySelected())
 						{
 							__trace(L"QuerySelected");
 							//return false;
 						}
+						perf.annotate(static_cast<long>(Selected.Items.size()));
+					}
 						//::{2cc5ca98-6485-489a-920e-b3e88a6ccce3}
 						//return false;
 						break;
@@ -4660,10 +4673,13 @@ namespace Nilesoft
 				if(_vis == Visibility::Hidden)
 					return false;
 
-				if(!Selected.Preparing())
 				{
-					__trace(L"Selected.Preparing");
-					return false;
+					Diagnostics::MenuPerfScope perf(L"selection.preparing");
+					if(!Selected.Preparing())
+					{
+						__trace(L"Selected.Preparing");
+						return false;
+					}
 				}
 
 				if(is_excluded())
@@ -4674,7 +4690,10 @@ namespace Nilesoft
 				composition.activated = ::IsCompositionActive();
 				::DwmIsCompositionEnabled(reinterpret_cast<BOOL *>(&composition.DwmEnabled));
 				
-				init_cfg();
+				{
+					Diagnostics::MenuPerfScope perf(L"config.init");
+					init_cfg();
+				}
 				
 				if(!_windowSubclass.hook(hwnd.owner, WindowSubclassProc, CONTEXTMENUSUBCLASS, this))
 				{
@@ -4713,10 +4732,17 @@ namespace Nilesoft
 				__map_system_menu[0] = __system_menu_tree;
 
 				if(0 == ::GetPropW(hwnd.owner, UxSubclass))
+				{
+					Diagnostics::MenuPerfScope perf(L"native.root_scan");
 					build_system_menuitems(_hMenu_original, __system_menu_tree, true);
+					perf.annotate(static_cast<long>(__system_menu_tree->items.size()));
+				}
 
 				if(_settings.modify_items.enabled)
+				{
+					Diagnostics::MenuPerfScope perf(L"native.modify_rules");
 					build_main_system_menuitems(__system_menu_tree, true);
+				}
 
 				return true;
 			}
@@ -4729,7 +4755,7 @@ namespace Nilesoft
 			return false;
 		}
 
-		using namespace Diagnostics;
+		using namespace Nilesoft::Diagnostics;
 
 		int ContextMenu::Uninitialize()
 		{

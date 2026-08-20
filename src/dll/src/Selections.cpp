@@ -1,5 +1,6 @@
 #include "Include/ShellExt.h"
 #include <pch.h>
+#include "Include/Diagnostics/MenuPerf.h"
 
 //Enable Narrow Classic Context Menu on Windows 10
 // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\FlightedFeatures\ImmersiveContextMenu:0
@@ -930,12 +931,14 @@ namespace Nilesoft
 				{
 					Items.reserve(count);
 
+					Diagnostics::MenuPerfScope perf(L"selection.items.metadata");
 					for(DWORD i = 0; i < count; i++)
 					{
 						IComPtr<IShellItem> item;
 						if(S_OK == captured.items->GetItemAt(i, item) && item)
 							Parse(item);
 					}
+					perf.annotate(static_cast<long>(count));
 				}
 			}
 
@@ -1138,7 +1141,12 @@ namespace Nilesoft
 					Selections::GetFileProperties(si, &folderProp);
 					
 					IComPtr<IShellItemArray> sia;
-					if(S_OK == fv->GetSelection(FALSE, sia))
+					bool got_selection = false;
+					{
+						Diagnostics::MenuPerfScope perf(L"selection.get_selection");
+						got_selection = (S_OK == fv->GetSelection(FALSE, sia));
+					}
+					if(got_selection)
 					{
 						DWORD sel_count = 0;
 						if(S_OK != sia->GetCount(&sel_count))
@@ -1146,11 +1154,15 @@ namespace Nilesoft
 
 						Items.reserve(sel_count);
 
-						for(DWORD i = 0; i < sel_count; i++)
 						{
-							IComPtr<IShellItem> item;
-							if(S_OK == sia->GetItemAt(i, item) && item)
-								Parse(item);
+							Diagnostics::MenuPerfScope perf(L"selection.items.metadata");
+							for(DWORD i = 0; i < sel_count; i++)
+							{
+								IComPtr<IShellItem> item;
+								if(S_OK == sia->GetItemAt(i, item) && item)
+									Parse(item);
+							}
+							perf.annotate(static_cast<long>(sel_count));
 						}
 
 						Parent = folderProp.Path;

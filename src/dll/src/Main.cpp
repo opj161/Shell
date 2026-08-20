@@ -2,11 +2,16 @@
 #include <unordered_set>
 #include "Include/ContextMenu.h"
 #include "Include/ShellExt.h"
+#include "Include/Diagnostics/MenuPerf.h"
 #include "Library/detours.h"
 #include "RegistryConfig.h"
 #include <UIAutomation.h>
 using namespace Nilesoft::Shell;
-using namespace Diagnostics;
+using namespace Nilesoft::Diagnostics;
+
+// Nilesoft::Diagnostics and Nilesoft::Shell::Diagnostics are both in scope in
+// this translation unit, so the phase timers are reached through an alias.
+namespace perf = Nilesoft::Shell::Diagnostics;
 
 //MS also offers EV Code Certificates, which enable immediate acceptance by SmartScreeen of Windows Defender
 //https://blogs.msdn.microsoft.com/ie/2012/08/14/microsoft-smartscreen-extended-validation-ev-code-signing-certificates/
@@ -601,6 +606,9 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	auto result = FALSE;
 	auto invoked = false;
 
+	// SEH function: cannot hold an object that requires unwinding.
+	auto perf_pre_display = perf::menu_perf_begin();
+
 	auto invoke = [&](HMENU hmenu, uint32_t flag, Point pt)
 	{
 		if(!invoked)
@@ -627,7 +635,10 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 			}
 
 			//cs.lock();
-			auto has_inited = 0; Initializer::OnState(is_in_taskbar);
+			auto has_inited = 0;
+			auto perf_onstate = perf::menu_perf_begin();
+			Initializer::OnState(is_in_taskbar);
+			perf::menu_perf_end(perf_onstate, L"popup.initializer_onstate");
 
 			if(!_initializer.Status.Disabled)
 			{
@@ -639,7 +650,9 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					_initializer.init();
 				}
 
+				auto perf_ctx = perf::menu_perf_begin();
 				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, static_cast<bool>(ShellExtCapture::match(hMenu)));
+				perf::menu_perf_end(perf_ctx, L"popup.context_construct_initialize");
 				if(ctx != nullptr)
 				{
 
@@ -733,6 +746,10 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 						//flag.add(TPM_LEFTBUTTON);
 						//flag.add(TPM_RETURNCMD);
 					}
+
+					// Everything above this line is latency the user pays before the
+					// first pixel of the menu appears.
+					perf::menu_perf_end(perf_pre_display, L"popup.total_pre_display");
 
 					invoke(ctx->MenuHandle(), flag, { x, y });
 				
