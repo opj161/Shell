@@ -262,12 +262,57 @@
 		<CustomAction Id='OnRestoreConfigData' Property='OnRestoreConfig' Value='[INSTALLFOLDER]' />
 		<CustomAction Id='OnRestoreConfig' Execute='deferred' Impersonate='no' Return='ignore'
 					  BinaryRef='CA' DllEntry='RestoreConfig' />
-		<CustomAction Id='OnInstall' Return='ignore' BinaryRef='CA' DllEntry='Install' />
-		<CustomAction Id='OnUninstall' Execute='firstSequence' Return='asyncWait' BinaryRef='CA' DllEntry='Uninstall' />
+		<!--
+			Machine registration.
+
+			This was an immediate action with Return='ignore', scheduled after
+			InstallFinalize - which is to say outside the transaction altogether.
+			Nothing it did could be rolled back and whatever it reported was
+			thrown away, so an install whose registration failed outright still
+			finished green. Windows Installer's requirement is that a custom
+			action changing machine state be deferred, and that every such action
+			have a rollback action scheduled before it.
+
+			  https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
+			  https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions
+
+			Deferred actions can read only CustomActionData, hence the type 51
+			property actions - one per deferred action, since they do not share.
+		-->
+		<CustomAction Id='OnInstallData' Property='OnInstall' Value='[INSTALLFOLDER]' />
+		<CustomAction Id='OnInstall' Execute='deferred' Impersonate='no' Return='check'
+					  BinaryRef='CA' DllEntry='Install' />
+		<CustomAction Id='OnInstallRollbackData' Property='OnInstallRollback' Value='[INSTALLFOLDER]' />
+		<CustomAction Id='OnInstallRollback' Execute='rollback' Impersonate='no' Return='check'
+					  BinaryRef='CA' DllEntry='InstallRollback' />
+		<!--
+			Explorer restart is a session action, not machine state. It stays
+			immediate and impersonated so it runs as the user who started the
+			install: Windows::Explorer::Restart terminates every explorer.exe it
+			can open, and from the deferred action's SYSTEM context that reaches
+			other users' sessions.
+		-->
+		<CustomAction Id='OnRestartExplorer' Return='ignore' BinaryRef='CA' DllEntry='RestartExplorer' />
+		<CustomAction Id='OnUninstallData' Property='OnUninstall' Value='[INSTALLFOLDER]' />
+		<CustomAction Id='OnUninstall' Execute='deferred' Impersonate='no' Return='check'
+					  BinaryRef='CA' DllEntry='Uninstall' />
 		
 		<InstallExecuteSequence>
 			<Custom Action='OnDowngrading' After='FindRelatedProducts' Condition='NEWPRODUCTFOUND' />
-			<Custom Action='OnUninstall' After='FindRelatedProducts' Condition='(REMOVE ="ALL") AND (NOT UPGRADINGPRODUCTCODE)' />
+			<!--
+				REMOVE="ALL" cannot be tested here. The property "may not equal ALL
+				until after the InstallValidate action. This means that any custom
+				action that depends upon REMOVE=ALL must be sequenced after the
+				InstallValidate" - and removing a product by setting its top
+				feature to absent, which is what Programs and Features does, is
+				exactly the case where it is not set this early.
+
+				  https://learn.microsoft.com/en-us/windows/win32/msi/remove
+
+				Moved to Before='RemoveFiles': after InstallValidate (1400) and
+				after InstallInitialize (1500), which a deferred action requires,
+				and still ahead of the removal of the binary it runs.
+			-->
 			<!--
 				After CostFinalize, not after FindRelatedProducts. Directory properties
 				are not resolved until CostFinalize, so an action scheduled earlier reads
@@ -282,7 +327,21 @@
 			<Custom Action='OnUpdateElevated' Before='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
 			<Custom Action='OnRestoreConfigData' Before='OnRestoreConfig' Condition='(NOT Installed) AND (NOT REMOVE)' />
 			<Custom Action='OnRestoreConfig' After='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnInstall' After='InstallFinalize' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<!--
+				Rollback first, then the forward action: a rollback action has to be
+				written into the script before the action it undoes, or there is a
+				window in which the forward action has run and nothing can reverse
+				it. Both are after InstallFiles, because registration needs the
+				binaries on disk, and both are before InstallFinalize, because that
+				is where the script ends.
+			-->
+			<Custom Action='OnInstallRollbackData' Before='OnInstallRollback' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnInstallRollback' After='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnInstallData' Before='OnInstall' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnInstall' After='OnInstallRollback' Condition='(NOT Installed) AND (NOT REMOVE)' />
+			<Custom Action='OnUninstallData' Before='OnUninstall' Condition='(REMOVE="ALL") AND (NOT UPGRADINGPRODUCTCODE)' />
+			<Custom Action='OnUninstall' Before='RemoveFiles' Condition='(REMOVE="ALL") AND (NOT UPGRADINGPRODUCTCODE)' />
+			<Custom Action='OnRestartExplorer' After='InstallFinalize' Condition='(NOT Installed) AND (NOT REMOVE)' />
 			<!--
 				The old product is removed entirely before the new one is installed.
 

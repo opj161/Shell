@@ -534,38 +534,177 @@ static void PruneRotations(const std::wstring &install_folder)
 	}
 }
 
+/*
+	Runs shell.exe and reports what it said.
+
+	ShellExec (above) is the interactive path: it uses the "runas" verb and
+	throws the child's exit code away. Neither is right for a deferred custom
+	action. The action already runs in the installer's elevated,
+	non-impersonating context, so asking the shell to elevate again is at best
+	pointless; and registration that cannot report failure is registration the
+	installer cannot roll back.
+
+	  https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
+
+	Returns false if the process could not be started, timed out, or exited
+	non-zero. shell.exe's own exit code was inverted until this change - it
+	returned a bool straight out of wWinMain, so success was 1 - which is
+	exactly why an exit code has to be checked deliberately rather than
+	inherited.
+*/
+static bool RunAndWait(const std::wstring &exe, const std::wstring &arguments,
+					   const std::wstring &directory, DWORD timeout_ms = 120000)
+{
+	// CreateProcessW may write to the command line it is given.
+	std::wstring command = L"\"" + exe + L"\" " + arguments;
+
+	STARTUPINFOW si {};
+	si.cb = sizeof(si);
+	si.dwFlags = STARTF_USESHOWWINDOW;
+	si.wShowWindow = SW_HIDE;
+
+	PROCESS_INFORMATION pi {};
+	if(!::CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE,
+						 CREATE_NO_WINDOW, nullptr,
+						 directory.empty() ? nullptr : directory.c_str(), &si, &pi))
+	{
+		log("CreateProcess failed: %lu", ::GetLastError());
+		return false;
+	}
+
+	bool ok = false;
+	if(::WaitForSingleObject(pi.hProcess, timeout_ms) == WAIT_OBJECT_0)
+	{
+		DWORD code = 1;
+		if(::GetExitCodeProcess(pi.hProcess, &code))
+		{
+			ok = (code == 0);
+			if(!ok)
+				log("shell.exe exited with %lu", code);
+		}
+	}
+	else
+	{
+		log("shell.exe did not exit within %lu ms", timeout_ms);
+		::TerminateProcess(pi.hProcess, 1);
+	}
+
+	::CloseHandle(pi.hThread);
+	::CloseHandle(pi.hProcess);
+	return ok;
+}
+
+/*
+	Machine registration, deferred and checked.
+
+	This used to be an immediate action scheduled after InstallFinalize with
+	Return='ignore', which put it outside the installation's transaction
+	entirely: nothing it did could be rolled back, and whatever it reported was
+	discarded, so an install whose registration failed completely still
+	reported success. Windows Installer's rule for this is not subtle - a custom
+	action that changes machine state must be deferred, and every such action
+	needs a rollback action scheduled before it.
+
+	  https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
+	  https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions
+
+	-restart is deliberately not passed any more. Explorer restart is a session
+	action and this runs as SYSTEM with no impersonation;
+	Windows::Explorer::Restart enumerates every process named explorer.exe and
+	terminates each one it can open, which from SYSTEM reaches other users'
+	sessions. OnRestartExplorer below does that part, impersonated, afterwards.
+*/
 UINT __stdcall Install(MSIHANDLE hInstall)
 {
 	std::wstring install_folder;
-	if(InstallFolder(hInstall, install_folder, false))
+	if(!InstallFolder(hInstall, install_folder, false))
 	{
-		ShellExec(JoinPath(install_folder, FILEEXE).c_str(),
-				  L"-r -s -t -restart", install_folder.c_str(), true, SW_HIDE, true);
-
-		// Explorer has just been restarted, so the rotation this install made
-		// may already be unmapped.
-		PruneRotations(install_folder);
+		log("Install: no install folder");
+		return ERROR_INSTALL_FAILURE;
 	}
+
+	if(!RunAndWait(JoinPath(install_folder, FILEEXE), L"-r -s -t", install_folder))
+		return ERROR_INSTALL_FAILURE;
+
+	// Best-effort tidying, and explicitly not a reason to fail the install.
+	PruneRotations(install_folder);
+
 	return ERROR_SUCCESS;
-	//return ERROR_INSTALL_FAILURE;
 }
 
-UINT __stdcall Uninstall(MSIHANDLE hInstall)
+/*
+	Undoes Install if anything later in the script fails. Unregistering
+	something that is not registered is success, so this is safe to run when
+	Install never got as far as writing anything.
+
+	A rollback action must not fail the rollback - there is nothing left to do
+	about it - so this reports success regardless and leaves the reason in the
+	log.
+*/
+UINT __stdcall InstallRollback(MSIHANDLE hInstall)
 {
 	std::wstring install_folder;
 	if(InstallFolder(hInstall, install_folder, true))
+		RunAndWait(JoinPath(install_folder, FILEEXE), L"-u -s -t", install_folder);
+
+	return ERROR_SUCCESS;
+}
+
+/*
+	Restarting Explorer so the new menu appears, in the session that asked for
+	the install. Immediate and impersonated, after InstallFinalize: it changes
+	no machine state, it must not run as SYSTEM, and it is not worth failing an
+	otherwise complete install over.
+*/
+UINT __stdcall RestartExplorer(MSIHANDLE hInstall)
+{
+	std::wstring install_folder;
+	if(InstallFolder(hInstall, install_folder, true))
+		RunAndWait(JoinPath(install_folder, FILEEXE), L"-restart -s", install_folder, 60000);
+
+	return ERROR_SUCCESS;
+}
+
+/*
+	Unregistering, deferred and synchronous, before RemoveFiles.
+
+	Three things were wrong with the way this was scheduled. It was
+	Execute='firstSequence', which is documented to "always skip action in
+	execute sequence if UI sequence has run" - and "the action is not required
+	to be present or run in the UI sequence to be skipped" - so an ordinary
+	uninstall from Settings or Programs and Features never ran it at all, and
+	the machine kept its COM registration afterwards. It was Return='asyncWait',
+	"an asynchronous execution that waits for exit code at the end of the
+	sequence", so it raced RemoveFiles for the very binary it was running. And
+	its REMOVE="ALL" condition sat after FindRelatedProducts, while the property
+	"may not equal ALL until after the InstallValidate action. This means that
+	any custom action that depends upon REMOVE=ALL must be sequenced after the
+	InstallValidate."
+
+	  https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-execution-scheduling-options
+	  https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-return-processing-options
+	  https://learn.microsoft.com/en-us/windows/win32/msi/remove
+*/
+UINT __stdcall Uninstall(MSIHANDLE hInstall)
+{
+	UINT result = ERROR_SUCCESS;
+
+	std::wstring install_folder;
+	if(InstallFolder(hInstall, install_folder, true))
 	{
-		ShellExec(JoinPath(install_folder, FILEEXE).c_str(), 
-				  L"-u -s -t -restart", install_folder.c_str(), true, SW_HIDE, true);
+		if(!RunAndWait(JoinPath(install_folder, FILEEXE), L"-u -s -t", install_folder))
+			result = ERROR_INSTALL_FAILURE;
 	}
+	else
+		log("Uninstall: no install folder");
 
 	// A real uninstall, not the removal half of an upgrade - the condition on
 	// this action in InstallExecuteSequence excludes UPGRADINGPRODUCTCODE. So
-	// nothing is going to ask for the saved config again.
+	// nothing is going to ask for the saved config again. Best-effort: failing
+	// to delete a backup directory is no reason to block an uninstall.
 	DiscardUserConfigBackup();
 
-	return ERROR_SUCCESS;
-	//return res ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
+	return result;
 }
 
 UINT __stdcall Update(MSIHANDLE hInstall)

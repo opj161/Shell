@@ -902,7 +902,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 
 		if(reg.REGISTER || reg.UNREGISTER || reg.RESTART || reg.FOLDEREXTENSIONS)
 		{
-			return Register(reg);
+			// Register returns a bool, and this returned it straight out of
+			// wWinMain - so a successful registration exited with 1 and a failed
+			// one with 0, which is backwards from what every caller of a process
+			// assumes. Nothing checked it, so nothing noticed; the installer
+			// checks it now.
+			return Register(reg) ? 0 : 1;
 		}
         else
         {
