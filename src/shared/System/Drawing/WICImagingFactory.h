@@ -8,18 +8,17 @@ namespace Nilesoft
 		class WIC
 		{
 		private:
-			// Get the WIC factory from the singleton wrapper class
+			inline static std::mutex _factory_mutex;
 			inline static IWICImagingFactory* _factory = nullptr;
-			inline static const uint32_t _width = ::GetSystemMetrics(SM_CXSMICON);
-			inline static const uint32_t _height = ::GetSystemMetrics(SM_CYSMICON);
 
 		public:
 
 			WIC() { init(); }
-			~WIC() { release(); }
+			~WIC() { }
 
 			static void release()
 			{
+				std::lock_guard<std::mutex> lock(_factory_mutex);
 				if(_factory) 
 					_factory->Release();
 				_factory = nullptr;
@@ -27,9 +26,10 @@ namespace Nilesoft
 
 			static bool init()
 			{
-				auto hr = S_OK;
+				std::lock_guard<std::mutex> lock(_factory_mutex);
 				if(!_factory)
 				{
+					HRESULT hr = E_FAIL;
 					if(::IsWindows8OrGreater())
 					{
 						hr = ::CoCreateInstance
@@ -41,9 +41,9 @@ namespace Nilesoft
 							(void**)&_factory
 						);
 					}
-					else
+					if(FAILED(hr) || !_factory)
 					{
-						hr = ::CoCreateInstance
+						::CoCreateInstance
 						(
 							CLSID_WICImagingFactory1,
 							nullptr,
@@ -53,7 +53,7 @@ namespace Nilesoft
 						);
 					}
 				}
-				return(hr == S_OK && _factory);
+				return (_factory != nullptr);
 			}
 
 			static IWICBitmapSource* To32bppPBGRA(IWICBitmapSource* bitmap, uint32_t width = 0, uint32_t height = 0)

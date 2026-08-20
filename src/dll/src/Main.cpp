@@ -72,7 +72,8 @@ Version Build
 
 #ifdef _DEBUG
 
-std::unordered_map< uint32_t, const wchar_t *> msg_map0 = {
+struct MsgMapEntry { uint32_t msg; const wchar_t *name; };
+static const MsgMapEntry msg_map0[] = {
 	{ WM_DESTROY, L"WM_DESTROY" },
 	{ WM_NCDESTROY, L"WM_NCDESTROY" },
 	{ WM_CREATE, L"WM_CREATE" },
@@ -139,16 +140,16 @@ std::unordered_map< uint32_t, const wchar_t *> msg_map0 = {
 	{ WM_IME_SETCONTEXT, L"WM_IME_SETCONTEXT"},
 	{ WM_IME_NOTIFY, L"WM_IME_NOTIFY"},
 	{ WM_MOUSEMOVE, L"WM_MOUSEMOVE"},
-	{WM_DEVICECHANGE, L"WM_DEVICECHANGE"},
-	{WM_IME_REQUEST, L"WM_IME_REQUEST"},
-	{MN_GETHMENU, L"MN_GETHMENU"},
-	{WM_LBUTTONDOWN, L"WM_LBUTTONDOWN"},
-	{WM_RBUTTONDOWN, L"WM_RBUTTONDOWN"},
-	{WM_LBUTTONUP, L"WM_LBUTTONUP"},
-	{WM_RBUTTONUP, L"WM_RBUTTONUP"},
-	{WM_MOUSELEAVE,L"WM_MOUSELEAVE"},
-	{WM_USER, L"WM_USER"},
-	{WM_APP, L"WM_APP"},
+	{ WM_DEVICECHANGE, L"WM_DEVICECHANGE"},
+	{ WM_IME_REQUEST, L"WM_IME_REQUEST"},
+	{ MN_GETHMENU, L"MN_GETHMENU"},
+	{ WM_LBUTTONDOWN, L"WM_LBUTTONDOWN"},
+	{ WM_RBUTTONDOWN, L"WM_RBUTTONDOWN"},
+	{ WM_LBUTTONUP, L"WM_LBUTTONUP"},
+	{ WM_RBUTTONUP, L"WM_RBUTTONUP"},
+	{ WM_MOUSELEAVE,L"WM_MOUSELEAVE"},
+	{ WM_USER, L"WM_USER"},
+	{ WM_APP, L"WM_APP"},
 	{ 0, nullptr }
 };
 
@@ -159,37 +160,11 @@ std::unordered_map< uint32_t, const wchar_t *> msg_map0 = {
 #define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))  // windowsx.h
 #define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))  // windowsx.h
 
-HINSTANCE _hInstance{};
-Initializer _initializer;
-extern Logger &_log = Logger::Instance();
-const Windows::Version *ver = &Windows::Version::Instance();
-
+HINSTANCE _hInstance = nullptr;
 HANDLE watch_event = nullptr;
-
-WindowsHook _taskbar_mouse;
-
-//std::unordered_map<HMODULE, IATHook> _detours_ci;
-IATHook iathook_NtUserTrackPopupMenuEx;
-std::vector<IATHook> iathook_TrackPopupMenu; //OverrideFunction
-//Detours<decltype(::TrackPopupMenu)> _TrackPopupMenu;
-//Detours<decltype(::TrackPopupMenuEx)> _TrackPopupMenuEx;
-Detours<decltype(::DllGetClassObject)> _DllGetClassObject;
-Detours<decltype(::CoCreateInstance)> _CoCreateInstance;
-
 uint32_t MN_CONTEXTMENU = 0;
-std::unordered_map<HWND, Window> _window_taskbar;
 
-LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
-LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-
-__inline auto is_registered() -> bool
-{
-	//auto_regkey r;
-	//return ERROR_SUCCESS == auto_regkey::exists_key(HKCR, HKCR_CLSID_ContextMenu);
-	return RegistryConfig::IsRegistered();
-}
-
-struct
+struct LoaderState
 {
 	string path;
 	bool explorer{};
@@ -198,7 +173,7 @@ struct
 	bool init()
 	{
 		handle = ::GetModuleHandleW(nullptr);
-		if(!(explorer) && path.empty())
+		if(!explorer && path.empty())
 		{
 			path = Path::Module(nullptr);
 			explorer = path.ends_with(def_EXPLORER, true);
@@ -207,25 +182,100 @@ struct
 	}
 
 	explicit operator bool() const { return explorer; }
+};
 
-} _loader;
+struct RuntimeState
+{
+	HINSTANCE module{};
+	Initializer initializer;
+	LoaderState loader;
+
+	WindowsHook taskbar_mouse;
+	IATHook ntuser_popup_hook;
+	std::vector<IATHook> popup_hooks;
+	Detours<decltype(::DllGetClassObject)> dll_get_class_object_hook;
+	Detours<decltype(::CoCreateInstance)> co_create_instance_hook;
+
+	std::unordered_map<HWND, Window> taskbar_windows;
+	std::mutex taskbar_mutex;
+
+	std::atomic<bool> hooks_installed{ false };
+	std::atomic<bool> module_pinned{ false };
+};
+
+inline RuntimeState& Runtime()
+{
+	// Intentionally process-lifetime. Do not register a C++ destructor.
+	static RuntimeState* state = new RuntimeState();
+	return *state;
+}
+
+#define _log Logger::Instance()
+inline const Windows::Version* Ver() { return &Windows::Version::Instance(); }
+#define ver Ver()
+#define _initializer (Runtime().initializer)
+#define _loader (Runtime().loader)
+#define _taskbar_mouse (Runtime().taskbar_mouse)
+#define iathook_NtUserTrackPopupMenuEx (Runtime().ntuser_popup_hook)
+#define iathook_TrackPopupMenu (Runtime().popup_hooks)
+#define _DllGetClassObject (Runtime().dll_get_class_object_hook)
+#define _CoCreateInstance (Runtime().co_create_instance_hook)
+
+void BootstrapOnce();
+
+inline bool PinModule()
+{
+	auto &rt = Runtime();
+	if(rt.module_pinned.load(std::memory_order_relaxed))
+		return true;
+
+	HMODULE pinned = nullptr;
+	if(!::GetModuleHandleExW(
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+			GET_MODULE_HANDLE_EX_FLAG_PIN,
+			reinterpret_cast<LPCWSTR>(&BootstrapOnce),
+			&pinned))
+	{
+		return false;
+	}
+	rt.module_pinned.store(true, std::memory_order_release);
+	return true;
+}
+
+LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
+__inline auto is_registered(bool force_refresh = false) -> bool
+{
+	return RegistryConfig::IsRegisteredCached(force_refresh);
+}
 
 struct taskbar_t
 {
-	inline static auto wShell_TrayWnd = ::RegisterWindowMessageW(Windows::WC_Shell_TrayWnd);
-	inline static auto wShell_SecondaryTrayWnd = ::RegisterWindowMessageW(Windows::WC_Shell_SecondaryTrayWnd);
+	static UINT MsgShellTrayWnd()
+	{
+		static UINT msg = ::RegisterWindowMessageW(Windows::WC_Shell_TrayWnd);
+		return msg;
+	}
+	static UINT MsgShellSecondaryTrayWnd()
+	{
+		static UINT msg = ::RegisterWindowMessageW(Windows::WC_Shell_SecondaryTrayWnd);
+		return msg;
+	}
 
 	static bool hook(HWND hTaskbar, UINT_PTR id)
 	{
 		Window window = Window::Find(Windows::WC_Composition_DesktopWindowContentBridge, hTaskbar);
 		if(window && !window.is_prop(UxSubclass))
 		{
-			if(!_window_taskbar.contains(window))
+			auto &rt = Runtime();
+			std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
+			if(!rt.taskbar_windows.contains(window))
 			{
 				if(window.subclass(TaskbarSubclassProc, id, hTaskbar))
 				{
 					window.prop(UxSubclass, CONTEXTMENUSUBCLASS);
-					_window_taskbar[window] = window;
+					rt.taskbar_windows[window] = window;
 					return true;
 				}
 			}
@@ -252,17 +302,19 @@ struct taskbar_t
 	{
 		::EnumWindows([](HWND hWnd, LPARAM)->BOOL {
 			auto atom = Window::Atom(hWnd);
-			if(atom == wShell_TrayWnd || atom == wShell_SecondaryTrayWnd)
+			if(atom == MsgShellTrayWnd() || atom == MsgShellSecondaryTrayWnd())
 			{
 				Window window = hWnd;
 				if(!window.is_prop(UxSubclass))
 				{
-					if(!_window_taskbar.contains(window))
+					auto &rt = Runtime();
+					std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
+					if(!rt.taskbar_windows.contains(window))
 					{
 						auto proc = window.get_long(GWLP_WNDPROC);
 						window.prop(UxSubclass, proc);
 						window.set_long(GWLP_WNDPROC, TaskbarProc);
-						_window_taskbar[window] = window;
+						rt.taskbar_windows[window] = window;
 						return true;
 					}
 				}
@@ -285,27 +337,31 @@ struct taskbar_t
 	
 	static void unhook(HWND hWnd)
 	{
-		for(auto &window : _window_taskbar)
+		auto &rt = Runtime();
+		std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
+		for(auto &window : rt.taskbar_windows)
 		{
 			if(window.first == hWnd)
 			{
 				window.second.set_long(GWLP_WNDPROC, window.second.prop(UxSubclass));
 				window.second.remove_prop(UxSubclass);
-				_window_taskbar.erase(hWnd);
+				rt.taskbar_windows.erase(hWnd);
 				break;
 			}
 		}
 	}
 	static void unhook_all()
 	{
-		for(auto &window : _window_taskbar)
+		auto &rt = Runtime();
+		std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
+		for(auto &window : rt.taskbar_windows)
 		{
 			window.second.set_long(GWLP_WNDPROC, window.second.prop(UxSubclass));
 			window.second.remove_prop(UxSubclass);
-			_window_taskbar.erase(window.first);
+			rt.taskbar_windows.erase(window.first);
 			break;
 		}
-		_window_taskbar.clear();
+		rt.taskbar_windows.clear();
 	}
 
 	static bool is_allowed_area(HWND hTaskbar, const Point &pt)
@@ -969,43 +1025,48 @@ void BootstrapOnce()
 	static std::once_flag flag;
 	std::call_once(flag, []()
 	{
+		auto &rt = Runtime();
+		bool success = false;
 		try
 		{
-			_loader.init();
+			rt.loader.init();
 
-			if(!_loader.explorer && !_loader.path.ends_with(L"\\shell.exe"))
+			if(!rt.loader.explorer && !rt.loader.path.ends_with(L"\\shell.exe"))
 			{
 				int disabled_3rdparty = 0;
 				if(RegistryConfig::get(L"\\disable", L"3rdparty", disabled_3rdparty) && disabled_3rdparty == 1)
 					return;
 			}
 
-			if(_initializer.init(_hInstance))
+			if(rt.initializer.init(_hInstance))
 			{
-				_initializer.process.hModule = _loader.handle;
-				_initializer.process.path = Path::Module(_loader.handle).move();
-				_initializer.process.name = Path::Title(_initializer.process.path).move();
-				_initializer.process.id = ::GetCurrentProcessId();
-				_initializer.process.handle = ::GetCurrentProcess();
+				rt.initializer.process.hModule = rt.loader.handle;
+				rt.initializer.process.path = Path::Module(rt.loader.handle).move();
+				rt.initializer.process.name = Path::Title(rt.initializer.process.path).move();
+				rt.initializer.process.id = ::GetCurrentProcessId();
+				rt.initializer.process.handle = ::GetCurrentProcess();
+
+				if(!PinModule())
+					return;
 
 				ContextMenu::RegisterLayer();
 
-				iathook_NtUserTrackPopupMenuEx
+				rt.ntuser_popup_hook
 					.init(L"user32.dll", "win32u.dll", "NtUserTrackPopupMenuEx", TrackPopupMenuExProc)
 					.install();
 
-				auto hook = []()
+				auto hook = [&rt]()
 				{
-					__trace(L"hook all the modules in '%s' process", _initializer.process.name.c_str());
+					__trace(L"hook all the modules in '%s' process", rt.initializer.process.name.c_str());
 
 					auto user32 = "user32.dll";
 
 					std::unordered_set<HMODULE> hooked;
-					hooked.reserve(iathook_TrackPopupMenu.size() + 64);
-					for(const auto &m : iathook_TrackPopupMenu)
+					hooked.reserve(rt.popup_hooks.size() + 64);
+					for(const auto &m : rt.popup_hooks)
 						hooked.insert(m._hModule);
 
-					for(auto hModule : Process::Modules(_initializer.process.handle))
+					for(auto hModule : Process::Modules(rt.initializer.process.handle))
 					{
 						if(_hInstance == hModule)
 							continue;
@@ -1013,109 +1074,90 @@ void BootstrapOnce()
 						if(!hooked.insert(hModule).second)
 							continue;
 
-						iathook_TrackPopupMenu.emplace_back(hModule, user32, ::TrackPopupMenu, TrackPopupMenuProc).install();
-						iathook_TrackPopupMenu.emplace_back(hModule, user32, ::TrackPopupMenuEx, TrackPopupMenuExProc).install();
+						rt.popup_hooks.emplace_back(hModule, user32, ::TrackPopupMenu, TrackPopupMenuProc).install();
+						rt.popup_hooks.emplace_back(hModule, user32, ::TrackPopupMenuEx, TrackPopupMenuExProc).install();
 					}
 				};
 
-				if(_loader.explorer)
+				if(rt.loader.explorer)
 				{
-					_CoCreateInstance.Begin();
-					_CoCreateInstance.init(::CoCreateInstance, CoCreateInstanceHook).hook();
-					_CoCreateInstance.Commit();
+					rt.co_create_instance_hook.Begin();
+					rt.co_create_instance_hook.init(::CoCreateInstance, CoCreateInstanceHook).hook();
+					rt.co_create_instance_hook.Commit();
 
-					if(!iathook_NtUserTrackPopupMenuEx.installed())
+					if(!rt.ntuser_popup_hook.installed())
 					{
 						hook();
 					}
 
-					if(ver->IsWindows11OrGreater())
+					if(Windows::Version::Instance().IsWindows11OrGreater())
 					{
 						taskbar_t::hook_all(1000);
 					}
 				}
-				else if(!iathook_NtUserTrackPopupMenuEx.install())
+				else if(!rt.ntuser_popup_hook.install())
 				{
 					hook();
 				}
 
-				hooks_installed.store(true, std::memory_order_relaxed);
+				success = true;
+				rt.hooks_installed.store(true, std::memory_order_release);
+				hooks_installed.store(true, std::memory_order_release);
 			}
 		}
 		catch(...)
 		{
 #ifdef _DEBUG
-			_log.exception(__func__);
-			_log.close();
+			Logger::Instance().exception(__func__);
+			Logger::Instance().close();
 #endif
+		}
+
+		if(!success)
+		{
+			try
+			{
+				if(rt.ntuser_popup_hook.installed())
+					rt.ntuser_popup_hook.uninstall();
+				for(auto &h : rt.popup_hooks)
+					h.uninstall();
+				rt.popup_hooks.clear();
+			}
+			catch(...)
+			{
+			}
 		}
 	});
 }
 
 //integrate 
-BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
+BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID lpReserved)
 {
-	try
+	if(dwReason == DLL_PROCESS_ATTACH)
 	{
-		if(dwReason == DLL_PROCESS_ATTACH)
+		_hInstance = hInstance;
+		::DisableThreadLibraryCalls(hInstance);
+		return TRUE;
+	}
+	else if(dwReason == DLL_PROCESS_DETACH)
+	{
+		if(lpReserved != nullptr)
 		{
-			::DisableThreadLibraryCalls(hInstance);
-
-			_hInstance = hInstance;
-			_initializer.HInstance = _hInstance;
-
-#if _DEBUG
-			// detect memory leaks
-			_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG
-						   | _CRTDBG_CHECK_ALWAYS_DF
-						   | _CRTDBG_LEAK_CHECK_DF
-						   | _CRTDBG_ALLOC_MEM_DF);
-#endif
+			// Process termination: Microsoft DLL best practices recommend empty detach.
 			return TRUE;
 		}
-		else if(dwReason == DLL_PROCESS_DETACH)
-		{
-			if(hooks_installed.load(std::memory_order_relaxed) && !is_registered())
-			{
-				if(_loader.explorer)
-				{
-					// Perform any necessary cleanup.
-					_taskbar_mouse.unhook();
-					taskbar_t::unhook_all();
-
-					if(ver->IsWindows11OrGreater())
-					{
-						_CoCreateInstance.Begin();
-						_CoCreateInstance.unhook();
-						_CoCreateInstance.Commit();
-					}
-				}
-
-				for(auto &d : iathook_TrackPopupMenu)
-					d.uninstall(true);
-
-				ContextMenu::UnRegisterLayer();
-			}
-
-			_log.close();
-			return TRUE;
-		}
+		// Explicit unload: module is pinned once hooks are installed.
+		return TRUE;
 	}
-	catch(...) // handle all exceptions
-	{
-#ifdef _DEBUG
-		_log.exception(__func__);
-		_log.close();
-#endif
-	}
-	return FALSE;
+	return TRUE;
 }
 
 //IID_FolderExtensions
 _Check_return_
 STDAPI DllGetClassObject(_In_ REFCLSID rclsid, [[maybe_unused]] _In_ REFIID riid, [[maybe_unused]] _Outptr_ LPVOID FAR *ppv)
 {
-	if(ppv) *ppv = nullptr;
+	if(!ppv) return E_POINTER;
+	*ppv = nullptr;
 
 	BootstrapOnce();
 
@@ -1143,7 +1185,7 @@ STDAPI DllGetClassObject(_In_ REFCLSID rclsid, [[maybe_unused]] _In_ REFIID riid
 	if(!_initializer.Status.Loaded.load(std::memory_order_relaxed))
 		_initializer.init();
 
-	if(rclsid == IID_ContextMenu && ppv)
+	if(rclsid == IID_ContextMenu)
 		return CreateShellExtFactory(riid, ppv);
 
 	return CLASS_E_CLASSNOTAVAILABLE;
@@ -1159,7 +1201,7 @@ STDAPI DllCanUnloadNow(void)
 	if(ShellExtCapture::has_active_captures())
 		return S_FALSE;
 
-	if(hooks_installed.load(std::memory_order_relaxed))
+	if(Runtime().hooks_installed.load(std::memory_order_relaxed) || hooks_installed.load(std::memory_order_relaxed))
 		return S_FALSE;
 
 	if(!_loader.explorer || !is_registered())

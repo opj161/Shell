@@ -6,11 +6,12 @@ namespace Nilesoft
 	{
 		class Icon
 		{
-			inline static const auto cx = ::GetSystemMetrics(SM_CXSMICON);
-
 		public:
+			inline static int default_size() { return ::GetSystemMetrics(SM_CXSMICON); }
+
 			static HICON FromFile(const wchar_t* path, int size)
 			{
+				auto cx = default_size();
 				return (HICON)::LoadImageW(nullptr, path, IMAGE_ICON,
 										   size > cx ? size : cx,
 										   size > cx ? size : cx,
@@ -28,6 +29,7 @@ namespace Nilesoft
 
 			static HICON FromFileTypeIcon(const wchar_t *extension, int size)
 			{
+				auto cx = default_size();
 				//	if(extension[0] != '.') extension = '.' + extension;
 				SHFILEINFOW sfi = { };
 				auto hr = ::SHGetFileInfoW(extension, 0,
@@ -50,6 +52,7 @@ namespace Nilesoft
 
 			static HICON FromResourceByIndex(const wchar_t *path, int index, int size)
 			{
+				auto cx = default_size();
 				HICON hIcon = nullptr;
 				if(size > cx)
 					::ExtractIconExW(path, index, &hIcon, nullptr, 1);
