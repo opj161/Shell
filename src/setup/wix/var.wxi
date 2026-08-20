@@ -7,4 +7,67 @@
 <?else ?>
 	<?define ProductCode = '{7BCA6512-254B-456F-8F08-AAD7508BE320}' ?>
 <?endif ?>
+
+<!--
+	Component codes.
+
+	All three architecture packages used to share one set. Windows Installer
+	requires a new component code when the name or target location of any
+	resource in the component changes, and again when "recompiling a 32-bit
+	component into a 64-bit component" - the 64-bit attribute is documented as
+	needing a new GUID in the ComponentId column alongside it.
+
+		https://learn.microsoft.com/en-us/windows/win32/msi/changing-the-component-code
+		https://learn.microsoft.com/en-us/windows/win32/msi/component-table
+		https://learn.microsoft.com/en-us/windows/win32/msi/64-bit-windows-installer-packages
+
+	Both apply to every component under INSTALLFOLDER, not just the one holding
+	the binaries. Inspecting the built packages shows why: INSTALLFOLDER hangs
+	off ProgramFiles6432Folder, which resolves to ProgramFilesFolder in the
+	32-bit package and ProgramFiles64Folder in the 64-bit ones, so even the
+	components whose files are byte-identical - imports, translations, the
+	stock config - install to a different target location per architecture, and
+	the 64-bit attribute differs too.
+
+	It is reachable, not theoretical: the Upgrade table removes versions below
+	$(var.Version), so an x86 and an x64 package of the *same* version can be
+	installed side by side, at which point one component code would name two
+	different key paths.
+
+	x64 keeps the historical codes, so an x64 upgrade - the overwhelmingly
+	common one - replaces nothing it does not have to. x86 and ARM64 get their
+	own.
+
+	StartMenuShortcut is deliberately not in this list: its shortcut and its
+	HKCU value have the same name and location in every package, which is
+	exactly when one component code is correct.
+-->
+<?if $(sys.BUILDARCH) = x64 ?>
+	<?define ComponentBitness = 'always64' ?>
+	<?define ApplicationComponentGuid = '{ED9EFE4B-E83D-42BB-8938-F72B13A2FAD2}' ?>
+	<?define ConfigComponentGuid      = '{BEC55C6A-30C7-4E1F-B64D-8636AB379E31}' ?>
+	<?define ImportsComponentGuid     = '{FF987BEA-6195-4C05-8523-00936A1BD0E2}' ?>
+	<?define LangComponentGuid        = '{FF987BEA-6195-4C05-8523-00936A1BD092}' ?>
+	<?define Lang2ComponentGuid       = '{BC1A31D1-B1C3-4D76-8A90-BDB8897A2E80}' ?>
+	<?define CleanupComponentGuid     = '{838501CD-485B-4587-9195-6CFB416202B9}' ?>
+	<?define DisplayIconComponentGuid = '{69292D86-8518-4C68-867C-192767154C54}' ?>
+<?elseif $(sys.BUILDARCH) = arm64 ?>
+	<?define ComponentBitness = 'always64' ?>
+	<?define ApplicationComponentGuid = '{8FA5A26E-3122-49E8-8EFA-3533DB4E4C55}' ?>
+	<?define ConfigComponentGuid      = '{BE2E2A6B-FCA3-41B5-B0BA-479AECAAE352}' ?>
+	<?define ImportsComponentGuid     = '{C5F79386-5FA4-40E0-80A2-4F5E82B08317}' ?>
+	<?define LangComponentGuid        = '{8F234CE4-71FF-4A63-B833-D84D4E9DD49F}' ?>
+	<?define Lang2ComponentGuid       = '{2A7E1676-779A-4A6F-9330-2B20BFD7A4BF}' ?>
+	<?define CleanupComponentGuid     = '{BDD09075-091E-4D8C-AC16-CFA94B31CB7F}' ?>
+	<?define DisplayIconComponentGuid = '{C78A1884-3BB2-4A60-943F-3DCFEA97F243}' ?>
+<?else ?>
+	<?define ComponentBitness = 'always32' ?>
+	<?define ApplicationComponentGuid = '{B4125EFB-BFA8-456A-9928-46761D87655C}' ?>
+	<?define ConfigComponentGuid      = '{27094408-126A-4F85-8281-666A90EE8649}' ?>
+	<?define ImportsComponentGuid     = '{B5A79ED8-EB83-4D7A-80B9-D4B2601804AF}' ?>
+	<?define LangComponentGuid        = '{8AC373AD-BB5F-4673-A409-9F10622C7EA2}' ?>
+	<?define Lang2ComponentGuid       = '{5277770C-D4AF-4918-AB46-BBDBE1C648D5}' ?>
+	<?define CleanupComponentGuid     = '{CB582199-5CBD-4ADB-8D42-C6041F459A73}' ?>
+	<?define DisplayIconComponentGuid = '{7B93EFBB-D3D8-4418-BFC5-FE3BEB3F0E99}' ?>
+<?endif ?>
 </Include>
