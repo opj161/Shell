@@ -1,30 +1,24 @@
 @echo off
+rem Thin wrapper over the canonical build. There is deliberately no second way
+rem to produce a release package here.
+rem
+rem This script used to run `wix.exe build` directly, which skips Windows
+rem Installer validation - MSBuild runs the stock MSI SDK ICEs for you, the
+rem command line does not:
+rem
+rem   https://docs.firegiant.com/wix/tools/validation/
+rem
+rem It also deleted the .wixpdb straight after building, swallowed the exit code
+rem so a failed build looked like a successful one, and ended in `pause`, which
+rem hangs any non-interactive caller.
+rem
+rem build.ps1 builds src\Shell.sln, which contains setup\wix\setup.wixproj, so
+rem the package produced here is the validated one.
 
-echo build setup...
-echo.
+setlocal
 
-cd wix
-set arch=%~1
-set bin=..\..\bin
+set "arch=%~1"
+if "%arch%" == "" set "arch=x64"
 
-if "%~1" == "x86" (
-	set arch=x86
-) else if "%~1" == "arm64" (
-	set arch=arm64
-) else (
-	set arch=x64
-)
-
-echo %arch%
-
-if exist %bin%\setup-%arch%.msi del %bin%\setup-%arch%.msi
-
-echo WIX
-
-wix.exe --version
-echo.
-wix.exe build -o %bin%\setup-%arch%.msi setup.wxs -arch %arch%
-
-if exist %bin%\setup-%arch%.wixpdb del %bin%\setup-%arch%.wixpdb>nul
-echo.
-pause
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\..\build.ps1" -Platform %arch%
+exit /b %ERRORLEVEL%
