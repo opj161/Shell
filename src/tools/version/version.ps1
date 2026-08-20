@@ -78,7 +78,7 @@ try
 	$ChangeBuild	= 0
 	$ChangeRevis	= 0
 	
-	$___Build__	= 19	# auto increase
+	$___Build__	= 20	# auto increase
 	$___Revis__	= 0	# auto increase
 	
 	$AppCompany		= "Nilesoft"
@@ -114,12 +114,25 @@ try
 
 	Debug-Output("Nilesoft Shell version number: $Version")
 
+	# Stable installer identity is not generated data. This tool used to copy a
+	# three-line template over src\setup\wix\var.wxi, which deleted the
+	# per-architecture ProductCodes and all seven component GUIDs with it, and
+	# left setup.wxs referencing variables that no longer existed. Only
+	# version.wxi is generated now; identity.wxi is hashed and checked below.
+	$identityFile = "..\..\setup\wix\identity.wxi"
+	$identityHash = (Get-FileHash -LiteralPath $identityFile -Algorithm SHA256).Hash
+
 	update "Resource.h" "..\..\shared\Resource.h";
 	#update "Shell.rc" "..\..\shared\Resource\Shell.rc";
 	update "manifest.xml" "..\..\shared\Resource\manifest.xml";
 	update "Shell.def" "..\..\dll\src\Shell.def";
-	update "var.wxi" "..\..\setup\wix\var.wxi";
+	update "version.wxi" "..\..\setup\wix\version.wxi";
 	
+	if((Get-FileHash -LiteralPath $identityFile -Algorithm SHA256).Hash -ne $identityHash)
+	{
+		throw "version.ps1 modified $identityFile. Package identity is not generated data."
+	}
+
 	$content = (Get-Content $ScriptPath)
 	
 	if($ChangeBuild)

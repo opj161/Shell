@@ -1,5 +1,6 @@
 
-<?include var.wxi ?>
+<?include version.wxi ?>
+<?include identity.wxi ?>
 
 <?define UpgradeCode = '{7BCA6512-254B-456F-8F08-AAD7508BEE00}' ?>
 <?define Name = 'Shell' ?>
@@ -10,7 +11,7 @@
 <!--
 	sys.BUILDARCH rather than a local Platform variable: MSBuild already passes
 	Platform, spelled with the solution's casing ('ARM64'), so redefining it here
-	from sys.BUILDARCH ('arm64') is a WIX1118 collision. var.wxi keys off
+	from sys.BUILDARCH ('arm64') is a WIX1118 collision. identity.wxi keys off
 	sys.BUILDARCH too, so everything now reads the same value.
 -->
 <?define arch_bin = '..\..\bin\$(sys.BUILDARCH)' ?>
@@ -108,7 +109,7 @@
 					</Component>
 				</Directory>
 				</Directory>
-				<!-- Architecture-specific component code and bitness; see var.wxi. -->
+				<!-- Architecture-specific component code and bitness; see identity.wxi. -->
 				<Component Id='APPLICATION' Guid='$(var.ApplicationComponentGuid)' Bitness='$(var.ComponentBitness)'>
 					<CreateFolder Directory='INSTALLFOLDER' />
 					<File Id='shell.exe' Checksum='yes' Name='shell.exe' KeyPath='yes' Source='$(var.arch_bin)\shell.exe' />
@@ -189,7 +190,7 @@
 			</Directory>
 		</StandardDirectory>
 		<StandardDirectory Id='ProgramMenuFolder'>
-			<Component Id='StartMenuShortcut' Guid='{41AFAF39-4B3F-4D1E-800E-DD3231C004C9}'>
+			<Component Id='StartMenuShortcut' Guid='$(var.StartMenuShortcutComponentGuid)'>
 				<Shortcut Id='StartMenuShortcut' Directory='ProgramMenuFolder' Description='$(var.Info)'
 					WorkingDirectory='INSTALLFOLDER' Name='$(var.FullName)' Target='[!shell.exe]' />
 				<RegistryValue Key='Software\Nilesoft\Shell' Root='HKCU' Type='string' Value='' KeyPath='yes' />

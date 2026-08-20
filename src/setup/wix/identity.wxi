@@ -1,5 +1,13 @@
+<!--
+	Stable package identity. Nothing generated belongs in this file.
+
+	The version tool (src\tools\version\version.ps1) used to copy a three-line
+	template over this file, which deleted every GUID below and left setup.wxs
+	referencing variables that no longer existed. Generated version data now
+	lives in version.wxi, the only WiX file that tool writes; it refuses to run
+	if this one changes underneath it.
+-->
 <Include xmlns='http://wixtoolset.org/schemas/v4/wxs'>
-<?define Version = '1.9.20' ?>
 <?if $(sys.BUILDARCH) = x64 ?>
 	<?define ProductCode = '{7BCA6512-254B-456F-8F08-AAD7508BE640}' ?>
 <?elseif $(sys.BUILDARCH) = arm64 ?>
@@ -38,9 +46,14 @@
 	common one - replaces nothing it does not have to. x86 and ARM64 get their
 	own.
 
-	StartMenuShortcut is deliberately not in this list: its shortcut and its
-	HKCU value have the same name and location in every package, which is
-	exactly when one component code is correct.
+	StartMenuShortcut used to be excluded from this list, on the grounds that
+	its shortcut and its HKCU value have the same name and location in every
+	package. Location is not the only trigger. "Recompiling a 32-bit component
+	into a 64-bit component" is listed on its own, and the emitted Component
+	table shows that is exactly what this is: one ComponentId, Attributes 4 in
+	the x86 package and 260 - the same registry key path, plus the 64-bit bit -
+	in the other two. x64 keeps the historical code for the same reason as
+	above; x86 and ARM64 get their own.
 -->
 <?if $(sys.BUILDARCH) = x64 ?>
 	<?define ComponentBitness = 'always64' ?>
@@ -51,6 +64,7 @@
 	<?define Lang2ComponentGuid       = '{BC1A31D1-B1C3-4D76-8A90-BDB8897A2E80}' ?>
 	<?define CleanupComponentGuid     = '{838501CD-485B-4587-9195-6CFB416202B9}' ?>
 	<?define DisplayIconComponentGuid = '{69292D86-8518-4C68-867C-192767154C54}' ?>
+	<?define StartMenuShortcutComponentGuid = '{41AFAF39-4B3F-4D1E-800E-DD3231C004C9}' ?>
 <?elseif $(sys.BUILDARCH) = arm64 ?>
 	<?define ComponentBitness = 'always64' ?>
 	<?define ApplicationComponentGuid = '{8FA5A26E-3122-49E8-8EFA-3533DB4E4C55}' ?>
@@ -60,6 +74,7 @@
 	<?define Lang2ComponentGuid       = '{2A7E1676-779A-4A6F-9330-2B20BFD7A4BF}' ?>
 	<?define CleanupComponentGuid     = '{BDD09075-091E-4D8C-AC16-CFA94B31CB7F}' ?>
 	<?define DisplayIconComponentGuid = '{C78A1884-3BB2-4A60-943F-3DCFEA97F243}' ?>
+	<?define StartMenuShortcutComponentGuid = '{CFA3E8DD-0F09-4E35-BF3E-9F7491E51887}' ?>
 <?else ?>
 	<?define ComponentBitness = 'always32' ?>
 	<?define ApplicationComponentGuid = '{B4125EFB-BFA8-456A-9928-46761D87655C}' ?>
@@ -69,5 +84,6 @@
 	<?define Lang2ComponentGuid       = '{5277770C-D4AF-4918-AB46-BBDBE1C648D5}' ?>
 	<?define CleanupComponentGuid     = '{CB582199-5CBD-4ADB-8D42-C6041F459A73}' ?>
 	<?define DisplayIconComponentGuid = '{7B93EFBB-D3D8-4418-BFC5-FE3BEB3F0E99}' ?>
+	<?define StartMenuShortcutComponentGuid = '{2530D345-4238-418B-8E41-7C4E1AE7DB3F}' ?>
 <?endif ?>
 </Include>
