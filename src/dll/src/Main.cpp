@@ -1514,9 +1514,10 @@ HRESULT Register(bool reg)
 
 		if(reg)
 		{
-			string dir = Path::Parent(path).move();
-			if(!dir.empty())
-				Security::Permission::SetFile(dir.c_str());
+			// The install-directory ACL widening that used to be here is gone;
+			// see the matching comment in exe/src/Main.cpp. It granted Users
+			// GENERIC_ALL on Program Files and only failed to do so because it
+			// could not open a directory handle.
 			//_log.reset();
 			//IO::Path::Delete(_log.path());
 		}

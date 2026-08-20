@@ -95,7 +95,7 @@ string loadstring(UINT id, HMODULE hmodule = nullptr)
 }
 
 
-BOOL EnablePrivilege()
+BOOL EnablePrivilege(const wchar_t *name)
 {
 	BOOL result = FALSE;
 	HANDLE hToken {};
@@ -103,7 +103,7 @@ BOOL EnablePrivilege()
 	{
 		LUID luid {};
 		TOKEN_PRIVILEGES tp {};
-		if(::LookupPrivilegeValueW(nullptr, SE_TAKE_OWNERSHIP_NAME, &luid))
+		if(::LookupPrivilegeValueW(nullptr, name, &luid))
 		{
 			tp.PrivilegeCount = 1;
 			tp.Privileges[0].Luid = luid;
@@ -115,76 +115,154 @@ BOOL EnablePrivilege()
 	return result == TRUE && (::GetLastError() == ERROR_SUCCESS);
 }
 
-bool SetPermissions(HKEY root, const wchar_t *subkey, REGSAM reg_view = KEY_WOW64_64KEY)
+/*
+	Borrows write access to one protected key, and gives it back.
+
+	{86ca1aa0-...} is a Windows key. On a stock machine its owner is
+	NT SERVICE\TrustedInstaller and Administrators hold ReadKey, so writing
+	TreatAs under it really does fail with ERROR_ACCESS_DENIED for an elevated
+	administrator - the fallback is not dead code.
+
+	What the fallback used to do was take ownership and then grant GENERIC_ALL,
+	CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE, to Administrators, SYSTEM *and
+	BUILTIN\Users*, and leave it that way permanently. That is a machine-wide
+	hole, not a registration step: the key it opens up is the one that decides
+	which handler owns the Windows 11 Explorer context menu, so any user on the
+	machine could afterwards point InprocServer32 or TreatAs at a DLL of their
+	choosing and have Explorer load it - for every other user, administrators
+	included. It was still in place on the machine this was written on, months
+	after whatever install created it: BUILTIN\Users, FullControl, inherited by
+	everything underneath.
+
+	So: never Users. Only Administrators, only the two rights the one write
+	needs, no inheritance, and the previous owner and DACL go back afterwards
+	whether the write succeeded or not.
+
+	  https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
+	  https://learn.microsoft.com/en-us/windows/win32/secauthz/privilege-constants
+*/
+class BorrowedKeyAccess
 {
-	bool res = false;
-	if(!EnablePrivilege())
-		return false;
+public:
+	BorrowedKeyAccess() = default;
+	BorrowedKeyAccess(const BorrowedKeyAccess &) = delete;
+	BorrowedKeyAccess &operator=(const BorrowedKeyAccess &) = delete;
+	~BorrowedKeyAccess() { restore(); }
 
-	auto_regkey Key;
-
-	if(ERROR_SUCCESS != Key.open(root, subkey, 0, WRITE_OWNER | reg_view, Key))
-		return false;
-
-	PACL pOldDACL{}, pNewDACL{};
-	std::vector<PSID> sid;
-	std::vector<EXPLICIT_ACCESS> ea;
-	SID_IDENTIFIER_AUTHORITY sia{ SECURITY_NT_AUTHORITY };
-	PSID pSid{};
-
-	if(!::AllocateAndInitializeSid(&sia, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &pSid))
-	   return false;
-
-	sid.push_back(pSid);
-
-	if(ERROR_SUCCESS == ::SetSecurityInfo(Key.get(), SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION, pSid, nullptr, nullptr, nullptr))
+	bool acquire(HKEY root, const wchar_t *subkey, REGSAM reg_view = KEY_WOW64_64KEY)
 	{
-		Key.close();
-
-		if(ERROR_SUCCESS != Key.open(root, subkey, 0, WRITE_DAC| reg_view, Key))
+		// Taking ownership needs SeTakeOwnership; handing it back to whoever had
+		// it - TrustedInstaller, a SID we are not a member of - needs SeRestore.
+		// Without the second one this could take ownership and never return it,
+		// which is the trap the old code fell into.
+		if(!EnablePrivilege(SE_TAKE_OWNERSHIP_NAME) || !EnablePrivilege(SE_RESTORE_NAME))
 			return false;
 
-		PSECURITY_DESCRIPTOR sd{};
+		if(ERROR_SUCCESS != ::RegOpenKeyExW(root, subkey, 0,
+											READ_CONTROL | WRITE_OWNER | reg_view, &_key))
+			return false;
 
-		if(ERROR_SUCCESS == ::GetSecurityInfo(Key.get(), SE_REGISTRY_KEY,
-											  DACL_SECURITY_INFORMATION, nullptr, nullptr, &pOldDACL, nullptr, &sd))
+		// Snapshot first. Everything below is undone from this.
+		if(ERROR_SUCCESS != ::GetSecurityInfo(_key, SE_REGISTRY_KEY,
+											  OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+											  &_saved_owner, nullptr, &_saved_dacl, nullptr, &_saved))
+			return false;
+
+		PSID admins {};
+		SID_IDENTIFIER_AUTHORITY sia { SECURITY_NT_AUTHORITY };
+		if(!::AllocateAndInitializeSid(&sia, 2, SECURITY_BUILTIN_DOMAIN_RID,
+									   DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &admins))
+			return false;
+
+		if(ERROR_SUCCESS != ::SetSecurityInfo(_key, SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION,
+											  admins, nullptr, nullptr, nullptr))
 		{
+			::FreeSid(admins);
+			return false;
+		}
+		_owner_taken = true;
 
-			if(::AllocateAndInitializeSid(&sia, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &pSid))
-				sid.push_back(pSid);
+		// Reopen now that we own it: the handle above was granted WRITE_OWNER
+		// only, and the DACL edit needs WRITE_DAC. Ownership carries READ_CONTROL
+		// and WRITE_DAC implicitly, and WRITE_OWNER is held by privilege, so this
+		// one handle can also put everything back.
+		::RegCloseKey(_key);
+		_key = nullptr;
 
-			if(::AllocateAndInitializeSid(&sia, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS, 0, 0, 0, 0, 0, 0, &pSid))
-				sid.push_back(pSid);
+		if(ERROR_SUCCESS != ::RegOpenKeyExW(root, subkey, 0,
+											READ_CONTROL | WRITE_DAC | WRITE_OWNER | KEY_SET_VALUE
+											| KEY_CREATE_SUB_KEY | reg_view, &_key))
+		{
+			::FreeSid(admins);
+			return false;
+		}
 
-			ea.resize(sid.size());
+		// Exactly what the one write needs, to one principal, inherited by
+		// nothing.
+		EXPLICIT_ACCESSW ea {};
+		ea.grfAccessMode = GRANT_ACCESS;
+		ea.grfAccessPermissions = KEY_SET_VALUE | KEY_CREATE_SUB_KEY;
+		ea.grfInheritance = NO_INHERITANCE;
+		ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+		ea.Trustee.TrusteeType = TRUSTEE_IS_GROUP;
+		ea.Trustee.ptstrName = reinterpret_cast<wchar_t *>(admins);
 
-			for(size_t i = 0; i < sid.size(); i++)
+		PACL widened {};
+		bool ok = false;
+		if(ERROR_SUCCESS == ::SetEntriesInAclW(1, &ea, _saved_dacl, &widened))
+		{
+			ok = ERROR_SUCCESS == ::SetSecurityInfo(_key, SE_REGISTRY_KEY,
+													DACL_SECURITY_INFORMATION,
+													nullptr, nullptr, widened, nullptr);
+			_dacl_changed = ok;
+			::LocalFree(widened);
+		}
+
+		::FreeSid(admins);
+		return ok;
+	}
+
+	// Puts the DACL back before the owner: restoring the owner first can cost us
+	// the implicit WRITE_DAC that the DACL restore depends on.
+	void restore()
+	{
+		if(_key)
+		{
+			if(_dacl_changed)
 			{
-				::ZeroMemory(&ea[i], sizeof(EXPLICIT_ACCESS));
-				ea[i].grfAccessMode = GRANT_ACCESS;
-				ea[i].grfAccessPermissions = GENERIC_ALL;
-				ea[i].grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
-				ea[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
-				ea[i].Trustee.TrusteeType = TRUSTEE_IS_GROUP;
-				ea[i].Trustee.ptstrName = reinterpret_cast<wchar_t*>(sid[i]);
+				::SetSecurityInfo(_key, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION,
+								  nullptr, nullptr, _saved_dacl, nullptr);
+				_dacl_changed = false;
 			}
 
-			if(ERROR_SUCCESS == ::SetEntriesInAclW(static_cast<ULONG>(ea.size()), ea.data(), pOldDACL, &pNewDACL))
+			if(_owner_taken && _saved_owner)
 			{
-				res = ERROR_SUCCESS == ::SetSecurityInfo(Key.get(), SE_REGISTRY_KEY,
-														 DACL_SECURITY_INFORMATION, nullptr, nullptr, pNewDACL, nullptr);
-				::LocalFree(pNewDACL);
+				::SetSecurityInfo(_key, SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION,
+								  _saved_owner, nullptr, nullptr, nullptr);
+				_owner_taken = false;
 			}
-			::LocalFree(sd);
+
+			::RegCloseKey(_key);
+			_key = nullptr;
+		}
+
+		if(_saved)
+		{
+			::LocalFree(_saved);
+			_saved = nullptr;
+			_saved_owner = nullptr;
+			_saved_dacl = nullptr;
 		}
 	}
 
-	for(auto &s : sid)
-		::FreeSid(s);
-
-	return res;
-}
-
+private:
+	HKEY _key = nullptr;
+	PSECURITY_DESCRIPTOR _saved = nullptr;   // one allocation backing both below
+	PSID _saved_owner = nullptr;
+	PACL _saved_dacl = nullptr;
+	bool _owner_taken = false;
+	bool _dacl_changed = false;
+};
 //RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND
 void disable_modern(bool _register)
 {
@@ -226,8 +304,18 @@ void disable_modern(bool _register)
 	//E_ACCESSDENIED, OLE_E_NOTRUNNING, WS_E_ENDPOINT_ACCESS_DENIED
 	if(setval(_register) == ERROR_ACCESS_DENIED)
 	{
-		if(SetPermissions(HKEY_CLASSES_ROOT, k.c_str()))
+		// Machine registration writes to HKLM explicitly rather than through the
+		// merged HKCR view, which is documented as a compatibility view and can
+		// resolve per-user for the calling context.
+		//
+		//   https://learn.microsoft.com/en-us/windows/win32/sysinfo/hkey-classes-root-key
+		BorrowedKeyAccess borrowed;
+		if(borrowed.acquire(HKEY_LOCAL_MACHINE,
+						   (L"SOFTWARE\\Classes\\" + std::wstring(k.c_str())).c_str()))
+		{
 			setval(_register);
+		}
+		// borrowed restores the owner and DACL here, whether that worked or not.
 	}
 	/*
 	IID treatAs{};
@@ -260,11 +348,13 @@ bool Registration(REGOP reg)
 
 		if(reg.REGISTER)
 		{
-			if(!dir.empty())
-			{
-				Security::Permission::SetFile(dir.c_str());
-			}
-
+			// Registration used to widen the ACL on the whole install directory
+			// here, granting BUILTIN\Users GENERIC_ALL with inheritance. It has
+			// never actually done anything - Permission::SetFile opens with
+			// CreateFileW and no FILE_FLAG_BACKUP_SEMANTICS, which cannot open a
+			// directory at all - and "fixing" it would hand every user on the
+			// machine write access to the binaries inside Program Files. The
+			// call is gone rather than repaired.
 			_log->close();
 			//logger->reset();
 			//IO::Path::Delete(logger->path());
