@@ -2,19 +2,24 @@
 <?include var.wxi ?>
 
 <?define UpgradeCode = '{7BCA6512-254B-456F-8F08-AAD7508BEE00}' ?>
-<?define Platform = '$(sys.BUILDARCH)' ?>
 <?define Name = 'Shell' ?>
 <?define Manufacturer = 'Nilesoft' ?>
 <?define FullName = '$(var.Manufacturer) $(var.Name)' ?>
 <?define Info = 'Powerful context menu manager for Windows File Explorer' ?>
 <?define bin = '..\..\bin' ?>
-<?define arch_bin = '..\..\bin\$(var.Platform)' ?>
+<!--
+	sys.BUILDARCH rather than a local Platform variable: MSBuild already passes
+	Platform, spelled with the solution's casing ('ARM64'), so redefining it here
+	from sys.BUILDARCH ('arm64') is a WIX1118 collision. var.wxi keys off
+	sys.BUILDARCH too, so everything now reads the same value.
+-->
+<?define arch_bin = '..\..\bin\$(sys.BUILDARCH)' ?>
 <?define PlatformProgramFilesFolder = 'ProgramFiles6432Folder' ?>
 
 <!--
-<?if $(var.Platform) = x64 ?>
+<?if $(sys.BUILDARCH) = x64 ?>
 	<?define PlatformProgramFilesFolder = 'ProgramFiles64Folder' ?>
-<?elseif $(var.Platform) = arm64 ?>
+<?elseif $(sys.BUILDARCH) = arm64 ?>
 	<?define PlatformProgramFilesFolder = 'ProgramFiles64Folder' ?>
 <?else ?>
 	<?define PlatformProgramFilesFolder = 'ProgramFilesFolder' ?>
@@ -36,7 +41,7 @@
 
 		<SummaryInformation
 			Comments='$(var.FullName)'
-			Description='$(var.FullName) $(var.Version) $(var.Platform) Setup'
+			Description='$(var.FullName) $(var.Version) $(sys.BUILDARCH) Setup'
 			Keywords='context-menu, right-click, file-explorer' />
 
 		<Media Id='1' EmbedCab='yes' Cabinet='main.cab' CompressionLevel='high' />
