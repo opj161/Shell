@@ -226,8 +226,14 @@ namespace Nilesoft
 				bool load_as_dynamic = false;
 				if(!hModule)
 				{
-					hModule = ::LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-					load_as_dynamic = true;
+					// Every name here is a Windows system module; LoadSafe keeps the
+					// current directory out of the search. Resource-only mapping means
+					// no code runs, but the strings would still be the planted file's.
+					hModule = DLL::LoadSafe(dll, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+
+					// Only when there is something to free: FreeLibrary(nullptr) is
+					// outside its specification.
+					load_as_dynamic = (hModule != nullptr);
 				}
 
 				if(hModule)
@@ -315,7 +321,7 @@ namespace Nilesoft
 				HMODULE lib{}, hModule = ::GetModuleHandleW(dll);
 				if(!hModule)
 				{
-					lib = ::LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+					lib = DLL::LoadSafe(dll, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
 					hModule = lib;
 				}
 
@@ -334,7 +340,7 @@ namespace Nilesoft
 				HMODULE lib{}, hModule = ::GetModuleHandleW(dll);
 				if(!hModule)
 				{
-					lib = ::LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+					lib = DLL::LoadSafe(dll, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
 					hModule = lib;
 				}
 

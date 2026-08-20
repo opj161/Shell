@@ -18,6 +18,16 @@ namespace Nilesoft
 			context.Cache = nullptr;
 			context.Selections = nullptr;
 
+			// The line above allows for there being no initializer, and everything
+			// below dereferences this without asking again. Leaving with no imports
+			// is a supported state - Load() reads it as an empty configuration - and
+			// it beats faulting inside explorer.exe.
+			if(!context.Application)
+			{
+				_log.warning(L"no application context; configuration not loaded.");
+				return;
+			}
+
 			string cfg;
 			if(RegistryConfig::get(nullptr, L"config", cfg) && !cfg.empty())
 			{

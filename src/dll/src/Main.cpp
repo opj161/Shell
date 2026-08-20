@@ -479,11 +479,21 @@ private:
 		if(!elem.name || !elem.type || !elem.id)
 			return false;
 
-		if(!::lstrcmpiW(elem.id, L"TaskbarFrame"))
-			return !::lstrcmpiW(elem.name, L"") && !::lstrcmpiW(elem.type, L"Taskbar.TaskbarFrameAutomationPeer");
+		// string::Equals is ordinal; lstrcmpiW, which this used, case-folds with
+		// the user's locale. These are UI Automation identifiers and class names,
+		// not text - matching them linguistically "yields unexpected results in
+		// non-English locales", and the taskbar failing to be recognised there
+		// means the menu simply does not appear.
+		auto same = [](const wchar_t *a, const wchar_t *b)
+		{
+			return string::Equals(a, b, true);
+		};
 
-		if(request.secondary && !::lstrcmpiW(elem.id, L"SystemTrayIcon"))
-			return !::lstrcmpiW(elem.type, L"SystemTray.OmniButton");
+		if(same(elem.id, L"TaskbarFrame"))
+			return same(elem.name, L"") && same(elem.type, L"Taskbar.TaskbarFrameAutomationPeer");
+
+		if(request.secondary && same(elem.id, L"SystemTrayIcon"))
+			return same(elem.type, L"SystemTray.OmniButton");
 
 		return false;
 	}
