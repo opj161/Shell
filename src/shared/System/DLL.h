@@ -86,6 +86,50 @@ namespace Nilesoft
 			return ::LoadLibraryExW(path, nullptr, flags);
 		}
 
+		/*
+			The same guarantee, for Windows binaries that are not in System32.
+
+			LoadSafe refuses the search path, which is the point of it - but that
+			leaves no way to reach the handful of Windows files kept elsewhere.
+			regedit.exe lives in the Windows directory and powershell.exe under
+			System32\WindowsPowerShell\v1.0, so a bare name finds neither, and
+			both went from loading to ERROR_FILE_NOT_FOUND when the search-path
+			hardening landed.
+
+			`relative` is resolved against the Windows directory, so what reaches
+			LoadLibraryEx is still a fully qualified path that was never searched
+			for - Microsoft's first listed mitigation rather than its second.
+
+			  https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-security
+		*/
+		static HMODULE LoadSafeWindows(const wchar_t *relative, DWORD flags = 0)
+		{
+			if(!relative || !*relative)
+				return nullptr;
+
+			wchar_t path[MAX_PATH]{};
+			auto length = ::GetWindowsDirectoryW(path, ARRAYSIZE(path));
+			if(length == 0 || length >= ARRAYSIZE(path))
+				return nullptr;
+
+			// Documented to omit the trailing separator except at a drive root.
+			if(path[length - 1] != L'\\')
+			{
+				if(length + 1 >= ARRAYSIZE(path))
+					return nullptr;
+				path[length++] = L'\\';
+			}
+
+			for(auto p = relative; *p; ++p)
+			{
+				if(length + 1 >= ARRAYSIZE(path))
+					return nullptr;
+				path[length++] = *p;
+			}
+
+			return ::LoadLibraryExW(path, nullptr, flags);
+		}
+
 		bool load(bool load_as_data = false)
 		{
 			if(m_handle)

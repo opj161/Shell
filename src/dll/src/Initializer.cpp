@@ -229,7 +229,24 @@ namespace Nilesoft
 					// Every name here is a Windows system module; LoadSafe keeps the
 					// current directory out of the search. Resource-only mapping means
 					// no code runs, but the strings would still be the planted file's.
-					hModule = DLL::LoadSafe(dll, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+					//
+					// Not all of them are in System32, which the search-path hardening
+					// missed: regedit.exe is in the Windows directory and
+					// powershell.exe under System32\WindowsPowerShell\v1.0. Both
+					// silently stopped loading, and every item whose localised title
+					// comes from them fell back to the English string compiled in here
+					// - "Merge" on .reg files, "Run with PowerShell" on .ps1. Still no
+					// search path either way: LoadSafeWindows qualifies the path too.
+					const DWORD flags = LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+
+					if(::wcspbrk(dll, L"\\/"))
+						hModule = DLL::LoadSafeWindows(dll, flags);
+					else
+					{
+						hModule = DLL::LoadSafe(dll, flags);
+						if(!hModule)
+							hModule = DLL::LoadSafeWindows(dll, flags);
+					}
 
 					// Only when there is something to free: FreeLibrary(nullptr) is
 					// outside its specification.
@@ -697,7 +714,8 @@ namespace Nilesoft
 			ldstr(L"display.dll", { {IDENT_ID_DISPLAY_SETTINGS, 4} });
 			ldstr(L"themecpl.dll", { {IDENT_ID_PERSONALIZE, 10} });
 			ldstr(L"regedit.exe", { {IDENT_ID_MERGE, 310, {L'\uE142'} } });
-			ldstr(L"powershell.exe", { {IDENT_ID_RUN_WITH_POWERSHELL, 108} });
+			ldstr(L"System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+				  { {IDENT_ID_RUN_WITH_POWERSHELL, 108} });
 
 			ldstr(L"stobject.dll", {
 				{IDENT_ID_SET_AS_DESKTOP_BACKGROUND, 417},

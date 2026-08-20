@@ -93,6 +93,7 @@
     <ClCompile Include="test_path_bounds.cpp" />
     <ClCompile Include="test_comptr.cpp" />
     <ClCompile Include="test_window_text.cpp" />
+    <ClCompile Include="test_dll_load.cpp" />
     <ClCompile Include="..\dll\src\Packages.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />
   </ItemGroup>
