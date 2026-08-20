@@ -88,11 +88,12 @@ namespace Nilesoft
 				*/
 				auto search = [](const wchar_t *name, const wchar_t *ext, string &out) -> uint32_t
 				{
-					auto len = ::SearchPathW(nullptr, name, ext, MAX_PATH, out.buffer(MAX_PATH), nullptr);
-					if(len > MAX_PATH)
-						len = ::SearchPathW(nullptr, name, ext, len, out.buffer(len), nullptr);
-					out.release(len);
-					return len;
+					out = IO::Contracts::fill_then_resize(
+						[&](wchar_t *buffer, DWORD capacity)
+						{
+							return ::SearchPathW(nullptr, name, ext, capacity, buffer, nullptr);
+						});
+					return static_cast<uint32_t>(out.length());
 				};
 
 				string found;
