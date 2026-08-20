@@ -3,6 +3,7 @@
 #include "Include/ContextMenu.h"
 #include "Include/stb_image_write.h"
 #include "Include/Diagnostics/MenuPerf.h"
+#include "RegistryConfig.h"
 
 using namespace Nilesoft::Diagnostics;
 #include <mutex>
@@ -998,7 +999,10 @@ namespace Nilesoft
 					auto m_sub = &_menus[mii->hSubMenu];
 					m_sub->handle = mii->hSubMenu;
 					m_sub->destory = true;
-					
+
+					// Opening this popup is what materialises the host submenu behind it.
+					m_sub->native_source = item;
+
 					m_sub->id = mii->id;
 					m_sub->hash = mii->hash;
 
@@ -1110,12 +1114,18 @@ namespace Nilesoft
 			{
 				menu->dynamics = _cache->dynamic.items;
 				menu->std_items = &__system_menu_tree->items;
+				menu->native_source = __system_menu_tree;
 			}
 			else
 			{
 				owner = menu->owner;
 			}
-			
+
+			// Just-in-time: the host popup behind this one is populated now, not
+			// when the root menu was built.
+			if(menu->native_source)
+				materialize_native_children(menu->native_source);
+
 			prepare_system_items(_system_items, menu);
 			
 			std::vector<MenuItemInfo *> bottom_items;
@@ -4426,7 +4436,7 @@ namespace Nilesoft
 						if(si->invoke && 0 == _context.parse_invoke(si->invoke))
 						{
 							if(!removed && item->is_menu())
-								build_main_system_menuitems(item);
+								apply_system_modify_rules(item, false);
 							break;
 						}
 
@@ -4434,7 +4444,7 @@ namespace Nilesoft
 
 					skip:
 						if(item->is_menu())
-							build_main_system_menuitems(item);
+							apply_system_modify_rules(item, false);
 					}
 					catch(std::exception const& ex)
 					{
@@ -4444,10 +4454,46 @@ namespace Nilesoft
 			}
 		}
 
-		void ContextMenu::build_system_menuitems(HMENU hMenu, menuitem_t *menu, bool is_root)
-		{
-			::SendMessageW(hwnd.owner, WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(hMenu), 0xFFFFFFFF);
+		/*
+			Tells the host to populate one of its own popups, at most once.
 
+			WM_INITMENUPOPUP is documented as the just-in-time notification for a
+			drop-down that is about to become active, with the low word of lParam
+			holding the position of the item that opens it and the high word set
+			only for a window menu:
+			https://learn.microsoft.com/en-us/windows/win32/menurc/wm-initmenupopup
+
+			The message runs arbitrary host and third-party extension code
+			synchronously, so no Shell lock may be held across it and the target is
+			published in _native_notify first: WindowSubclassProc has to let this
+			one through to the host window procedure rather than mistake a host
+			menu for one of Shell's own popups.
+		*/
+		bool ContextMenu::initialize_native_popup(NativePopupState &state)
+		{
+			auto previous = _native_notify;
+			_native_notify = state.handle;
+
+			auto sent = Nilesoft::Shell::initialize_native_popup(state,
+				[this](HMENU hMenu, LPARAM lParam)
+				{
+					Diagnostics::MenuPerfScope perf(L"native.popup_init",
+													reinterpret_cast<uint64_t>(hMenu),
+													Diagnostics::MENUPERF_WARN_MS);
+					::SendMessageW(hwnd.owner, WM_INITMENUPOPUP,
+								   reinterpret_cast<WPARAM>(hMenu), lParam);
+					perf.annotate(static_cast<long>(::GetMenuItemCount(hMenu)));
+				});
+
+			_native_notify = previous;
+			return sent;
+		}
+
+		// Materialises the children of one already-initialised host popup. Records
+		// each child submenu handle but does not descend into it: that level is
+		// initialised when the user actually opens it.
+		void ContextMenu::enumerate_native_menu_level(HMENU hMenu, menuitem_t *menu, bool is_root)
+		{
 			auto itmes_count = ::GetMenuItemCount(hMenu);
 
 			menu->items.reserve(itmes_count);
@@ -4551,7 +4597,17 @@ namespace Nilesoft
 						}
 
 						if(mii.hSubMenu)
-							build_system_menuitems(mii.hSubMenu, itemPtr, false);
+						{
+							itemPtr->native_popup.handle = mii.hSubMenu;
+							itemPtr->native_popup.parent_position = static_cast<UINT>(i);
+
+							if(_native_policy == NativeTreePolicy::LegacyEager)
+							{
+								initialize_native_popup(itemPtr->native_popup);
+								enumerate_native_menu_level(mii.hSubMenu, itemPtr, false);
+								itemPtr->native_popup.materialized = true;
+							}
+						}
 					}
 					
 					if(found_duplicate != 2)
@@ -4579,6 +4635,70 @@ namespace Nilesoft
 					}
 				}
 			}
+		}
+
+		// Root entry point. Only the root level is initialised and enumerated here;
+		// descendants wait for the user to open them.
+		void ContextMenu::build_system_menuitems(HMENU hMenu, menuitem_t *menu, bool is_root)
+		{
+			if(!hMenu || !menu)
+				return;
+
+			menu->native_popup.handle = hMenu;
+			menu->native_popup.parent_position = 0;
+
+			initialize_native_popup(menu->native_popup);
+			enumerate_native_menu_level(hMenu, menu, is_root);
+			menu->native_popup.materialized = true;
+		}
+
+		/*
+			Expands one host submenu the first time its Shell counterpart is opened.
+
+			Deliberately one level deep: each child that owns a submenu of its own
+			keeps its own state and is expanded only if the user goes there too.
+		*/
+		bool ContextMenu::materialize_native_children(menuitem_t *node)
+		{
+			if(!node || !node->native_popup.handle)
+				return false;
+
+			auto &state = node->native_popup;
+
+			if(state.materialized)
+				return true;
+
+			Diagnostics::MenuPerfScope perf(L"native.materialize",
+											reinterpret_cast<uint64_t>(state.handle));
+
+			initialize_native_popup(state);
+			enumerate_native_menu_level(state.handle, node, false);
+			state.materialized = true;
+
+			perf.annotate(static_cast<long>(node->items.size()));
+
+			apply_system_modify_rules(node, false);
+			return true;
+		}
+
+		// Applies the configured modify() rules to one level, exactly once. The
+		// pre-lazy code reached a descendant once per matching rule, which pushed
+		// the same NativeMenu onto that node's native_items repeatedly.
+		void ContextMenu::apply_system_modify_rules(menuitem_t *node, bool is_root)
+		{
+			if(!node || node->native_popup.rules_applied)
+				return;
+
+			// Nothing to apply to yet. A node that owns a host popup it has not
+			// expanded has no children to match against, and marking it done here
+			// would leave that level permanently unmodified once it is opened.
+			if(node->native_popup.handle && !node->native_popup.materialized)
+				return;
+
+			node->native_popup.rules_applied = true;
+
+			if(_settings.modify_items.enabled)
+				build_main_system_menuitems(node, is_root);
 		}
 
 		bool ContextMenu::Initialize()
@@ -4731,6 +4851,13 @@ namespace Nilesoft
 				__system_menu_tree->type = 10;
 				__map_system_menu[0] = __system_menu_tree;
 
+				// Undocumented diagnostic escape hatch. A configuration that moves
+				// an item out of a host submenu the user has not opened yet cannot
+				// see that item under the lazy policy; this restores the
+				// pre-1.9.20 whole-tree walk while such a case is investigated.
+				if(int eager = 0; RegistryConfig::get(nullptr, L"modify.native_eager", eager) && eager == 1)
+					_native_policy = NativeTreePolicy::LegacyEager;
+
 				if(0 == ::GetPropW(hwnd.owner, UxSubclass))
 				{
 					Diagnostics::MenuPerfScope perf(L"native.root_scan");
@@ -4738,10 +4865,9 @@ namespace Nilesoft
 					perf.annotate(static_cast<long>(__system_menu_tree->items.size()));
 				}
 
-				if(_settings.modify_items.enabled)
 				{
 					Diagnostics::MenuPerfScope perf(L"native.modify_rules");
-					build_main_system_menuitems(__system_menu_tree, true);
+					apply_system_modify_rules(__system_menu_tree, true);
 				}
 
 				return true;
@@ -6607,6 +6733,11 @@ namespace Nilesoft
 						auto lp = HIWORD(lParam);
 					//	if(lParam != 0xFFFFFFFF)
 					//		_log.info(L"WM_INITMENUPOPUP %d %d %d", HIWORD(lParam), LOWORD(lParam), lParam);
+						// Shell's own just-in-time notification to the host: it must
+						// reach the host window procedure, not the custom-menu builder.
+						if(ctx->is_native_notify_inflight(reinterpret_cast<HMENU>(wParam)))
+							break;
+
 						if(lp == FALSE)
 						{
 							//MENUINFO info{0};

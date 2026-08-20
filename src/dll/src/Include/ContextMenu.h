@@ -12,6 +12,7 @@ constexpr auto UxSubclass = L"UxSubclass";
 constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 
 #include "Include/Theme.h"
+#include "Include/NativeMenuLazy.h"
 #include <Library/PlutoVGWrap.h>
 #include "Include/Tip.h"
 #include <stack>
@@ -100,6 +101,10 @@ namespace Nilesoft
 			std::vector<menuitem_t *> items;
 			bool is_toplevel = false;
 			bool native_ownerdraw = false;
+
+			// Set for the root node and for every node that owns a host submenu.
+			// Empty `items` on a node with a handle means "not opened yet".
+			NativePopupState native_popup;
 			~menuitem_t()
 			{
 				for(auto item : items)
@@ -359,6 +364,10 @@ plutovg_move_to(pluto, start.x, start.y);
 				std::vector<NativeMenu *> dynamics;
 
 				std::vector<menuitem_t *> *std_items = nullptr;
+
+				// The native node this custom popup was built from, so opening the
+				// popup can materialise that one level of the host menu first.
+				menuitem_t *native_source = nullptr;
 
 				NativeMenu *parent{};
 				//bool dynamic{};
@@ -698,6 +707,9 @@ plutovg_move_to(pluto, start.x, start.y);
 			GC<MenuItemInfo> _gc;
 			bool _uninitialized = false;
 
+			NativeTreePolicy _native_policy = NativeTreePolicy::Lazy;
+			HMENU _native_notify = nullptr;
+
 			menuitem_t *__system_menu_tree = nullptr;
 			std::unordered_map<uint32_t, menuitem_t *> __map_system_menu;
 
@@ -737,6 +749,20 @@ plutovg_move_to(pluto, start.x, start.y);
 			int InvokeCommand(int id);	
 			void build_system_menuitems(HMENU hMenu, menuitem_t *menu, bool is_root = false);
 			void build_main_system_menuitems(menuitem_t *menu, bool is_root = false);
+
+			// Native menu tree, one level at a time.
+			bool initialize_native_popup(NativePopupState &state);
+			void enumerate_native_menu_level(HMENU native_menu, menuitem_t *target, bool is_root);
+			bool materialize_native_children(menuitem_t *node);
+			void apply_system_modify_rules(menuitem_t *node, bool is_root);
+
+			// True while Shell is sending its own WM_INITMENUPOPUP to the host for
+			// this menu, so the subclass hook lets it through to the host window
+			// procedure instead of treating it as one of Shell's own popups.
+			bool is_native_notify_inflight(HMENU hMenu) const
+			{
+				return hMenu && (hMenu == _native_notify || hMenu == _hMenu_original);
+			}
 
 
 			void backup_native_items(HMENU hMenu, uint32_t id, bool check = false);
