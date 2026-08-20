@@ -69,6 +69,7 @@
     <ClInclude Include="..\shared\System\Text\StringCompare.h" />
     <ClInclude Include="..\dll\src\Include\BitmapCache.h" />
     <ClInclude Include="..\dll\src\Include\NativeMenuLazy.h" />
+    <ClInclude Include="..\dll\src\Include\Packages.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
@@ -79,6 +80,8 @@
     <ClCompile Include="test_threadsafety.cpp" />
     <ClCompile Include="test_parser.cpp" />
     <ClCompile Include="test_native_menu_lazy.cpp" />
+    <ClCompile Include="test_packages.cpp" />
+    <ClCompile Include="..\dll\src\Packages.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

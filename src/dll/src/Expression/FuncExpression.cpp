@@ -204,6 +204,8 @@ namespace Nilesoft
 				auto packages = &cache->Packages;
 				if(Id[1] == IDENT_LIST)
 				{
+					// Identities only. Listing packages does not resolve a single
+					// localized display name.
 					auto list = packages->all();
 					auto array = new Object[list.size() + 1];
 					Object result(array, true);
@@ -211,7 +213,7 @@ namespace Nilesoft
 					for(auto &pk : list)
 					{
 						try {
-							*array++ = pk.id;
+							*array++ = string(pk.full_name.c_str());
 						}
 						catch(...) {}
 					}
@@ -222,41 +224,49 @@ namespace Nilesoft
 				string package_name = eval_arg(0).to_string().trim().move();
 				if(!package_name.empty())
 				{
-					auto package = packages->find(package_name);
-
-					if(Id[1] == IDENT_EXISTS)
+					// Each property asks for exactly what it needs: existence and
+					// identity come from the index, the install path is resolved
+					// per package, and only appx.name() touches resources.
+					switch(Id[1])
 					{
-						_result = package.has_value();
+					case IDENT_EXISTS:
+						_result = packages->exists(package_name);
 						break;
-					}
 
-					if(package)
-					{
-						switch(Id[1])
+					case IDENT_NAME:
+						if(auto n = packages->display_name(package_name); !n.empty())
+							_result = n.move();
+						break;
+
+					case IDENT_PATH:
+					case IDENT_ZERO:
+						if(auto p = packages->path(package_name); !p.empty())
+							_result = p.move();
+						break;
+
+					default:
+						if(auto package = packages->find_identity(package_name); package)
 						{
-						case IDENT_ID:
-							_result = package->id;
-							break;
-						case IDENT_NAME:
-							_result = package->name;
-							break;
-						case IDENT_FAMILY:
-							_result = package->family;
-							break;
-						case IDENT_VERSION:
-						case IDENT_VER:
-							_result = package->version;
-							break;
-						case IDENT_PATH:
-						case IDENT_ZERO:
-							_result = package->path;
-							break;
-						case IDENT_RUN:
-						case IDENT_LAUNCH:
-						case IDENT_SHELL:
-							_result = LR"(shell:appsFolder\)" + package->family + L"!App";
-							break;
+							switch(Id[1])
+							{
+							case IDENT_ID:
+								_result = string(package->full_name.c_str());
+								break;
+							case IDENT_FAMILY:
+								_result = string(package->family.c_str());
+								break;
+							case IDENT_VERSION:
+							case IDENT_VER:
+								_result = string(package->version.c_str());
+								break;
+							case IDENT_RUN:
+							case IDENT_LAUNCH:
+							case IDENT_SHELL:
+								_result = LR"(shell:appsFolder\)" + string(package->family.c_str()) + L"!App";
+								break;
+							}
 						}
+						break;
 					}
 				}
 				break;
@@ -3430,33 +3440,21 @@ namespace Nilesoft
 				}
 				case IDENT_PACKAGE:
 				{
-					auto ver = &Version::Instance();
-					if(ver->IsWindows81OrGreater())
+					// path.package(<family name>) -> installation directory.
+					//
+					// The previous implementation passed the address of a single
+					// PWSTR as the output array while GetPackagesByPackageFamily
+					// reports how many entries it will write, sized the shared
+					// character buffer at MAX_PATH regardless of the length the API
+					// asked for, and leaked the array on every call.
+					if(!arg0.empty() && Version::Instance().IsWindows81OrGreater())
 					{
-						const wchar_t *packageFamily = arg0;
-						if(!arg0.empty())
+						for(auto &full_name : GetPackageFullNamesByFamily(arg0.c_str()))
 						{
-							auto GetPackagesByPackageFamily = "GetPackagesByPackageFamily";
-							uint32_t count = 0, bufferLength = 0;
-							auto res = DLL::Kernel32<long>(GetPackagesByPackageFamily, packageFamily, &count, nullptr, &bufferLength, nullptr);
-							if(res == ERROR_INSUFFICIENT_BUFFER && count > 0)
+							if(auto path = GetInstalledPackagePath(full_name); !path.empty())
 							{
-								wchar_t buffer[MAX_PATH] {};
-								auto packageFullNames = new wchar_t[260];
-								res = DLL::Kernel32<long>(GetPackagesByPackageFamily, packageFamily, &count, &packageFullNames, &bufferLength, buffer);
-								if(res == ERROR_SUCCESS)
-								{
-									uint32_t length = 0;
-									//GetStagedPackagePathByFullName
-									auto GetPackagePathByFullName = "GetPackagePathByFullName";
-									res = DLL::Kernel32<long>(GetPackagePathByFullName, packageFullNames, &length, nullptr);
-									if(res == ERROR_INSUFFICIENT_BUFFER && length > 0)
-									{
-										string packagePath(length);
-										res = DLL::Kernel32<long>(GetPackagePathByFullName, packageFullNames, &length, packagePath.buffer(length));
-										_result = packagePath.release(length-1).trim().move();
-									}
-								}
+								_result = string(path.c_str()).trim().move();
+								break;
 							}
 						}
 					}
