@@ -169,6 +169,41 @@ it was caught renaming the live installation's `shell.dll` aside while an entire
 different product was installing. Schedule after `CostFinalize`; a deferred action
 gets the path through `CustomActionData` instead and never sees the property.
 
+**`string::release(n - 1)` on an API's returned count.** `terminate()` clamps
+`m_length` to `m_capacity - 1` rather than rejecting an out-of-range index, and
+the minimum allocation is 16. So when the count is 0 — an empty registry value,
+a failed `ExpandEnvironmentStrings` — `release(n - 1)` underflows to `SIZE_MAX`
+and hands back a **15-character string of NULs**: `length()` is 15, `c_str()[0]`
+is `'\0'`, and `empty()` is false. Every length-driven caller downstream is then
+wrong, and nothing crashes to tell you. Guard the zero case before subtracting.
+This shape was in four places at once (`Registry.cpp` ×3, `Environment.h`,
+`Windows.h`, `FuncExpression.cpp`); `grep -rn "release(.*- *1)"` finds them.
+
+**Windows string APIs that will not terminate for you.** Two separate traps,
+both of which had been live in the tree for years:
+
+- `RegQueryValueEx` documents that a `REG_SZ` "is NOT guaranteed to be
+  null-terminated". Size from the byte count the *second* call reports, and drop
+  a terminator only after checking one is there. `src/exe/src/Main.cpp` still
+  carries the comment from the first time this bit, when the `TreatAs` ownership
+  check could not recognise Shell's own redirect.
+- `GetMenuItemInfo` truncates silently to whatever `cch` you passed. Use the
+  documented two-call pattern (`dwTypeData = nullptr` to learn `cch`, then a
+  buffer of `cch + 1`) — `Include/MenuText.h` wraps it. A fixed `MAX_PATH`
+  buffer loses everything past 259 characters, and third-party extensions cross
+  that line routinely.
+
+**`MB_*` versus `WC_*` conversion flags.** `MultiByteToWideChar` takes `MB_*`;
+`WideCharToMultiByte` takes `WC_*`. They are different numbers, and passing an
+`MB_` flag to `WideCharToMultiByte` with `CP_UTF8` fails the call outright with
+`ERROR_INVALID_FLAGS` — it does not degrade, it returns 0 for every input. Two
+converters in `Encoding.h` did exactly this, which is why `sel.tofile()` wrote a
+zero-byte file. Neither the compiler nor `/analyze` says a word.
+
+**`Environment::Expand` returns; it does not modify.** `Expand(value).move()` as
+a statement compiles, does the work, and throws the result away. Two call sites
+read `REG_EXPAND_SZ` values this way and handed the caller the raw `%VARIABLES%`.
+
 **Line endings.** Some committed blobs are CRLF while `.gitattributes` asks for LF
 in the index, so the first edit to such a file shows as a whole-file diff. Say so
 in the commit message and compare with `--ignore-space-at-eol`. Never normalise

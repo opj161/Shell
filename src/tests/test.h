@@ -86,9 +86,14 @@ namespace nss_test
 
 			int before = Registry::failures();
 			Registry::current() = e.name;
+			// Flushed around the call, so a test that takes the process down with
+			// it still says which one it was: stdout is fully buffered when
+			// redirected, and a crash loses whatever is still in the buffer.
+			std::fflush(stdout);
 			e.fn();
 			if(Registry::failures() == before)
 				std::printf("  ok   %s\n", e.name);
+			std::fflush(stdout);
 		}
 
 		std::printf("\n%d checks, %d failure(s)\n", Registry::checks(), Registry::failures());
