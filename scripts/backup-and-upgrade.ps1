@@ -131,6 +131,13 @@ if ($dllArch -ne $Platform) {
 Write-Host "Deploying $Platform from $sourceDir" -ForegroundColor Cyan
 Write-Host "  shell.dll  $((Get-Item $sourceDll).LastWriteTime)  ($dllArch)" -ForegroundColor DarkGray
 
+# Deploying bits that are already installed would stop Explorer and rotate a
+# copy of the running DLL aside for nothing - and every rotation stays on disk
+# until whatever mapped it exits.
+$installedDll = Join-Path $installDir 'shell.dll'
+$alreadyCurrent = (Test-Path $installedDll) -and
+                  ((Get-FileHash $installedDll -Algorithm SHA256).Hash -eq (Get-FileHash $sourceDll -Algorithm SHA256).Hash)
+
 # --- 2. Back up -----------------------------------------------------------
 Write-Host "`n1. Backing up the current installation..." -ForegroundColor Cyan
 if (Test-Path $installDir) {
@@ -164,32 +171,46 @@ if ($holders) {
 
 try {
     # --- 4. Explorer ------------------------------------------------------
-    Write-Host "`n3. Stopping Explorer..." -ForegroundColor Cyan
-    Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    if ($alreadyCurrent) {
+        Write-Host "`n3. Explorer left alone - installed shell.dll is already this build." -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "`n3. Stopping Explorer..." -ForegroundColor Cyan
+        Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
 
     # --- 5. Rotate and copy ----------------------------------------------
     Write-Host "`n4. Deploying binaries..." -ForegroundColor Cyan
-    $stamp = (Get-Date -Format 'yyyyMMddHHmmss') + '_' + (Get-Random -Minimum 1000 -Maximum 9999)
+    if ($alreadyCurrent) {
+        Write-Host '[OK] shell.dll unchanged; nothing rotated.' -ForegroundColor Green
+    }
+    else {
+        $stamp = (Get-Date -Format 'yyyyMMddHHmmss') + '_' + (Get-Random -Minimum 1000 -Maximum 9999)
 
-    foreach ($name in @('shell.dll', 'shell.exe')) {
-        $target = Join-Path $installDir $name
-        if (-not (Test-Path $target)) { continue }
+        foreach ($name in @('shell.dll', 'shell.exe')) {
+            $target = Join-Path $installDir $name
+            if (-not (Test-Path $target)) { continue }
 
-        # A name that cannot already exist, so a still-mapped previous rotation
-        # can never make this a no-op.
-        Move-Item -Path $target -Destination (Join-Path $installDir "$name.old.$stamp") -Force
+            # A name that cannot already exist, so a still-mapped previous
+            # rotation can never make this a no-op.
+            Move-Item -Path $target -Destination (Join-Path $installDir "$name.old.$stamp") -Force
 
-        if (Test-Path $target) { throw "Could not rotate '$target' out of the way." }
+            if (Test-Path $target) { throw "Could not rotate '$target' out of the way." }
+        }
+
+        Copy-Item -Path $sourceDll -Destination (Join-Path $installDir 'shell.dll') -Force
+        if (Test-Path $sourceExe) { Copy-Item -Path $sourceExe -Destination (Join-Path $installDir 'shell.exe') -Force }
     }
 
-    Copy-Item -Path $sourceDll -Destination (Join-Path $installDir 'shell.dll') -Force
-    if (Test-Path $sourceExe) { Copy-Item -Path $sourceExe -Destination (Join-Path $installDir 'shell.exe') -Force }
+    # The MSI installs the licence as LICENSE; match it rather than leaving both
+    # that and a license.txt behind.
+    $licence = Join-Path $repoRoot 'src\bin\license.txt'
+    if (Test-Path $licence) { Copy-Item -Path $licence -Destination (Join-Path $installDir 'LICENSE') -Force }
+    Remove-Item (Join-Path $installDir 'license.txt') -Force -ErrorAction SilentlyContinue
 
-    foreach ($extra in @('license.txt', 'readme.txt')) {
-        $from = Join-Path $repoRoot "src\bin\$extra"
-        if (Test-Path $from) { Copy-Item -Path $from -Destination $installDir -Force }
-    }
+    $readme = Join-Path $repoRoot 'src\bin\readme.txt'
+    if (Test-Path $readme) { Copy-Item -Path $readme -Destination $installDir -Force }
 
     $imports = Join-Path $repoRoot 'src\bin\imports'
     if (Test-Path $imports) {
