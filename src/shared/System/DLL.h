@@ -27,6 +27,65 @@ namespace Nilesoft
 
 		explicit operator bool() const { return m_handle != nullptr; }
 
+		/*
+			Loads a module without handing the current directory a chance at it.
+
+			A name with no directory in it is one of Windows' own DLLs - every such
+			name in this codebase is: kernel32, user32, ntdll, shell32, uxtheme,
+			OleAut32, Shcore, Userenv, Comdlg32, winbrand. Loading those by bare name
+			uses the standard search order, which reaches "the current directory"
+			ahead of PATH, and that is the opening a DLL preloading attack needs -
+			the more so here, where this code runs inside explorer.exe and every
+			other host that raises a shell menu.
+
+			Microsoft's first two mitigations are to "specify a fully qualified path"
+			or to "use the LOAD_LIBRARY_SEARCH flags with the LoadLibraryEx
+			function". This does the second, and falls back to the first rather than
+			to an unqualified load, because LOAD_LIBRARY_SEARCH_SYSTEM32 needs
+			KB2533623 on Windows 7 and fails with ERROR_INVALID_PARAMETER without it.
+
+			  https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-security
+
+			A name that does carry a directory is a file the caller chose - an icon
+			source, say - and is loaded exactly as given.
+		*/
+		static HMODULE LoadSafe(const wchar_t *name, DWORD flags = 0)
+		{
+			if(!name || !*name)
+				return nullptr;
+
+			if(::wcspbrk(name, L"\\/:"))
+				return ::LoadLibraryExW(name, nullptr, flags);
+
+			if(auto module = ::LoadLibraryExW(name, nullptr, flags | LOAD_LIBRARY_SEARCH_SYSTEM32))
+				return module;
+
+			if(::GetLastError() != ERROR_INVALID_PARAMETER)
+				return nullptr;
+
+			wchar_t path[MAX_PATH]{};
+			auto length = ::GetSystemDirectoryW(path, ARRAYSIZE(path));
+			if(length == 0 || length >= ARRAYSIZE(path))
+				return nullptr;
+
+			// Documented to omit the trailing separator except at a drive root.
+			if(path[length - 1] != L'\\')
+			{
+				if(length + 1 >= ARRAYSIZE(path))
+					return nullptr;
+				path[length++] = L'\\';
+			}
+
+			for(auto p = name; *p; ++p)
+			{
+				if(length + 1 >= ARRAYSIZE(path))
+					return nullptr;
+				path[length++] = *p;
+			}
+
+			return ::LoadLibraryExW(path, nullptr, flags);
+		}
+
 		bool load(bool load_as_data = false)
 		{
 			if(m_handle)
@@ -37,10 +96,7 @@ namespace Nilesoft
 				m_handle = ::GetModuleHandleW(m_dllPath);
 				if(!m_handle)
 				{
-					if(load_as_data)
-						m_handle = ::LoadLibraryExW(m_dllPath, nullptr, LOAD_LIBRARY_AS_DATAFILE);
-					else
-						m_handle = ::LoadLibraryW(m_dllPath);
+					m_handle = LoadSafe(m_dllPath, load_as_data ? LOAD_LIBRARY_AS_DATAFILE : 0);
 
 					loadLibrary = true;
 				}
@@ -83,7 +139,7 @@ namespace Nilesoft
 
 		static bool Load(const wchar_t* dllPath, HMODULE &hModule)
 		{
-			hModule = ::LoadLibraryW(dllPath);
+			hModule = LoadSafe(dllPath);
 			return (hModule != nullptr);
 		}
 
@@ -132,7 +188,7 @@ namespace Nilesoft
 					lpFunc = (T)::GetProcAddress(hModule, lpProcName);
 				else
 				{
-					hModule = ::LoadLibraryW(dllPath);
+					hModule = LoadSafe(dllPath);
 					if(hModule)
 					{
 						lpFunc = (T)::GetProcAddress(hModule, lpProcName);
@@ -236,7 +292,7 @@ namespace Nilesoft
 				auto hModule = ::GetModuleHandleW(name);
 				if(!hModule)
 				{
-					hModule = ::LoadLibraryW(name);
+					hModule = LoadSafe(name);
 					freeLibrary = true;
 				}
 
@@ -263,7 +319,7 @@ namespace Nilesoft
 				auto hModule = ::GetModuleHandleW(name);
 				if(!hModule)
 				{
-					hModule = ::LoadLibraryW(name);
+					hModule = LoadSafe(name);
 					freeLibrary = true;
 				}
 
@@ -295,7 +351,7 @@ namespace Nilesoft
 				auto hModule = ::GetModuleHandleW(kernel32);
 				if(!hModule)
 				{
-					hModule = ::LoadLibraryW(kernel32);
+					hModule = LoadSafe(kernel32);
 					freeLibrary = true;
 				}
 
@@ -324,7 +380,7 @@ namespace Nilesoft
 				auto hModule = ::GetModuleHandleW(user32);
 				if(!hModule)
 				{
-					hModule = ::LoadLibraryW(user32);
+					hModule = LoadSafe(user32);
 					freeLibrary = true;
 				}
 
