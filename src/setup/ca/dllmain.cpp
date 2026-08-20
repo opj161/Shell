@@ -123,21 +123,29 @@ BOOL ShellExec(const wchar_t *file, const wchar_t *parameters, const wchar_t *di
 	DWORD dw;
 	while(wait)
 	{
-		dw = ::MsgWaitForMultipleObjects(1, &sei.hProcess, FALSE, INFINITE, QS_ALLINPUT);
-		if(dw != WAIT_OBJECT_0 + 1)
+		dw = ::MsgWaitForMultipleObjects(1, &sei.hProcess, FALSE, 30000, QS_ALLINPUT);
+		if(dw == WAIT_OBJECT_0)
 		{
-			// unexpected failure
 			wait = false;
 			break;
 		}
-		else while(::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))  // we have a message - peek and dispatch it
+		else if(dw == WAIT_OBJECT_0 + 1)
 		{
-			if(msg.message == WM_QUIT)
+			while(::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
 			{
-				wait = false;
-				break;
+				if(msg.message == WM_QUIT)
+				{
+					wait = false;
+					break;
+				}
+				::DispatchMessageW(&msg);
 			}
-			::DispatchMessageW(&msg);
+		}
+		else
+		{
+			// Timeout (30s) or unexpected error
+			wait = false;
+			break;
 		}
 	}
 	::CloseHandle(sei.hProcess);

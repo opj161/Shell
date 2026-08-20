@@ -47,6 +47,25 @@ namespace Nilesoft
 				return IsContextMenu() || IsIconOverlay() || IsFolderExtensions();
 			}
 
+			static bool IsRegisteredCached(bool force_refresh = false)
+			{
+				static std::atomic<uint32_t> cached_tick{ 0 };
+				static std::atomic<bool> cached_state{ false };
+
+				auto now = ::GetTickCount();
+				auto last = cached_tick.load(std::memory_order_relaxed);
+
+				if(!force_refresh && last != 0 && (now - last) < 2000)
+				{
+					return cached_state.load(std::memory_order_relaxed);
+				}
+
+				bool state = IsRegistered();
+				cached_state.store(state, std::memory_order_relaxed);
+				cached_tick.store(now, std::memory_order_relaxed);
+				return state;
+			}
+
 			static bool IsHKCR(const string &key)
 			{
 				return Registry::Exists(HKCR, L"CLSID\\" + key);
