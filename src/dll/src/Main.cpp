@@ -1312,9 +1312,21 @@ void BootstrapOnce()
 
 				if(rt.loader.explorer)
 				{
-					rt.co_create_instance_hook.Begin();
-					rt.co_create_instance_hook.init(::CoCreateInstance, CoCreateInstanceHook).hook();
-					rt.co_create_instance_hook.Commit();
+					// The only inline detour in the process, and it patches a function
+					// Explorer calls from most of its threads - so every other thread
+					// is enlisted in the transaction. See DetourTransaction.
+					DetourTransaction transaction;
+					if(transaction.begin())
+					{
+						rt.co_create_instance_hook.init(::CoCreateInstance, CoCreateInstanceHook).hook();
+
+						if(!transaction.commit())
+						{
+							// Nothing was patched, whatever the attach reported.
+							rt.co_create_instance_hook.forget();
+							__trace(L"CoCreateInstance detour did not commit");
+						}
+					}
 
 					if(!rt.ntuser_popup_hook.installed())
 					{
