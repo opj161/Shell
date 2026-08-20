@@ -1,6 +1,7 @@
-#pragma once
+﻿#pragma once
 
 #include <oleacc.h>
+#include "Include\MenuText.h"
 
 /*
 sent to: +0x18, dwItemData start with 0xaa0df00d before its submenu being populated
@@ -391,10 +392,11 @@ namespace Nilesoft
 				dwItemData = reinterpret_cast<uintptr_t>(data);
 			}
 
+			// Prepares a sizing read - see the two-call pattern in get() below.
 			void get_title()
 			{
-				dwTypeData = title.text.buffer(MAX_PATH);
-				cch = MAX_PATH;
+				dwTypeData = nullptr;
+				cch = 0;
 			}
 
 			void set_title(const string &title)
@@ -552,23 +554,17 @@ namespace Nilesoft
 
 			bool get(HMENU hMenu, int item, bool byPosition = true, bool btitle = false, bool bname = false)
 			{
-				if(btitle)
-				{
-					if(!is_fmask(MIIM_STRING))
-						fMask |= MIIM_STRING;
+				if(!btitle)
+					return ::GetMenuItemInfoW(hMenu, item, byPosition, this) != FALSE;
 
-					dwTypeData = title.text.buffer(MAX_PATH);
-					cch = MAX_PATH;
-				}
+				// Sizes the string first, so an item longer than any fixed buffer
+				// still arrives whole. See Include\MenuText.h.
+				auto ret = read_menu_text(hMenu, static_cast<UINT>(item), byPosition, this,
+										  [this](UINT count) { return title.text.buffer(count + 1); });
 
-				auto ret = ::GetMenuItemInfoW(hMenu, item, byPosition, this);
-
-				if(btitle)
-				{
-					title.text.release(cch);
-					if(bname && !title.text.empty())
-						normalize();
-				}
+				title.text.release(ret ? cch : 0u);
+				if(bname && !title.text.empty())
+					normalize();
 
 				return ret;
 			}
@@ -1128,9 +1124,10 @@ namespace Nilesoft
 				string title;
 				MenuItemInfo mii(MIIM_STRING);
 				mii.destroy = false;
-				mii.dwTypeData = title.buffer(MAX_PATH);
-				mii.cch = MAX_PATH;
-				if(::GetMenuItemInfoW(_handle, uitem, byPosition, reinterpret_cast<MENUITEMINFOW *>(&mii)))
+
+				if(read_menu_text(_handle, static_cast<UINT>(uitem), byPosition,
+								  reinterpret_cast<MENUITEMINFOW *>(&mii),
+								  [&title](UINT count) { return title.buffer(count + 1); }))
 					return title.release(mii.cch).move();
 				return nullptr;
 			}
@@ -1185,23 +1182,17 @@ namespace Nilesoft
 
 			static bool get(HMENU hMenu, MenuItemInfo *mii, int uitem, bool byPosition = true, bool btitle = false, bool bname = false)
 			{
-				if(btitle)
-				{
-					if((mii->fMask & MIIM_STRING) != MIIM_STRING)
-						mii->fMask |= MIIM_STRING;
+				if(!btitle)
+					return ::GetMenuItemInfoW(hMenu, uitem, byPosition, reinterpret_cast<MENUITEMINFOW *>(mii)) != FALSE;
 
-					mii->dwTypeData = mii->title.text.buffer(MAX_PATH);
-					mii->cch = MAX_PATH;
-				}
+				// Sizes the string first - see Include\MenuText.h.
+				auto ret = read_menu_text(hMenu, static_cast<UINT>(uitem), byPosition,
+										  reinterpret_cast<MENUITEMINFOW *>(mii),
+										  [mii](UINT count) { return mii->title.text.buffer(count + 1); });
 
-				auto ret = ::GetMenuItemInfoW(hMenu, uitem, byPosition, reinterpret_cast<MENUITEMINFOW *>(mii));
-
-				if(btitle)
-				{
-					mii->title.text.release(mii->cch);
-					if(bname && mii->cch > 0)
-						mii->normalize();
-				}
+				mii->title.text.release(ret ? mii->cch : 0u);
+				if(bname && mii->cch > 0)
+					mii->normalize();
 
 				return ret;
 			}

@@ -1,4 +1,4 @@
-
+﻿
 #include <pch.h>
 #include "Include\Hooker.h"
 #include "Include/ContextMenu.h"
@@ -285,10 +285,11 @@ namespace Nilesoft
 							if(uid->title.empty())
 							{
 								*uid = it;
+								// Sizes the string first - see Include\MenuText.h.
 								MENUITEMINFOW mii{ sizeof(mii), MIIM_STRING };
-								mii.dwTypeData = uid->title.buffer(MAX_PATH);
-								mii.cch = MAX_PATH;
-								if(::GetMenuItemInfoW(hMenu, uid->res_id, false, &mii) && mii.cch > 0)
+								auto read = read_menu_text(hMenu, uid->res_id, FALSE, &mii,
+														   [uid](UINT count) { return uid->title.buffer(count + 1); });
+								if(read && mii.cch > 0)
 								{
 									uid->title.release(mii.cch);
 									uid->set_hash();
