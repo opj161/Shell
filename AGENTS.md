@@ -10,10 +10,12 @@ That shapes how to work on it.
 
 ## Official documentation is the specification
 
-**Read the Microsoft Learn page for every Win32, COM, shell or MSI contract you
-touch, before you change the code.** Not from memory, and not from what the
-surrounding code appears to assume — the surrounding code is frequently the thing
-that is wrong.
+**Read the vendor's reference page for every documented contract you touch —
+Win32, COM, shell, MSI/WiX, Detours, MSVC — before you change the code, and
+before you state a conclusion about it.** Assessment counts: "this is correct" is
+a claim about a contract exactly as much as "this is a bug" is. Not from memory,
+and not from what the surrounding code appears to assume — the surrounding code
+is frequently the thing that is wrong.
 
 This is not ceremony. Every substantive fix in the 1.9.20 latency and hardening
 work came from a documentation page contradicting an assumption in the tree:
@@ -30,6 +32,23 @@ work came from a documentation page contradicting an assumption in the tree:
 Cite the URL in the commit message and, where the reasoning is not obvious from
 the code, in a comment next to it. A future reader needs to be able to check the
 claim, not take it on faith.
+
+A citation is a deep link to the specific API or topic page, plus the sentence you
+are relying on, quoted. A landing page, a search result, or a paraphrase from
+memory is not a citation. Every finding you report — including every "reviewed
+clean" — carries a doc URL, a probe, or the explicit word *unverified*. If nothing
+documents the behaviour, say so and cite the probe instead: `NtUserTrackPopupMenu`
+has no page, and what `TrackPopupMenu` puts in `WM_INITMENUPOPUP`'s `lParam` was
+established by measurement, not by reading. If the page and the machine disagree,
+the machine decides what the code does and the divergence goes in a comment.
+
+Check both directions. *Code → documentation*: take the API call in front of you
+and read what it promises. *Documentation → code*: take a documented edge
+condition — required-size semantics, MSI sequencing, registry element limits —
+and go looking for the places that fail to implement it. The second direction is
+what finds the defect nobody suspected — the `release(n - 1)` shape described
+below was live in several files at once, and reads as ordinary code right up
+until you know what the API returns in the empty case.
 
 ### The plan is not the specification either
 
