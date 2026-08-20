@@ -16,13 +16,47 @@
 	- IShellExtInit: captures IDataObject (selection) and pidlFolder (background folder).
 	- IContextMenu: captures and binds the HMENU being built in QueryContextMenu.
 	- Inserts 0 items, leaving host menus clean.
+
+	Ownership, in three parts:
+
+	- A capture in progress belongs to the handler instance that is being
+	  initialised, not to the process. A host is free to create two handlers and
+	  interleave Initialize/QueryContextMenu on them; a single process-wide
+	  pending slot let the second Initialize overwrite the first handler's
+	  selection, so the first menu was built from the wrong items.
+
+	- A completed capture belongs to the HMENU it was bound to, and only that
+	  menu's teardown may release it. Clearing the whole registry when one popup
+	  closed destroyed captures belonging to menus still on screen in other
+	  windows.
+
+	- What match() hands back is owned by the caller. It used to return raw
+	  pointers into the registry after dropping the lock, so another thread
+	  pruning or clearing an entry freed them underneath the caller.
+
+	Interface pointers must be marshaled when passed between apartments
+	(https://learn.microsoft.com/en-us/windows/win32/com/single-threaded-apartments),
+	and a registry keyed by HMENU is reachable from every thread in the process.
+	Microsoft's guidance for new code is an agile reference rather than the
+	Global Interface Table - same purpose, but refcounted like any COM object,
+	so there is no cookie to revoke exactly once, and it eager-marshals:
+
+		https://learn.microsoft.com/en-us/windows/win32/com/accessing-interfaces-across-apartments
+		https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-rogetagilereference
+
+	RoGetAgileReference needs Windows 8.1, and refuses objects that implement
+	INoMarshal. Either way the capture falls back to holding the pointer
+	directly, which is what it always did.
 */
 
 #include <windows.h>
 #include <shlobj.h>
 #include <atomic>
+#include <memory>
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <new>
 
 namespace Nilesoft
@@ -33,124 +67,204 @@ namespace Nilesoft
 		inline std::atomic<long> com_object_count{ 0 };
 		inline std::atomic<bool> hooks_installed{ false };
 
-		// The selection captured by IShellExtInit::Initialize and
-		// the menu QueryContextMenu was handed.
+		// Minimal owning COM pointer. ShellExt.h stays free of the DLL's include
+		// order so the test project can compile ShellExt.cpp on its own.
+		template<typename T>
+		class com_ref
+		{
+		public:
+			com_ref() = default;
+			~com_ref() { reset(); }
+
+			com_ref(const com_ref &other) { attach_addref(other._p); }
+			com_ref(com_ref &&other) noexcept : _p(other._p) { other._p = nullptr; }
+
+			com_ref &operator=(const com_ref &other)
+			{
+				if(this != &other) { reset(); attach_addref(other._p); }
+				return *this;
+			}
+
+			com_ref &operator=(com_ref &&other) noexcept
+			{
+				if(this != &other) { reset(); _p = other._p; other._p = nullptr; }
+				return *this;
+			}
+
+			// Takes ownership of a reference the caller already holds.
+			void attach(T *p) { reset(); _p = p; }
+
+			void attach_addref(T *p)
+			{
+				reset();
+				_p = p;
+				if(_p) _p->AddRef();
+			}
+
+			void reset()
+			{
+				if(_p) { _p->Release(); _p = nullptr; }
+			}
+
+			T *get() const { return _p; }
+			T *operator->() const { return _p; }
+			T **put() { reset(); return &_p; }
+			explicit operator bool() const { return _p != nullptr; }
+
+		private:
+			T *_p = nullptr;
+		};
+
+		// PIDLIST_ABSOLUTE carries an __unaligned qualifier on 64-bit, so the
+		// element type is taken from it rather than spelled out.
+		using pidl_element = std::remove_pointer_t<PIDLIST_ABSOLUTE>;
+
+		struct PidlDeleter
+		{
+			void operator()(pidl_element *p) const noexcept
+			{
+				if(p) ::CoTaskMemFree(p);
+			}
+		};
+
+		using unique_pidl = std::unique_ptr<pidl_element, PidlDeleter>;
+
+		inline unique_pidl clone_pidl(PCIDLIST_ABSOLUTE pidl)
+		{
+			return unique_pidl(pidl ? ::ILCloneFull(pidl) : nullptr);
+		}
+
+		/*
+			A captured IShellItemArray, held so it stays valid wherever it is used.
+
+			Prefers an agile reference; falls back to holding the pointer directly
+			when the platform or the object does not support one.
+		*/
+		class CapturedSelection
+		{
+		public:
+			CapturedSelection() = default;
+
+			void reset()
+			{
+				_agile.reset();
+				_direct.reset();
+			}
+
+			bool empty() const { return !_agile && !_direct; }
+
+			void assign(IShellItemArray *items)
+			{
+				reset();
+				if(!items)
+					return;
+
+				if(auto agile = make_agile(items))
+				{
+					_agile.attach(agile);
+					return;
+				}
+
+				_direct.attach_addref(items);
+			}
+
+			// An owning pointer valid in the calling apartment, or empty.
+			com_ref<IShellItemArray> resolve() const
+			{
+				com_ref<IShellItemArray> out;
+
+				if(_agile)
+				{
+					if(FAILED(_agile->Resolve(IID_IShellItemArray,
+											  reinterpret_cast<void **>(out.put()))))
+						out.reset();
+					return out;
+				}
+
+				out.attach_addref(_direct.get());
+				return out;
+			}
+
+		private:
+			// Resolved dynamically: the export exists from Windows 8.1, and Shell
+			// still loads on older systems.
+			static IAgileReference *make_agile(IShellItemArray *items)
+			{
+				using fn_t = HRESULT(WINAPI *)(DWORD, REFIID, IUnknown *, IAgileReference **);
+
+				static const fn_t fn = []() noexcept -> fn_t
+				{
+					if(auto ole32 = ::GetModuleHandleW(L"ole32.dll"))
+						return reinterpret_cast<fn_t>(reinterpret_cast<void *>(
+							::GetProcAddress(ole32, "RoGetAgileReference")));
+					return nullptr;
+				}();
+
+				if(!fn)
+					return nullptr;
+
+				IAgileReference *agile = nullptr;
+				// AGILEREFERENCE_DEFAULT. Fails with CO_E_NOT_SUPPORTED for an
+				// object that implements INoMarshal, which is not an error here.
+				if(FAILED(fn(0, IID_IShellItemArray, items, &agile)))
+					return nullptr;
+				return agile;
+			}
+
+			com_ref<IAgileReference> _agile;
+			com_ref<IShellItemArray> _direct;
+		};
+
+		// What a handler has collected so far, before it knows which menu it is for.
+		struct PendingCapture
+		{
+			CapturedSelection items;
+			unique_pidl folder;
+			bool background{};
+
+			bool empty() const { return items.empty() && !folder; }
+
+			void reset()
+			{
+				items.reset();
+				folder.reset();
+				background = false;
+			}
+		};
+
+		// What match() hands back: owning, and independent of the registry.
+		struct ShellExtMatch
+		{
+			com_ref<IShellItemArray> items;
+			unique_pidl folder;
+			bool background{};
+
+			explicit operator bool() const { return static_cast<bool>(items) || folder != nullptr; }
+		};
+
+		// The selection captured by IShellExtInit::Initialize, bound to the menu
+		// QueryContextMenu was handed.
 		struct ShellExtCapture
 		{
-			struct view
-			{
-				IShellItemArray *items{};
-				PCIDLIST_ABSOLUTE folder{};
-				bool background{};
+			// An abandoned capture - a menu that was built and never tracked -
+			// stops being offered after this long.
+			static constexpr uint32_t TTL_MS = 30000;
 
-				explicit operator bool() const { return items != nullptr || folder != nullptr; }
-			};
-
+		private:
 			struct Entry
 			{
-				IShellItemArray *items{};
-				PIDLIST_ABSOLUTE folder{};
+				CapturedSelection items;
+				unique_pidl folder;
 				bool background{};
 				uint32_t tick{};
 
-				Entry() = default;
-				Entry(IShellItemArray *sia, PCIDLIST_ABSOLUTE pidl, bool is_bg)
-					: background(is_bg), tick(::GetTickCount())
-				{
-					if(sia)
-					{
-						sia->AddRef();
-						items = sia;
-					}
-					if(pidl)
-					{
-						folder = ::ILCloneFull(pidl);
-					}
-				}
-
-				~Entry() { release(); }
-
-				Entry(const Entry &other)
-					: background(other.background), tick(other.tick)
-				{
-					if(other.items)
-					{
-						other.items->AddRef();
-						items = other.items;
-					}
-					if(other.folder)
-					{
-						folder = ::ILCloneFull(other.folder);
-					}
-				}
-
-				Entry &operator=(const Entry &other)
-				{
-					if(this != &other)
-					{
-						release();
-						background = other.background;
-						tick = other.tick;
-						if(other.items)
-						{
-							other.items->AddRef();
-							items = other.items;
-						}
-						if(other.folder)
-						{
-							folder = ::ILCloneFull(other.folder);
-						}
-					}
-					return *this;
-				}
-
-				Entry(Entry &&other) noexcept
-					: items(other.items), folder(other.folder), background(other.background), tick(other.tick)
-				{
-					other.items = nullptr;
-					other.folder = nullptr;
-				}
-
-				Entry &operator=(Entry &&other) noexcept
-				{
-					if(this != &other)
-					{
-						release();
-						items = other.items;
-						folder = other.folder;
-						background = other.background;
-						tick = other.tick;
-						other.items = nullptr;
-						other.folder = nullptr;
-					}
-					return *this;
-				}
-
-				void release()
-				{
-					if(items)
-					{
-						items->Release();
-						items = nullptr;
-					}
-					if(folder)
-					{
-						::CoTaskMemFree(folder);
-						folder = nullptr;
-					}
-					background = false;
-					tick = 0;
-				}
-
 				bool is_valid() const
 				{
-					return (items != nullptr || folder != nullptr) && ((::GetTickCount() - tick) <= 30000);
+					return (!items.empty() || folder) && ((::GetTickCount() - tick) <= TTL_MS);
 				}
 			};
 
-		private:
 			inline static std::mutex _mutex;
-			inline static Entry _pending;
 			inline static std::unordered_map<HMENU, Entry> _bound;
 
 			static void prune_unlocked()
@@ -158,86 +272,106 @@ namespace Nilesoft
 				auto now = ::GetTickCount();
 				for(auto it = _bound.begin(); it != _bound.end(); )
 				{
-					if((now - it->second.tick) > 30000)
+					if((now - it->second.tick) > TTL_MS)
 						it = _bound.erase(it);
 					else
 						++it;
 				}
-				if((now - _pending.tick) > 30000)
-					_pending.release();
 			}
 
 		public:
-			static void clear()
+			// Binds one handler's pending capture to the menu it is building.
+			static void bind(HMENU h, PendingCapture &&pending)
 			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				_pending.release();
-				_bound.clear();
-			}
+				if(!h || pending.empty())
+					return;
 
-			static void clear(HMENU h)
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				if(h) _bound.erase(h);
-			}
+				Entry entry;
+				entry.items = std::move(pending.items);
+				entry.folder = std::move(pending.folder);
+				entry.background = pending.background;
+				entry.tick = ::GetTickCount();
 
-			static void capture(IShellItemArray *sia, bool is_background)
-			{
 				std::lock_guard<std::mutex> lock(_mutex);
-				_pending.release();
-				if(sia)
-				{
-					sia->AddRef();
-					_pending.items = sia;
-				}
-				_pending.background = is_background;
-				_pending.tick = ::GetTickCount();
 				prune_unlocked();
+				_bound[h] = std::move(entry);
 			}
 
-			static void capture_folder(PCIDLIST_ABSOLUTE pidl)
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				if(_pending.folder)
-				{
-					::CoTaskMemFree(_pending.folder);
-					_pending.folder = nullptr;
-				}
-				if(pidl)
-				{
-					_pending.folder = ::ILCloneFull(pidl);
-				}
-			}
-
-			static void bind(HMENU h)
-			{
-				if(!h) return;
-				std::lock_guard<std::mutex> lock(_mutex);
-				if(_pending.items || _pending.folder)
-				{
-					_bound[h] = std::move(_pending);
-				}
-				prune_unlocked();
-			}
-
-			static view match(HMENU h)
+			// The capture for one menu, as an owning copy. Resolving the interface
+			// happens after the lock is dropped: it can marshal, and no foreign COM
+			// call may run while the registry is held.
+			static ShellExtMatch match(HMENU h)
 			{
 				if(!h) return {};
-				std::lock_guard<std::mutex> lock(_mutex);
-				prune_unlocked();
-				auto it = _bound.find(h);
-				if(it != _bound.end() && it->second.is_valid())
+
+				CapturedSelection items;
+				ShellExtMatch result;
+
 				{
-					return { it->second.items, it->second.folder, it->second.background };
+					std::lock_guard<std::mutex> lock(_mutex);
+					prune_unlocked();
+
+					auto it = _bound.find(h);
+					if(it == _bound.end() || !it->second.is_valid())
+						return {};
+
+					items = it->second.items;
+					result.folder = clone_pidl(it->second.folder.get());
+					result.background = it->second.background;
 				}
-				return {};
+
+				result.items = items.resolve();
+				return result;
+			}
+
+			// Is there a live capture for this menu? Answers from the registry
+			// alone - no interface is resolved, which would mean marshaling just
+			// to find out whether something is there.
+			static bool has(HMENU h)
+			{
+				if(!h) return false;
+				std::lock_guard<std::mutex> lock(_mutex);
+				auto it = _bound.find(h);
+				return it != _bound.end() && it->second.is_valid();
+			}
+
+			// Only the menu that is finishing. One popup closing must not destroy a
+			// capture belonging to a menu still open in another window.
+			static void clear(HMENU h)
+			{
+				Entry taken;
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					auto it = _bound.find(h);
+					if(it == _bound.end())
+						return;
+					taken = std::move(it->second);
+					_bound.erase(it);
+				}
+				// `taken` releases here, outside the lock.
+			}
+
+			// Process shutdown and tests only, where no other popup can exist.
+			static void clear_all()
+			{
+				std::unordered_map<HMENU, Entry> taken;
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					taken.swap(_bound);
+				}
 			}
 
 			static bool has_active_captures()
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				prune_unlocked();
-				return !_bound.empty() || _pending.is_valid();
+				return !_bound.empty();
+			}
+
+			static size_t bound_count()
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				return _bound.size();
 			}
 		};
 
@@ -245,6 +379,10 @@ namespace Nilesoft
 		class ShellExtHandler : public IShellExtInit, public IContextMenu
 		{
 			LONG m_ref = 1;
+
+			// This handler's own capture. Never process-wide: a host may have
+			// several handlers in flight at once.
+			PendingCapture m_pending;
 
 		public:
 			ShellExtHandler() { com_object_count.fetch_add(1, std::memory_order_relaxed); }
@@ -294,6 +432,9 @@ namespace Nilesoft
 			{
 				return E_INVALIDARG;
 			}
+
+			// Tests reach in to check what one handler collected.
+			const PendingCapture &pending() const { return m_pending; }
 		};
 
 		HRESULT CreateShellExtFactory(REFIID riid, void **ppv);

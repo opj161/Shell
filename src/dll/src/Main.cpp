@@ -831,7 +831,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				}
 
 				auto perf_ctx = perf::menu_perf_begin();
-				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, static_cast<bool>(ShellExtCapture::match(hMenu)));
+				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, ShellExtCapture::has(hMenu));
 				perf::menu_perf_end(perf_ctx, L"popup.context_construct_initialize");
 				if(ctx != nullptr)
 				{
@@ -949,7 +949,9 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	}
 	__finally
 	{
-		ShellExtCapture::clear();
+		// Only this menu. Another window's popup may still be open and holding a
+		// capture of its own.
+		ShellExtCapture::clear(hMenu);
 		invoke(hMenu, uFlags, { x, y });
 		is_in_taskbar = false;
 		if(need_uninit_com)

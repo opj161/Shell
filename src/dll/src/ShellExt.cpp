@@ -12,32 +12,51 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
+		namespace
+		{
+			// SEH cannot coexist with objects that need unwinding in one function,
+			// so the guarded part is split out.
+			bool make_item_array(IDataObject *pdtobj, IShellItemArray **out) noexcept
+			{
+				*out = nullptr;
+				__try
+				{
+					return pdtobj
+						&& SUCCEEDED(::SHCreateShellItemArrayFromDataObject(pdtobj, IID_PPV_ARGS(out)))
+						&& *out != nullptr;
+				}
+				except
+				{
+					*out = nullptr;
+					return false;
+				}
+			}
+		}
+
 		// The selection the host is offering. pdtobj is the selected items; it is
 		// null for a background click, where pidlFolder is the folder that was
 		// clicked in.
+		//
+		// Everything lands in this handler's own pending capture. A host may hold
+		// several handlers at once and interleave their calls, so there is no
+		// process-wide slot for another handler's Initialize to overwrite.
 		IFACEMETHODIMP ShellExtHandler::Initialize(PCIDLIST_ABSOLUTE pidlFolder,
 												   IDataObject *pdtobj, HKEY)
 		{
-			__try
+			m_pending.reset();
+
+			IShellItemArray *sia = nullptr;
+			if(make_item_array(pdtobj, &sia))
 			{
-				IShellItemArray *sia = nullptr;
-
-				if(pdtobj)
-					::SHCreateShellItemArrayFromDataObject(pdtobj, IID_PPV_ARGS(&sia));
-
-				ShellExtCapture::capture(sia, pdtobj == nullptr);
-
-				if(sia)
-					sia->Release();
-
-				// Kept even with no selection: a background menu still wants to know
-				// which folder it was raised in.
-				ShellExtCapture::capture_folder(pidlFolder);
+				m_pending.items.assign(sia);
+				sia->Release();
 			}
-			except
-			{
-				ShellExtCapture::clear();
-			}
+
+			m_pending.background = (pdtobj == nullptr);
+
+			// Kept even with no selection: a background menu still wants to know
+			// which folder it was raised in.
+			m_pending.folder = clone_pidl(pidlFolder);
 
 			return S_OK;
 		}
@@ -47,16 +66,12 @@ namespace Nilesoft
 		IFACEMETHODIMP ShellExtHandler::QueryContextMenu(HMENU hmenu, UINT, UINT, UINT,
 														 UINT uFlags)
 		{
-			__try
-			{
-				// CMF_DEFAULTONLY means the host wants the default verb, not a menu
-				// the user will see - a double-click, typically.
-				if(!(uFlags & CMF_DEFAULTONLY))
-					ShellExtCapture::bind(hmenu);
-			}
-			except
-			{
-			}
+			// CMF_DEFAULTONLY means the host wants the default verb, not a menu
+			// the user will see - a double-click, typically.
+			if(!(uFlags & CMF_DEFAULTONLY))
+				ShellExtCapture::bind(hmenu, std::move(m_pending));
+
+			m_pending.reset();
 
 			// Zero items added.
 			return MAKE_HRESULT(SEVERITY_SUCCESS, FACILITY_NULL, 0);

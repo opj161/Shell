@@ -914,6 +914,8 @@ namespace Nilesoft
 		{
 			// One guarded read. Every field has to come from the same validated
 			// capture, or a stale one bleeds into the next menu - see match().
+			// What comes back is owned here, so nothing another thread does to the
+			// registry can pull it out from under this function.
 			auto captured = ShellExtCapture::match(hmenu_original);
 			if(!captured)
 				return false;
@@ -921,7 +923,7 @@ namespace Nilesoft
 			IComPtr<IShellItem2> si;
 			FileProperties folderProp;
 			auto have_folder = captured.folder
-				&& S_OK == ::SHCreateItemFromIDList(captured.folder, IID_IShellItem2, si)
+				&& S_OK == ::SHCreateItemFromIDList(captured.folder.get(), IID_IShellItem2, si)
 				&& Selections::GetFileProperties(si, &folderProp);
 
 			if(captured.items)

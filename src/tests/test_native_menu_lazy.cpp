@@ -77,6 +77,24 @@ TEST(native_menu_lazy, lparam_carries_the_position_and_is_not_a_window_menu)
 	CHECK(log()[0].lparam != static_cast<LPARAM>(0xFFFFFFFF));
 }
 
+TEST(native_menu_lazy, the_root_notification_matches_what_windows_sends)
+{
+	log().clear();
+
+	// Measured against a real TrackPopupMenu: Windows sends lParam 0 for the
+	// tracked root popup, and LOWORD = the opening item's position with
+	// HIWORD = FALSE for a submenu. Shell's synthesised notification for the
+	// host's root menu has to be indistinguishable from that.
+	NativePopupState root;
+	root.handle = fake(0x500);
+	root.parent_position = 0;
+
+	initialize_native_popup(root, recorder());
+
+	CHECK_EQ(log().size(), size_t(1));
+	CHECK_EQ(log()[0].lparam, LPARAM(0));
+}
+
 TEST(native_menu_lazy, a_popup_without_a_handle_is_never_notified)
 {
 	log().clear();
