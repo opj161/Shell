@@ -154,5 +154,8 @@ than implying you did.
   installs on clean VMs across the upgrade combinations. Reading the emitted
   tables proves the package is authored as intended; it does not prove an upgrade
   behaves.
-- **ARM64.** Needs the v143 ARM64 cross tools:
-  `Microsoft.VisualStudio.Component.VC.Tools.ARM64`.
+
+ARM64 is not one of these: the v143 ARM64 cross tools
+(`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) are installed, so
+`.\build.ps1 -Platform arm64` compiles and packages. Only the test executable
+cannot run, because the host is x64 — `build.ps1` skips it and says so.
