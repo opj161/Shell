@@ -1,4 +1,4 @@
-// Characterisation tests for Encoding::GetType.
+﻿// Characterisation tests for Encoding::GetType.
 //
 // Config files are read by Lexer::load_File, which picks a decoder purely from
 // what this function returns. Guessing wrong does not fail loudly; it silently
@@ -97,4 +97,80 @@ TEST(encoding, degenerate_input)
 	CHECK(detect(nullptr, 0) == EncodingType::Unknown);
 	CHECK(detect(one, 0) == EncodingType::Unknown);
 	CHECK(detect(one, 1) == EncodingType::UTF8);
+}
+
+// -----------------------------------------------------------------------------
+// UTF-8 conversion.
+//
+// These two converters spent their whole life returning 0. WideCharToMultiByte
+// was being handed MB_ERR_INVALID_CHARS (0x0008), which is a MultiByteToWideChar
+// flag; for CP_UTF8 the only legal flag is WC_ERR_INVALID_CHARS (0x0080), and
+// anything else fails the call with ERROR_INVALID_FLAGS.
+//
+//   https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-widechartomultibyte
+//
+// What it cost in practice: sel.tofile() writes the selected paths to a temp
+// file through UTF8::FromUnicode, so the file came out empty.
+
+static std::string as_bytes(const char *p, size_t n)
+{
+	return std::string(p, n);
+}
+
+TEST(encoding, wide_to_utf8_encodes_rather_than_failing)
+{
+	const wchar_t *text = L"Hello \x00e9\x4e2d";   // ASCII + 2-byte + 3-byte
+
+	char *out = nullptr;
+	auto len = UTF8::FromUnicode(text, ::wcslen(text), &out);
+
+	CHECK_MSG(len == 11, "6 ASCII + 2 for U+00E9 + 3 for U+4E2D, and no terminator");
+	CHECK(out != nullptr);
+	if(out)
+	{
+		CHECK(as_bytes(out, len) == "Hello \xC3\xA9\xE4\xB8\xAD");
+		delete[] out;
+	}
+}
+
+TEST(encoding, unicode_to_utf8_encodes_rather_than_failing)
+{
+	const wchar_t *text = L"\x4e2d\x6587";
+
+	char *out = nullptr;
+	auto len = Unicode::ToUTF8(text, (uint32_t)::wcslen(text), &out);
+
+	CHECK_EQ((int)len, 6);
+	CHECK(out != nullptr);
+	if(out)
+	{
+		CHECK(as_bytes(out, len) == "\xE4\xB8\xAD\xE6\x96\x87");
+		delete[] out;
+	}
+}
+
+// A path that survived a round trip through the shell can still contain an
+// unpaired surrogate. Substituting is the right answer here - failing the whole
+// write because one name is malformed would lose every other selected path.
+TEST(encoding, an_unpaired_surrogate_is_substituted_not_fatal)
+{
+	const wchar_t bad[] = { L'a', 0xD800, L'b', 0 };
+
+	char *out = nullptr;
+	auto len = UTF8::FromUnicode(bad, 3, &out);
+
+	CHECK_MSG(len > 0, "a malformed unit must not abandon the whole conversion");
+	if(out)
+	{
+		CHECK_MSG(as_bytes(out, len) == "a\xEF\xBF\xBD" "b", "U+FFFD in place of the lone surrogate");
+		delete[] out;
+	}
+}
+
+TEST(encoding, utf8_conversion_of_nothing_is_nothing)
+{
+	char *out = nullptr;
+	CHECK_EQ((int)UTF8::FromUnicode(L"", 0, &out), 0);
+	CHECK(out == nullptr);
+	CHECK_EQ((int)UTF8::FromUnicode(nullptr, 4, &out), 0);
 }
