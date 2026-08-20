@@ -56,10 +56,43 @@ Commander, Directory Opus, Everything) that does not exist here. Note that
 current setting is not even internally consistent. This is the highest-value
 follow-up in the set and it now has a number attached to it.
 
-**Signing.** Not a source flag and not claimable: there is no certificate on
-this machine. The order is build, sign the PEs, package the signed PEs, sign
-the MSI last, verify with `signtool verify /pa /all`. Recorded as a release
-blocker.
+**Signing.** Not done - there is no certificate here - and *not a blocker*,
+which the first draft of this record wrongly called it after repeating the
+plan's wording without testing it. Checked instead:
+
+| check | result |
+| --- | --- |
+| signing step in the repo or CI | none has ever existed |
+| `shell.dll` installed before this work | `NotSigned` - not a regression |
+| all three MSIs build and pass ICE validation | yes, unsigned |
+| Smart App Control on the dev machine | `0`, off |
+| user-mode code integrity enforcement | `0`, off |
+| unsigned `shell.dll` loaded in Explorer | yes |
+
+Nothing in the build, install or run path is stopped by the missing signature,
+and this tree has released this way every time. What it costs is trust rather
+than function: "Unknown publisher" on the UAC prompt, SmartScreen friction for
+anyone downloading the installer, and no way to prove the file was not altered
+in transit.
+
+It does block one real audience. Smart App Control "selectively allows apps and
+binaries to run only if they're likely to be safe", and
+
+    Malware, Potentially Unwanted Apps (PUA), and unknown, unsigned code are
+    blocked by default.
+
+    [in enforcement mode] Apps cannot be run unless they are recognized by
+    Microsoft's app intelligence services, or they are signed with a trusted
+    certificate.
+
+  https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/overview
+
+It only engages on a clean Windows 11 install, but "In most cases Smart App
+Control automatically turns on" - so a user on a fresh machine can have Shell
+blocked outright, while the maintainer building it never sees the problem.
+
+If a certificate is obtained, the order is: build, sign the PEs, package the
+signed PEs, sign the MSI last, verify with `signtool verify /pa /all`.
 
 **F-01's preferred form.** The plan prefers migrating declarative registration —
 CLSID, InprocServer32, the eight handler keys, Approved, the icon overlay — into
