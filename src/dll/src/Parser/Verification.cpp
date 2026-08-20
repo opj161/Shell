@@ -1289,7 +1289,7 @@ namespace Nilesoft
 						default:
 							if(id.length() == 2)
 								return check(argc <= 2, id.length() - 1);
-							if(auto uid = Initializer::get_muid(id[1]); uid)
+							if(auto uid = context.Cache ? context.Cache->find_muid(id[1]) : nullptr; uid)
 								return check(argc <= 3, 1);
 							return error_at(1);
 					}
@@ -1340,7 +1340,7 @@ namespace Nilesoft
 						return ExpressionType::Identifier;
 					}
 
-					if(auto uid = Initializer::get_muid(id[1]); uid)
+					if(auto uid = context.Cache ? context.Cache->find_muid(id[1]) : nullptr; uid)
 						return check(argc < 3, length - 1);
 					
 					return error_at(1);
@@ -1356,7 +1356,7 @@ namespace Nilesoft
 					if(length > 2)
 						return error_at(2);
 
-					if(auto uid = Initializer::get_muid(id[1]); uid)
+					if(auto uid = context.Cache ? context.Cache->find_muid(id[1]) : nullptr; uid)
 						return check(argc == 0, length - 1);
 
 					return error_at(1);

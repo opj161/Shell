@@ -67,7 +67,7 @@ namespace Nilesoft
 			if(Id.length(0) || Id.zero())
 				return _result.move();
 
-			cache = Initializer::instance->cache;
+			cache = ctx ? ctx->Cache : nullptr;
 
 			auto argc = Arguments.size();
 
@@ -204,7 +204,7 @@ namespace Nilesoft
 				auto packages = &cache->Packages;
 				if(Id[1] == IDENT_LIST)
 				{
-					auto &list = packages->all();
+					auto list = packages->all();
 					auto array = new Object[list.size() + 1];
 					Object result(array, true);
 					*array++ = list.size();
@@ -226,7 +226,7 @@ namespace Nilesoft
 
 					if(Id[1] == IDENT_EXISTS)
 					{
-						_result = package != nullptr;
+						_result = package.has_value();
 						break;
 					}
 
@@ -317,7 +317,7 @@ namespace Nilesoft
 					is_name = Id.equals(IDENT_NAME);
 				}
 
-				auto muid = Initializer::get_muid(Id[1]);
+				auto muid = cache ? cache->find_muid(Id[1]) : nullptr;
 				if(muid)
 				{
 					if(is_str)
@@ -337,7 +337,7 @@ namespace Nilesoft
 					else if(is_icon)
 					{
 						_result = new std::tuple<uint32_t, uint32_t, int, MUID *, Object, Object, Object>(
-							std::make_tuple(Id[0], Id[1], static_cast<int>(argc), muid, eval_arg(0).move(), eval_arg(1).move(), eval_arg(2).move())
+							std::make_tuple(Id[0], Id[1], static_cast<int>(argc), const_cast<MUID*>(muid), eval_arg(0).move(), eval_arg(1).move(), eval_arg(2).move())
 						);
 					}
 					else
@@ -1998,7 +1998,7 @@ namespace Nilesoft
 				}
 				case IDENT_TITLE:
 				{
-					if(auto uid = Initializer::get_muid(Id[1]); uid)
+					if(auto uid = cache ? cache->find_muid(Id[1]) : nullptr; uid)
 					{
 						string title = uid->get_title().move();
 						if(!title.empty())
@@ -3000,11 +3000,22 @@ namespace Nilesoft
 				case IDENT_CURRENTDIRECTORY:
 				{
 					if(argc > 0)
-						_result = ::SetCurrentDirectoryW(arg0);
+					{
+						auto sel = context ? context->Selections : nullptr;
+						if(sel != nullptr)
+						{
+							sel->Directory = arg0;
+							_result = true;
+						}
+						else
+						{
+							_result = false;
+						}
+					}
 					else 
 					{
-						auto sel = context->Selections;
-						if(sel != nullptr)
+						auto sel = context ? context->Selections : nullptr;
+						if(sel != nullptr && !sel->Directory.empty())
 							_result = sel->Directory;
 						else
 							_result = Path::CurrentDirectory().move();

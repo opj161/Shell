@@ -6,7 +6,7 @@
 using namespace Nilesoft::Diagnostics;
 #include <mutex>
 
-extern Logger &_log;
+#define _log Logger::Instance()
 
 #pragma region
 
@@ -196,10 +196,10 @@ namespace Nilesoft
 			_context.hMenu = hMenu;
 			_window = hwnd.owner;
 
-			_cache = Initializer::instance ? Initializer::instance->get_mutable_cache() : nullptr;
+			_cache = Initializer::instance ? Initializer::instance->acquire_snapshot() : nullptr;
 			if(_cache)
 			{
-				_cache->fonts.add(_cache->glyph.name, Theme::SystemMetrics(SM_CXSMICON, dpi.val), dpi.val);
+				const_cast<FontCache&>(_cache->fonts).add(_cache->glyph.name, Theme::SystemMetrics(SM_CXSMICON, dpi.val), dpi.val);
 			}
 
 			if(Initializer::instance)
@@ -847,7 +847,7 @@ namespace Nilesoft
 					mii->keys = item->keys;
 
 					if(!mii->ui)
-						mii->ui = Initializer::get_muid(mii->hash);
+						mii->ui = _cache ? const_cast<MUID*>(_cache->find_muid(mii->hash)) : nullptr;
 
 					if(mii->ui)
 					{
@@ -3172,12 +3172,12 @@ namespace Nilesoft
 				_context.to_color(obj, property);
 			};
 
-			auto eval_color = [=](auto_expr *ep, Color *property)
+			auto eval_color = [=](const auto_expr *ep, Color *property)
 			{
 				if(ep) _context.eval_color(*ep, property);
 			};
 
-			auto eval_state = [=](Settings::COLOR *e, Theme::state_t *s)
+			auto eval_state = [=](const Settings::COLOR *e, Theme::state_t *s)
 			{
 				_context.eval_color(e->value, &s->sel);
 				if(e->value)
@@ -3192,7 +3192,7 @@ namespace Nilesoft
 				_context.eval_color(e->select_disabled, &s->sel_dis);
 			};
 
-			auto eval_color_array = [=](auto_expr *e, Color *clr1, Color *clr2)->void
+			auto eval_color_array = [=](const auto_expr *e, Color *clr1, Color *clr2)->void
 			{
 				Object obj;
 				if(_context.Eval(*e, obj))
@@ -3210,7 +3210,7 @@ namespace Nilesoft
 				}
 			};
 
-			auto eval_margin = [=](Settings::MARGIN *e, Margin *m)
+			auto eval_margin = [=](const Settings::MARGIN *e, Margin *m)
 			{
 				Object obj;
 				if(_context.eval_number(e->left, obj))
@@ -3226,7 +3226,7 @@ namespace Nilesoft
 					m->bottom = obj;
 			};
 
-			auto get_rect = [](Object *o, Margin *m)
+			auto get_rect = [](const Object *o, Margin *m)
 			{
 				if(o)
 				{
@@ -3709,7 +3709,7 @@ namespace Nilesoft
 			_theme.set_symbols_as_text(_theme.mode == 1);
 
 			// theme.symbol
-			auto ev_sb = [&](auto_expr *expr, bool normal)
+			auto ev_sb = [&](const auto_expr *expr, bool normal)
 			{
 				Object obj;
 				if(_context.Eval(*expr, obj))
@@ -3776,7 +3776,7 @@ namespace Nilesoft
 			ev_sb(&th->symbol.color.normal, true);
 			ev_sb(&th->symbol.color.select, false);
 
-			auto ev_sb_dis = [&](auto_expr *expr, bool normal)
+			auto ev_sb_dis = [&](const auto_expr *expr, bool normal)
 			{
 				Object obj;
 				if(_context.Eval(*expr, obj))
@@ -4502,7 +4502,7 @@ namespace Nilesoft
 							item->title = title.release(mii.cch).move();
 							item->hash = MenuItemInfo::normalize(item->title, &item->name, &item->tab, &item->length, &item->keys);
 
-							item->ui = Initializer::get_muid(item->hash);
+							item->ui = _cache ? const_cast<MUID*>(_cache->find_muid(item->hash)) : nullptr;
 
 							if(!item->is_menu() && is_root && item->disabled)
 							{
@@ -4591,8 +4591,8 @@ namespace Nilesoft
 				auto initializer = Initializer::instance;
 
 				_context.Selections = &Selected;
-				_context.Application = &initializer->application;
-				_context.Cache = initializer->cache;
+				_context.Application = initializer ? &initializer->application : nullptr;
+				_context.Cache = nullptr;
 
 				Selected.Window.handle = hwnd.owner;
 				Selected.Window.hInstance = _window.instance();
@@ -4603,14 +4603,6 @@ namespace Nilesoft
 					return false;
 				}
 
-				//if(is_excluded())
-				//	return false;
-
-				auto sets = &_cache->settings;
-				
-				/*if(auto h = hWnd_owner ? hWnd_owner : hWnd; h)
-					_result = Window::class_name(h);
-				*/
 				if(Selected.Window.id == WINDOW_UI)
 				{
 					if(Selected.Window.hash != WC__STATIC)
@@ -4622,17 +4614,25 @@ namespace Nilesoft
 					}
 				}
 
-				if(!initializer->query())
+				if(!initializer || !initializer->query())
 				{
 					__trace(L"initializer query");
 					return false;
 				}
 
-				_cache = initializer->get_mutable_cache();
-				_context.Cache = _cache.get();
-				_context.variables.global = &_cache->variables.global;
-				_context.variables.runtime = &_cache->variables.runtime;
+				_cache = initializer->acquire_snapshot();
+				if(!_cache)
+				{
+					__trace(L"acquire_snapshot failed");
+					return false;
+				}
+
+				_context.Cache = const_cast<CACHE*>(_cache.get());
+				_context.variables.global = const_cast<Scope*>(&_cache->variables.global);
+				_context.variables.runtime = &_runtime_variables;
 				_context.variables.local = nullptr;
+
+				auto sets = &_cache->settings;
 
 				switch(Selected.Window.id)
 				{

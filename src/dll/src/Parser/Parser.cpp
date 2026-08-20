@@ -10,18 +10,12 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
-		extern Logger &_log = Logger::Instance();
+#define _log Logger::Instance()
 
 		Parser::Parser()
 		{
 			context.Application = Initializer::instance ? &Initializer::instance->application : nullptr;
-
-			context.Cache = Initializer::instance ? Initializer::instance->get_raw_cache() : nullptr;
-			if(context.Cache)
-			{
-				context.variables.global = &context.Cache->variables.global;
-				context.variables.runtime = &context.Cache->variables.runtime;
-			}
+			context.Cache = nullptr;
 			context.Selections = nullptr;
 
 			string cfg;

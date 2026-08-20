@@ -435,16 +435,16 @@ namespace Nilesoft
 			auto pos = obj2hash(o, default_value);
 			switch(pos)
 			{
-				case -1:
+				case static_cast<uint32_t>(-1):
 				case IDENT_BOTTOM:
 					return Position::Bottom;
-				case -2:
+				case static_cast<uint32_t>(-2):
 				case IDENT_TOP:
 					return Position::Top;
-				case -3:
+				case static_cast<uint32_t>(-3):
 				case IDENT_MIDDLE:
 					return Position::Middle;
-				case -4:
+				case static_cast<uint32_t>(-4):
 				case IDENT_AUTO:
 					return Position::Auto;
 				default:
@@ -665,7 +665,7 @@ namespace Nilesoft
 					image = &mii->image_select;
 				}
 
-				auto cache = Initializer::instance->cache;
+				auto cache = Cache;
 
 				const auto image_size = (long)theme->image.size;
 
@@ -1302,7 +1302,7 @@ namespace Nilesoft
 											}
 											else
 											{
-												font_name = func == IDENT_ICON_FLUENT ? FontCache::SegoeFluentIcons : FontCache::SegoeMDL2Assets;
+												font_name = (func == IDENT_ICON_FLUENT) ? string(FontCache::SegoeFluentIcons) : string(FontCache::SegoeMDL2Assets);
 												hfont = cache->fonts.add(font_name, font_size, dpi->val);
 											}
 
@@ -1371,7 +1371,7 @@ namespace Nilesoft
 										}
 										else
 										{
-											font_name = func == IDENT_ICON_FLUENT ? FontCache::SegoeFluentIcons : FontCache::SegoeMDL2Assets;
+											font_name = (func == IDENT_ICON_FLUENT) ? string(FontCache::SegoeFluentIcons) : string(FontCache::SegoeMDL2Assets);
 											hfont = cache->fonts.add(font_name, font_size, dpi->val);
 										}
 
@@ -1591,7 +1591,7 @@ namespace Nilesoft
 									return false;
 								}*/
 
-								auto muid = Initializer::get_muid(func.value());
+								auto muid = Cache ? Cache->find_muid(func.value()) : nullptr;
 								if(!muid)
 									return false;
 

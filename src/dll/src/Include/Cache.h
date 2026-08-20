@@ -36,13 +36,12 @@ namespace Nilesoft
 			PackagesCache() = default;
 			~PackagesCache() = default;
 
-			const std::vector<Package> &all() const
+			std::vector<Package> all() const
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				if(!_loaded)
 				{
-					const_cast<PackagesCache *>(this)->load();
-					_loaded = true;
+					const_cast<PackagesCache *>(this)->ensure_loaded_locked();
 				}
 				return _list;
 			}
@@ -54,17 +53,24 @@ namespace Nilesoft
 				_loaded = false;
 			}
 
-			const Package *find(const wchar_t *name) const
+			std::optional<Package> find(const wchar_t *name) const
 			{
-				for(auto &pk : all())
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(!_loaded)
+				{
+					const_cast<PackagesCache *>(this)->ensure_loaded_locked();
+				}
+				for(const auto &pk : _list)
+				{
 					if(pk.id.contains(name))
-						return &pk;
-				return nullptr;
+						return pk;
+				}
+				return std::nullopt;
 			}
 
 			bool exists(const wchar_t *name) const
 			{
-				return find(name) != nullptr;
+				return find(name).has_value();
 			}
 
 		private:
@@ -73,7 +79,21 @@ namespace Nilesoft
 			mutable bool _loaded = false;
 			std::vector<Package> _list;
 
-			bool load()
+			bool ensure_loaded_locked()
+			{
+				if(_loaded)
+					return true;
+
+				std::vector<Package> next;
+				if(!load_into(next))
+					return false;
+
+				_list = std::move(next);
+				_loaded = true;
+				return true;
+			}
+
+			bool load_into(std::vector<Package> &out_list)
 			{
 				HKEY hkeyPackages = nullptr;
 				TResult res = ::RegOpenKeyExW(HKEY_CURRENT_USER, _packages, 0, KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE, &hkeyPackages);
@@ -108,7 +128,7 @@ namespace Nilesoft
 							load_package(&pk, hkeyPackage);
 							::RegCloseKey(hkeyPackage);
 						}
-						_list.push_back(pk);
+						out_list.push_back(pk);
 					}
 				}
 				::RegCloseKey(hkeyPackages);
@@ -383,6 +403,7 @@ namespace Nilesoft
 
 		struct CACHE
 		{
+			uint64_t					generation{ 0 };
 			Settings					settings;
 
 			struct {
@@ -397,6 +418,7 @@ namespace Nilesoft
 			PackagesCache				Packages;
 			std::vector<ImageCache>		images;
 			BitmapCache					bitmaps;
+			std::unordered_map<uint32_t, MUID> muid;
 
 			struct
 			{
@@ -413,6 +435,19 @@ namespace Nilesoft
 				clear();
 			}
 
+			const MUID* find_muid(uint32_t hash) const
+			{
+				auto it = muid.find(hash);
+				if(it != muid.end())
+					return &it->second;
+				for(const auto &p : muid)
+				{
+					if(p.second.id == hash)
+						return &p.second;
+				}
+				return nullptr;
+			}
+
 			void clear()
 			{
 				while(!statics.empty())
@@ -423,6 +458,7 @@ namespace Nilesoft
 
 				images.clear();
 				bitmaps.clear();
+				muid.clear();
 				
 				variables.global.clear(true);
 				variables.runtime.clear(true);
@@ -438,7 +474,7 @@ namespace Nilesoft
 				fonts.add(glyph.name, Theme::SystemMetrics(SM_CXSMICON, dpi), dpi);
 			}
 
-			Expression *get_image(uint32_t id)
+			Expression *get_image(uint32_t id) const
 			{
 				for(auto &si : images)
 				{

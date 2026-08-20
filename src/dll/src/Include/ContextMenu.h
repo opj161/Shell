@@ -649,7 +649,8 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			DPI dpi;
 			bool common = true;
-			std::shared_ptr<CACHE> _cache;
+			std::shared_ptr<const CACHE> _cache;
+			Scope _runtime_variables;
 			Visibility _vis = Visibility::Normal;
 
 			std::vector<uint32_t> parent_level;

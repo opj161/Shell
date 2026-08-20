@@ -7,8 +7,6 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
-		const Windows::Version *os = &Windows::Version::Instance();
-
 		bool Initializer::init(HINSTANCE hInstance)
 		{
 			HInstance = hInstance;
@@ -16,12 +14,6 @@ namespace Nilesoft
 
 			try
 			{
-				// COM is deliberately not touched here. This runs from DllMain
-				// under the loader lock, where CoInitializeEx is documented as
-				// unsupported, and it would initialise whichever thread happened
-				// to load the DLL rather than the one that builds menus. It is
-				// done on the menu thread in the other init() instead.
-
 				application.Name = APP_NAME;
 				application.FileName = APP_FILENAME_TITLE;
 				application.Version = APP_VERSION;
@@ -44,7 +36,7 @@ namespace Nilesoft
 				}
 
 				auto hwnd_foreground = ::GetForegroundWindow();
-				if(os->IsWindowsVersionOrGreater(10, 0, 14393))
+				if(Windows::Version::Instance().IsWindowsVersionOrGreater(10, 0, 14393))
 					dpi = DLL::User32<uint32_t>("GetDpiForWindow", hwnd_foreground);
 				else
 					dpi = DC(hwnd_foreground).GetDeviceCapsY();
@@ -65,39 +57,19 @@ namespace Nilesoft
 
 		Initializer::~Initializer()
 		{
-			try
-			{
-				//hooker.destroy();
-				this->uninit();
-				WIC::release();
-			}
-			catch(...)
-			{
-#ifdef _DEBUG
-				Logger::Exception(__func__);
-#endif
-			}
 		}
 
-		// Brings COM up on the calling thread once, and applies the process-wide
-		// COM options that used to be set from DllMain.
-		//
 		bool Initializer::init()
 		{
 			try
 			{
-				{
-					std::lock_guard<std::mutex> lock(_cache_mutex);
-					if(_cache_snapshot && Status.Loaded.load(std::memory_order_relaxed) && !Status.Refresh.load(std::memory_order_relaxed))
-					{
-						return true;
-					}
-				}
+				std::unique_lock<std::mutex> reload_lock(_reload_mutex);
 
 				auto new_cache = std::make_shared<CACHE>();
+				new_cache->generation = ++_generation;
 				new_cache->glyph.name = FontCache::Default;
 
-				load_mui();
+				load_mui(new_cache.get());
 
 				Parser parser;
 				parser.context.Cache = new_cache.get();
@@ -110,18 +82,15 @@ namespace Nilesoft
 					return false;
 				}
 
+				for(auto &id : new_cache->muid)
 				{
-					std::lock_guard<std::mutex> lock(MUTEX_MUID);
-					for(auto &id : MAP_MUID)
+					auto uid = &new_cache->muid[id.first];
+					for(auto &si : new_cache->images)
 					{
-						auto uid = &MAP_MUID[id.first];
-						for(auto &si : new_cache->images)
+						if(si.equals(uid->id))
 						{
-							if(si.equals(uid->id))
-							{
-								uid->image = si.value;
-								break;
-							}
+							uid->image = si.value;
+							break;
 						}
 					}
 				}
@@ -130,9 +99,8 @@ namespace Nilesoft
 				ContextMenu::FontNotFound = false;
 
 				{
-					std::lock_guard<std::mutex> lock(_cache_mutex);
-					_cache_snapshot = new_cache;
-					this->cache = new_cache.get();
+					std::lock_guard<std::mutex> lock(_snapshot_mutex);
+					_snapshot = new_cache;
 				}
 
 				LastError = {};
@@ -157,13 +125,8 @@ namespace Nilesoft
 			try
 			{
 				{
-					std::lock_guard<std::mutex> lock(_cache_mutex);
-					_cache_snapshot.reset();
-					this->cache = nullptr;
-				}
-				{
-					std::lock_guard<std::mutex> lock(MUTEX_MUID);
-					MAP_MUID.clear();
+					std::lock_guard<std::mutex> lock(_snapshot_mutex);
+					_snapshot.reset();
 				}
 			}
 			catch(...)
@@ -195,16 +158,13 @@ namespace Nilesoft
 					return init();
 
 				{
-					std::lock_guard<std::mutex> lock(_cache_mutex);
-					if(!_cache_snapshot)
-					{
-						goto do_init;
-					}
+					std::lock_guard<std::mutex> lock(_snapshot_mutex);
+					if(_snapshot)
+						return true;
 				}
-				return true;
 
-			do_init:
 				return init();
+
 			}
 			catch(...)
 			{
@@ -255,8 +215,10 @@ namespace Nilesoft
 			return false;
 		}
 
-		void Initializer::load_mui()
+		void Initializer::load_mui(CACHE *new_cache)
 		{
+			if(!new_cache) return;
+
 			auto ldstr = [&, this](const wchar_t *dll,
 								std::initializer_list<MUID> list)
 			{
@@ -268,12 +230,11 @@ namespace Nilesoft
 					load_as_dynamic = true;
 				}
 
-				std::lock_guard<std::mutex> lock(MUTEX_MUID);
 				if(hModule)
 				{
 					for(auto &it : list)
 					{
-						auto uid = &MAP_MUID[it.id];
+						auto uid = &new_cache->muid[it.id];
 						if(uid->title.empty())
 						{
 							*uid = it;
@@ -282,7 +243,6 @@ namespace Nilesoft
 							{
 								uid->title.release(len);
 								uid->set_hash();
-								//get_image(uid);
 							}
 						}
 					}
@@ -291,7 +251,7 @@ namespace Nilesoft
 				{
 					for(auto &it : list)
 					{
-						auto uid = &MAP_MUID[it.id];
+						auto uid = &new_cache->muid[it.id];
 						if(uid->title.empty())
 						{
 							*uid = it;
@@ -315,7 +275,7 @@ namespace Nilesoft
 					{
 						for(auto &it : list)
 						{
-							auto uid = &MAP_MUID[it.id];
+							auto uid = &new_cache->muid[it.id];
 							if(uid->title.empty())
 							{
 								*uid = it;
@@ -326,8 +286,6 @@ namespace Nilesoft
 								{
 									uid->title.release(mii.cch);
 									uid->set_hash();
-
-									//get_image(uid);
 								}
 								else if(it.title_fallback.length() > 0)
 								{
@@ -340,20 +298,14 @@ namespace Nilesoft
 					}
 					else for(auto &it : list)
 					{
-						auto uid = &MAP_MUID[it.id];
+						auto uid = &new_cache->muid[it.id];
 						*uid = it;
-						//uid->title = it.title_fallback;
-					//	uid->set_hash();
-						//get_image(uid);
 					}
 				}
 				else for(auto &it : list)
 				{
-					auto uid = &MAP_MUID[it.id];
+					auto uid = &new_cache->muid[it.id];
 					*uid = it;
-				//	uid->title = it.title_fallback;
-				//	uid->set_hash();
-					//get_image(uid);
 				}
 			};
 
@@ -397,11 +349,10 @@ namespace Nilesoft
 				{
 					for(auto &ui : it.items)
 					{
-						auto uid = &MAP_MUID[ui.id];
+						auto uid = &new_cache->muid[ui.id];
 						if(uid->title.empty())
 						{
 							*uid = ui;
-						//get_image(uid);
 						}
 					}
 				}
@@ -409,13 +360,14 @@ namespace Nilesoft
 				if(lib) ::FreeLibrary(lib);
 			};
 
-			auto add_uid = [](std::initializer_list<MUID> list) {
+			auto add_uid = [&](std::initializer_list<MUID> list) {
 				for(auto &&uid : list)
-					MAP_MUID.emplace(uid.id, uid);
+					new_cache->muid.emplace(uid.id, uid);
 			};
 
-			auto isw11 = [](uint32_t val1, uint32_t val2)->uint32_t { return os->IsWindows11OrGreater() ? val1 : val2; };
-			auto isw8 = [](uint32_t val1, uint32_t val2)->uint32_t { return os->IsWindows8OrGreater() ? val1 : val2; };
+			const auto *os = &Windows::Version::Instance();
+			auto isw11 = [os](uint32_t val1, uint32_t val2)->uint32_t { return os->IsWindows11OrGreater() ? val1 : val2; };
+			auto isw8 = [os](uint32_t val1, uint32_t val2)->uint32_t { return os->IsWindows8OrGreater() ? val1 : val2; };
 
 			auto user32 = L"user32.dll";
 			auto shell32 = L"shell32.dll";

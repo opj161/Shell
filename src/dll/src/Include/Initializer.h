@@ -12,8 +12,10 @@ namespace Nilesoft
 		{
 		private:
 			uintptr_t _last_write_time{};
-			std::mutex _cache_mutex;
-			std::shared_ptr<CACHE> _cache_snapshot;
+			mutable std::mutex _snapshot_mutex;
+			std::mutex _reload_mutex;
+			std::shared_ptr<const CACHE> _snapshot;
+			std::atomic<uint64_t> _generation{ 0 };
 
 		public:
 			struct {
@@ -26,7 +28,6 @@ namespace Nilesoft
 
 			Application		application;
 			bool			is_elevated{};
-			CACHE			*cache{};
 			std::atomic<uint32_t> dpi{ 96 };
 
 			Initializer() { instance = this; }
@@ -39,24 +40,22 @@ namespace Nilesoft
 
 			bool config_has_changed();
 			bool has_error(bool detect_changes = false);
-			void load_mui();
+			void load_mui(CACHE *new_cache);
 
-			std::shared_ptr<const CACHE> get_cache()
+			std::shared_ptr<const CACHE> acquire_snapshot() const
 			{
-				std::lock_guard<std::mutex> lock(_cache_mutex);
-				return _cache_snapshot;
+				std::lock_guard<std::mutex> lock(_snapshot_mutex);
+				return _snapshot;
 			}
 
-			std::shared_ptr<CACHE> get_mutable_cache()
+			std::shared_ptr<const CACHE> get_cache() const
 			{
-				std::lock_guard<std::mutex> lock(_cache_mutex);
-				return _cache_snapshot;
+				return acquire_snapshot();
 			}
 
-			CACHE *get_raw_cache()
+			uint64_t current_generation() const
 			{
-				std::lock_guard<std::mutex> lock(_cache_mutex);
-				return _cache_snapshot.get();
+				return _generation.load(std::memory_order_relaxed);
 			}
 
 			struct STATUS {
@@ -79,13 +78,15 @@ namespace Nilesoft
 					}
 					return *this;
 				}
-			} inline static Status{};
+			};
+			inline static STATUS Status{};
 
 			struct LASTERROR 
 			{ 
 				TokenError code{};
 				uint32_t line, col{};
-			} inline static LastError{};
+			};
+			inline static LASTERROR LastError{};
 
 		public:
 			inline static Initializer *instance{};
@@ -101,30 +102,6 @@ namespace Nilesoft
 			static bool check_excluded();
 
 			static void SetSubclass(HWND hWnd);
-			inline static std::mutex MUTEX_MUID;
-			inline static std::unordered_map<uint32_t, MUID> MAP_MUID;
-
-			static MUID* get_muid(uint32_t hash)
-			{
-				std::lock_guard<std::mutex> lock(MUTEX_MUID);
-				for(auto &it : MAP_MUID)
-				{
-					if(it.first == hash || it.second.id == hash)
-						return &it.second;
-				}
-				return nullptr;
-			}
-
-			static uint32_t get_hash(uint32_t id)
-			{
-				std::lock_guard<std::mutex> lock(MUTEX_MUID);
-				for(auto &it : MAP_MUID)
-				{
-					if(it.first == id)
-						return it.second.id;
-				}
-				return 0;
-			}
 		};
 	}
 }
