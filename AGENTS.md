@@ -97,6 +97,32 @@ this codebase have all been *removing synchronous work from before the first
 pixel*: a whole native menu tree that was initialised but never shown, a package
 repository that was fully enumerated to answer one boolean.
 
+## Deploying a local build
+
+```powershell
+.\scripts\backup-and-upgrade.ps1              # host architecture
+.\scripts\backup-and-upgrade.ps1 -ResetConfig # also take the stock shell.nss
+```
+
+It self-elevates, and it restarts Explorer, so ask before running it.
+
+The one thing worth knowing: **`shell.dll` can never be overwritten in place.**
+Every process that has ever raised a shell context menu has it loaded, and Shell
+pins its own module for the life of that process on purpose — two dozen holders
+on a normal desktop (Chrome, Notepad, OneDrive, PowerToys, dllhost, svchost).
+Stopping Explorer does not release it. What works is renaming: a mapped image
+can be renamed within its volume, so the installed binary is rotated aside under
+a name that cannot already exist and the new one is written at the canonical
+path. Processes that already loaded the old file keep running it until they
+exit, which is why a freshly deployed change may not appear in an app that was
+already open.
+
+Registration for a per-machine install lands in **HKLM**, not HKCU:
+`HKLM\SOFTWARE\Classes\CLSID\{BAE3934B-…}\InprocServer32`. On Windows 11 the
+menu only becomes the primary one via the `TreatAs` redirect that
+`shell.exe -register -treat` writes for `{86ca1aa0-…}`; without it Shell lives
+under "Show more options".
+
 ## Build and test
 
 ```powershell
@@ -147,9 +173,9 @@ use the `perf` alias or qualify fully.
 Be explicit in the commit message when you could not verify something, rather
 than implying you did.
 
-- **Explorer and third-party host smoke tests.** Deploying replaces the user's
-  installed Shell and restarts Explorer. `scripts/backup-and-upgrade.ps1` does it;
-  ask first.
+- **Third-party host smoke tests.** Total Commander, Directory Opus, Everything -
+  the hosts that reach Shell through `IShellExtInit`/`IContextMenu` rather than
+  `IShellBrowser`. Nothing here exercises that path.
 - **The MSI upgrade matrix.** Component identity and sequencing changes need real
   installs on clean VMs across the upgrade combinations. Reading the emitted
   tables proves the package is authored as intended; it does not prove an upgrade
