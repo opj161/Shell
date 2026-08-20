@@ -150,7 +150,7 @@ inline static double round_to(double value, double precision = 1.0)
 
 struct COM_INITIALIZER
 {
-	COM_INITIALIZER(bool init = false, COINIT type = COINIT_APARTMENTTHREADED) : _type(type)
+	COM_INITIALIZER(bool init = false, DWORD type = COINIT_APARTMENTTHREADED) : _type(type)
 	{
 		if(init)
 		{
@@ -165,7 +165,7 @@ struct COM_INITIALIZER
 		_hr = E_UNEXPECTED;
 	}
 
-	bool initialize(COINIT type)
+	bool initialize(DWORD type)
 	{
 		_type = type;
 		return initialize();
@@ -195,7 +195,9 @@ struct COM_INITIALIZER
 
 private:
 	HRESULT _hr{ E_UNEXPECTED };
-	COINIT _type;
+	// A combination, not a single COINIT value: CoInitializeEx takes a DWORD
+	// and the documented form for shell verbs is STA | COINIT_DISABLE_OLE1DDE.
+	DWORD _type;
 
 	//Copy constructor and assignment operators are not allowed!
 	COM_INITIALIZER(COM_INITIALIZER const &) = delete;

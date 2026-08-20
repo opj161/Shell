@@ -5047,10 +5047,33 @@ namespace Nilesoft
 			ctx->_this = &_this;
 		}
 
+		/*
+			Runs one menu command on its own thread, and owns the menu from here on.
+
+			The apartment is set up out here because the body below is a __try/__finally
+			and MSVC will not compile SEH alongside an object that needs unwinding
+			(C2712). ShellExecuteEx is the reason it is needed at all: it "can delegate
+			execution to Shell extensions ... that are activated using Component Object
+			Model (COM), COM should be initialized before ShellExecuteEx is called. Some
+			Shell extensions require the COM single-threaded apartment (STA) type", with
+			the documented form being exactly the one used here. This thread had no
+			apartment at all, so any verb whose handler is a COM shell extension was
+			being invoked without one.
+
+			  https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw
+		*/
 		void __stdcall ContextMenu::Invoke(ContextMenu *cm)
 		{
 			if(!cm) return;
 
+			COM_INITIALIZER com;
+			com.initialize(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
+			InvokeCommands(cm);
+		}
+
+		void __stdcall ContextMenu::InvokeCommands(ContextMenu *cm)
+		{
 			__try
 			{
 				auto ctx = &cm->_context;

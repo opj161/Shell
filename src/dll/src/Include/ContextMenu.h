@@ -803,6 +803,9 @@ plutovg_move_to(pluto, start.x, start.y);
 			inline static void draw_rect(DC *dc, const POINT &pt, const SIZE &size, const Color &color, const Color &border = {}, int radius = 0);
 
 			static void __stdcall Invoke(ContextMenu *cm);
+			// The command loop itself. Split out so Invoke can hold a COM apartment
+			// across it: this one is SEH and cannot own an unwindable object.
+			static void __stdcall InvokeCommands(ContextMenu *cm);
 			/*static LRESULT __stdcall TipProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
 											 UINT_PTR uIdSubclass, DWORD_PTR dwRefData);*/
 			static LRESULT __stdcall WindowSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,

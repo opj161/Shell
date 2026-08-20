@@ -101,22 +101,44 @@ namespace Nilesoft
 
 				SHELLEXECUTEINFOW sei = { };
 				sei.cbSize = sizeof(SHELLEXECUTEINFOW);
-				sei.fMask = SEE_MASK_ASYNCOK;
+
+				/*
+					SEE_MASK_NOASYNC is not optional here. It "must be specified if the
+					thread calling ShellExecuteEx does not have a message loop or if the
+					thread or process will terminate soon after ShellExecuteEx returns" -
+					and the menu invokes commands from a detached worker that does exactly
+					that. Without it the thread is gone before the DDE conversation can
+					finish, and "failure to complete the conversation can result in an
+					unsuccessful launch of the document": the item appears to do nothing,
+					intermittently, only for file types launched through DDE.
+
+					SEE_MASK_FLAG_LOG_USAGE is what the same page asks for "calls to this
+					API that result from user interaction", which every menu command is.
+					It is what keeps most-frequently-used lists and jump lists honest.
+
+					  https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shellexecuteinfow
+
+					The flags accumulate. They used to be assigned over each other, so
+					only the last assignment survived.
+				*/
+				sei.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI | SEE_MASK_FLAG_LOG_USAGE;
 
 				if(!string::IsNullOrWhiteSpace(verb))
 				{
 					sei.lpVerb = verb;
 					if(string::Equals(verb, m_open_as))
 					{
-						sei.fMask = SEE_MASK_FLAG_DDEWAIT | SEE_MASK_INVOKEIDLIST;
+						// The picker is driven through the item's own context menu.
+						sei.fMask |= SEE_MASK_INVOKEIDLIST;
 						openas = true;
 					}
 				}
 
+				// Only asked for when there is something to wait on: with
+				// SEE_MASK_INVOKEIDLIST the documentation says no process handle
+				// comes back anyway.
 				if(!openas)
-					sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-
-				sei.fMask |= SEE_MASK_FLAG_NO_UI;
+					sei.fMask |= SEE_MASK_NOCLOSEPROCESS;
 
 				sei.lpFile = f;
 				if(!string::IsNullOrWhiteSpace(parameters))
