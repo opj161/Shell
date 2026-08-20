@@ -1,0 +1,25 @@
+CompileFlags:
+  Compiler: clang-cl
+  Add:
+    - -xc++
+    - -std=c++20
+    - -fms-extensions
+    - -fms-compatibility
+    - -fms-compatibility-version=19.40
+    - -D_UNICODE
+    - -DUNICODE
+    - -D_CRT_SECURE_NO_WARNINGS
+    - -DNOMINMAX
+    - -Isrc/dll/src
+    - -Isrc/dll/src/Include
+    - -Isrc/shared
+    - -Isrc/tests
+    - -include
+    - src/dll/src/pch.h
+  Remove:
+    - -W*
+
+Diagnostics:
+  UnusedIncludes: None
+  Suppress:
+    - "*"

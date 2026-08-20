@@ -75,6 +75,8 @@
     <ClCompile Include="test_encoding.cpp" />
     <ClCompile Include="test_bitmapcache.cpp" />
     <ClCompile Include="test_shellext.cpp" />
+    <ClCompile Include="test_threadsafety.cpp" />
+    <ClCompile Include="test_parser.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
