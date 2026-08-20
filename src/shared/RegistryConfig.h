@@ -232,7 +232,35 @@ namespace Nilesoft
 					if(ours)
 						Registry::DeleteSubKey(HKCR, key_treatas);
 				}
-				Registry::DeleteSubKey(HKCR, L".nss");
+				/*
+					Remove what registration put under .nss, not the whole key.
+
+					This used to be DeleteSubKey(HKCR, L".nss"), which deletes the
+					file-extension key and everything beneath it. Registration
+					creates exactly two things there - a "Content Type" value and a
+					shell\open\command chain - but the key itself is shared. Anything
+					else that had registered for .nss, an editor's ProgID under
+					OpenWithProgids or the user's own file association, went with it,
+					and if .nss already existed before Shell was installed then
+					uninstalling Shell deleted a key it never owned.
+
+					So: take back the two, then remove .nss only if nothing else is
+					left in it.
+				*/
+				if(auto keyNSS = Registry::ClassesRoot.OpenSubKey(L".nss", false, true); keyNSS)
+				{
+					keyNSS.DeleteValue(L"Content Type");
+					Registry::DeleteSubKey(HKCR, L".nss\\shell\\open\\command");
+					Registry::DeleteSubKey(HKCR, L".nss\\shell\\open");
+					Registry::DeleteSubKey(HKCR, L".nss\\shell");
+
+					bool empty = Registry::EnumNames(keyNSS.Handle(), true).empty()
+							  && Registry::EnumNames(keyNSS.Handle(), false).empty();
+					keyNSS.Close();
+
+					if(empty)
+						Registry::DeleteSubKey(HKCR, L".nss");
+				}
 
 				return ret > 0;// == 5;
 			}

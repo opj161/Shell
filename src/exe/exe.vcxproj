@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   
   <ItemGroup Label="ProjectConfigurations">
@@ -72,11 +72,44 @@
     <ClCompile>
       <CompileAsManaged>false</CompileAsManaged>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <ExceptionHandling>Async</ExceptionHandling>
+      <!--
+        /EHsc, not /EHa. Under /EHa a catch(...) catches structured exceptions
+        as well - access violations included - and this DLL is injected into
+        Explorer, where continuing after one means continuing inside somebody
+        else's corrupted process:
+
+            Specifying /EHa and trying to handle all exceptions by using
+            catch(...) can be dangerous. In most cases, asynchronous exceptions
+            are unrecoverable and should be considered fatal. Catching them and
+            proceeding can cause process corruption [...]
+
+            we strongly recommend that you use ISO-standard C++ exception
+            handling (/EHsc or /EHs)
+
+          https://learn.microsoft.com/en-us/cpp/build/reference/eh-exception-handling-model
+
+        The deliberate __try/__except guards around foreign shell extension
+        code are unaffected: "You can use structured exception handling syntax
+        in the same module as code that's compiled by using /EHs." Only
+        catch(...) stops swallowing faults it cannot do anything about.
+
+        Set on every project rather than some, because the same page says to
+        "never link object files compiled using /EHa to ones compiled using
+        /EHs or /EHsc in the same executable module".
+      -->
+      <ExceptionHandling>Sync</ExceptionHandling>
       <SDLCheck>true</SDLCheck>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <EnableParallelCodeGeneration>true</EnableParallelCodeGeneration>
       <IntrinsicFunctions>true</IntrinsicFunctions>
+      <!--
+        Control Flow Guard. Both halves are required - compiler instrumentation
+        here and /GUARD:CF at the link step - and CFG also depends on
+        /DYNAMICBASE, which is on by default.
+
+          https://learn.microsoft.com/en-us/windows/win32/secbp/control-flow-guard
+      -->
+      <ControlFlowGuard>Guard</ControlFlowGuard>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>

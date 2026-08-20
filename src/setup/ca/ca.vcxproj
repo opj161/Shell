@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Release|Win32">
@@ -40,6 +40,21 @@
     <ClCompile>
       <MinimalRebuild>false</MinimalRebuild>
       <DebugInformationFormat>None</DebugInformationFormat>
+      <!--
+        Control Flow Guard. Both halves are required - compiler instrumentation
+        here and /GUARD:CF at the link step - and CFG also depends on
+        /DYNAMICBASE, which is on by default.
+
+          https://learn.microsoft.com/en-us/windows/win32/secbp/control-flow-guard
+      -->
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <!--
+        /EHsc. See the note in src\dll\Shell.vcxproj: under /EHa a catch(...)
+        swallows access violations, and Microsoft recommends never linking /EHa
+        objects with /EHs ones in the same module. Stated explicitly here
+        rather than left to the toolset default.
+      -->
+      <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -51,6 +66,21 @@
     </Link>
     <ClCompile>
       <DebugInformationFormat>None</DebugInformationFormat>
+      <!--
+        Control Flow Guard. Both halves are required - compiler instrumentation
+        here and /GUARD:CF at the link step - and CFG also depends on
+        /DYNAMICBASE, which is on by default.
+
+          https://learn.microsoft.com/en-us/windows/win32/secbp/control-flow-guard
+      -->
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <!--
+        /EHsc. See the note in src\dll\Shell.vcxproj: under /EHa a catch(...)
+        swallows access violations, and Microsoft recommends never linking /EHa
+        objects with /EHs ones in the same module. Stated explicitly here
+        rather than left to the toolset default.
+      -->
+      <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -59,6 +89,21 @@
     </Link>
     <ClCompile>
       <DebugInformationFormat>None</DebugInformationFormat>
+      <!--
+        Control Flow Guard. Both halves are required - compiler instrumentation
+        here and /GUARD:CF at the link step - and CFG also depends on
+        /DYNAMICBASE, which is on by default.
+
+          https://learn.microsoft.com/en-us/windows/win32/secbp/control-flow-guard
+      -->
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <!--
+        /EHsc. See the note in src\dll\Shell.vcxproj: under /EHa a catch(...)
+        swallows access violations, and Microsoft recommends never linking /EHa
+        objects with /EHs ones in the same module. Stated explicitly here
+        rather than left to the toolset default.
+      -->
+      <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Label="Globals">
