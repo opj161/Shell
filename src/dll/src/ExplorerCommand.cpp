@@ -389,9 +389,31 @@ namespace Nilesoft
 
 			auto selection = ensure_selection_array();
 			auto regs = catalog_snapshot();
+
+			// One composition: skip a packaged verb that the classic HMENU (or
+			// an earlier catalog row) already contributed. GUID_NULL is not an
+			// identity. Same-type title hash is the native duplicate rule.
+			// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getcanonicalname
+			std::vector<ExplorerCommandIdentity> accepted;
+			accepted.reserve(root->items.size() + regs.size());
+			for(auto existing : root->items)
+			{
+				if(!existing || existing->is_separator() || existing->hash == 0)
+					continue;
+				ExplorerCommandIdentity id;
+				id.hash = existing->hash;
+				id.type = existing->type;
+				accepted.push_back(id);
+			}
+
 			for(const auto &reg : regs)
 			{
 				if(!explorer_command_matches_any(reg, kinds))
+					continue;
+
+				ExplorerCommandIdentity by_clsid;
+				by_clsid.clsid = reg.clsid;
+				if(explorer_command_already_represented(by_clsid, accepted))
 					continue;
 
 				auto cmd = activate_explorer_command(reg.clsid);
@@ -407,10 +429,26 @@ namespace Nilesoft
 					cmd->Release();
 					continue;
 				}
+
+				GUID canonical{};
+				// Out-parameter is valid only when the method succeeds.
+				// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getcanonicalname
+				if(FAILED(cmd->GetCanonicalName(&canonical)))
+					canonical = GUID_NULL;
+
+				ExplorerCommandIdentity identity;
+				identity.hash = item->hash;
+				identity.type = item->type;
+				identity.clsid = reg.clsid;
+				identity.canonical = canonical;
+				if(explorer_command_already_represented(identity, accepted))
+					continue;
+
 				if(item->is_menu())
 					item->native_popup.materialized = false;
 				else
 					item->native_popup.materialized = true;
+				accepted.push_back(identity);
 				root->items.push_back(item.release());
 			}
 		}

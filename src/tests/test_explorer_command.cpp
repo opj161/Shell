@@ -127,3 +127,73 @@ TEST(explorer_command, missing_section_is_not_a_registration)
 	CHECK(!parse_file_explorer_context_menus(L"<Package></Package>", regs));
 	CHECK(regs.empty());
 }
+
+TEST(explorer_command, same_hash_and_type_is_already_represented)
+{
+	ExplorerCommandIdentity have;
+	have.hash = 0x1234;
+	have.type = 1;
+	std::vector<ExplorerCommandIdentity> accepted{ have };
+
+	ExplorerCommandIdentity candidate;
+	candidate.hash = 0x1234;
+	candidate.type = 1;
+	CHECK(explorer_command_already_represented(candidate, accepted));
+}
+
+TEST(explorer_command, same_hash_different_type_is_not_a_duplicate)
+{
+	ExplorerCommandIdentity have;
+	have.hash = 0x1234;
+	have.type = 0;
+	std::vector<ExplorerCommandIdentity> accepted{ have };
+
+	ExplorerCommandIdentity candidate;
+	candidate.hash = 0x1234;
+	candidate.type = 1;
+	CHECK(!explorer_command_already_represented(candidate, accepted));
+}
+
+TEST(explorer_command, clsid_match_skips_before_title)
+{
+	GUID clsid{};
+	CHECK(parse_guid(L"{CAE3F1D4-7765-4D98-A060-52CD14D56EAB}", clsid));
+
+	ExplorerCommandIdentity have;
+	have.clsid = clsid;
+	std::vector<ExplorerCommandIdentity> accepted{ have };
+
+	ExplorerCommandIdentity candidate;
+	candidate.clsid = clsid;
+	CHECK(explorer_command_already_represented(candidate, accepted));
+}
+
+TEST(explorer_command, guid_null_is_not_an_identity)
+{
+	ExplorerCommandIdentity have;
+	have.clsid = GUID_NULL;
+	have.canonical = GUID_NULL;
+	have.hash = 0;
+	std::vector<ExplorerCommandIdentity> accepted{ have };
+
+	ExplorerCommandIdentity candidate;
+	candidate.clsid = GUID_NULL;
+	candidate.canonical = GUID_NULL;
+	CHECK(!explorer_command_already_represented(candidate, accepted));
+}
+
+TEST(explorer_command, canonical_guid_skips_when_usable)
+{
+	GUID canonical{};
+	CHECK(parse_guid(L"{01234567-89AB-CDEF-0123-456789ABCDEF}", canonical));
+
+	ExplorerCommandIdentity have;
+	have.canonical = canonical;
+	std::vector<ExplorerCommandIdentity> accepted{ have };
+
+	ExplorerCommandIdentity candidate;
+	candidate.canonical = canonical;
+	CHECK(explorer_command_already_represented(candidate, accepted));
+	CHECK(explorer_command_guid_usable(canonical));
+	CHECK(!explorer_command_guid_usable(GUID_NULL));
+}

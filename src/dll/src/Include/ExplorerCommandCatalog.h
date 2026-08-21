@@ -94,6 +94,44 @@ namespace Nilesoft
 			return false;
 		}
 
+		// Identity for composing packaged verbs onto a classic HMENU tree.
+		// GetCanonicalName is a GUID (the sample may return GUID_NULL).
+		// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getcanonicalname
+		// Title hash + item-vs-menu type is the same rule native duplicate
+		// removal already uses inside one HMENU walk.
+		struct ExplorerCommandIdentity
+		{
+			uint32_t hash = 0;
+			uint32_t type = 0;
+			GUID clsid{};
+			GUID canonical{};
+		};
+
+		inline bool explorer_command_guid_usable(const GUID &id) noexcept
+		{
+			return !InlineIsEqualGUID(id, GUID_NULL);
+		}
+
+		inline bool explorer_command_already_represented(
+			const ExplorerCommandIdentity &candidate,
+			const std::vector<ExplorerCommandIdentity> &accepted) noexcept
+		{
+			for(const auto &have : accepted)
+			{
+				if(explorer_command_guid_usable(candidate.clsid) &&
+				   InlineIsEqualGUID(candidate.clsid, have.clsid))
+					return true;
+				if(explorer_command_guid_usable(candidate.canonical) &&
+				   explorer_command_guid_usable(have.canonical) &&
+				   InlineIsEqualGUID(candidate.canonical, have.canonical))
+					return true;
+				if(candidate.hash != 0 && candidate.hash == have.hash &&
+				   candidate.type == have.type)
+					return true;
+			}
+			return false;
+		}
+
 		inline bool parse_guid(std::wstring_view text, GUID &out) noexcept
 		{
 			out = {};
