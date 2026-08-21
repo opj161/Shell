@@ -72,6 +72,7 @@
     <ClInclude Include="..\dll\src\Include\BitmapCache.h" />
     <ClInclude Include="..\dll\src\Include\MenuText.h" />
     <ClInclude Include="..\dll\src\Include\NativeMenuLazy.h" />
+    <ClInclude Include="..\dll\src\Include\ExplorerCommandCatalog.h" />
     <ClInclude Include="..\dll\src\Include\OneShotMarshal.h" />
     <ClInclude Include="..\dll\src\Include\Packages.h" />
     <ClInclude Include="..\dll\src\Include\TaskbarHitCache.h" />
@@ -91,6 +92,7 @@
     <ClCompile Include="test_threadsafety.cpp" />
     <ClCompile Include="test_parser.cpp" />
     <ClCompile Include="test_native_menu_lazy.cpp" />
+    <ClCompile Include="test_explorer_command.cpp" />
     <ClCompile Include="test_packages.cpp" />
     <ClCompile Include="test_taskbar_cache.cpp" />
     <ClCompile Include="test_menutext.cpp" />

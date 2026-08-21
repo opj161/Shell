@@ -1,7 +1,10 @@
 ﻿#pragma once
 
 #include <oleacc.h>
+#include <unknwn.h>
 #include "Include\MenuText.h"
+
+struct IExplorerCommand;
 
 /*
 sent to: +0x18, dwItemData start with 0xaa0df00d before its submenu being populated
@@ -205,6 +208,21 @@ namespace Nilesoft
 			// Needed for lifecycle, not only the child vector: an unmaterialized
 			// native popup with empty `items` is pending, not known empty.
 			struct menuitem_t *system_source = nullptr;
+			IExplorerCommand *explorer_command = nullptr;
+
+			// Keep an independent ref so Invoke still has a live pointer after
+			// Uninitialize deletes the menuitem_t that first owned the command.
+			// https://learn.microsoft.com/en-us/windows/win32/api/unknwn/nf-unknwn-iunknown-addref
+			void retain_explorer_command(IExplorerCommand *cmd)
+			{
+				if(explorer_command == cmd)
+					return;
+				if(explorer_command)
+					static_cast<IUnknown *>(explorer_command)->Release();
+				explorer_command = cmd;
+				if(explorer_command)
+					static_cast<IUnknown *>(explorer_command)->AddRef();
+			}
 
 			//Expression *tip{};
 			uint32_t hash = 0;
@@ -356,6 +374,11 @@ namespace Nilesoft
 				if(destroy)
 					destroy_hSubMenu();
 				image.destroy();
+				if(explorer_command)
+				{
+					static_cast<IUnknown *>(explorer_command)->Release();
+					explorer_command = nullptr;
+				}
 			}
 
 			void delete_dwItemData()

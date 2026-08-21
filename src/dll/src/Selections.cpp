@@ -928,6 +928,12 @@ namespace Nilesoft
 
 			if(captured.items)
 			{
+				ItemArray = captured.items.get();
+				if(ItemArray)
+				{
+					ItemArray->AddRef();
+					ItemArrayOwned = true;
+				}
 				DWORD count = 0;
 				if(S_OK == captured.items->GetCount(&count) && count > 0)
 				{

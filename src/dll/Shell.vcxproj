@@ -184,6 +184,7 @@
     <ClInclude Include="src\Expression\Variable.h" />
     <ClInclude Include="src\Include\Cache.h" />
     <ClInclude Include="src\Include\Packages.h" />
+    <ClInclude Include="src\Include\ExplorerCommandCatalog.h" />
     <ClInclude Include="src\Include\Diagnostics\MenuPerf.h" />
     <ClInclude Include="src\Include\BitmapCache.h" />
     <ClInclude Include="src\Include\ShellExt.h" />
@@ -223,6 +224,7 @@
     <ClCompile Include="src\Selections.cpp" />
     <ClCompile Include="src\ShellExt.cpp" />
     <ClCompile Include="src\ContextMenu.cpp" />
+    <ClCompile Include="src\ExplorerCommand.cpp" />
     <ClCompile Include="src\MenuPerf.cpp" />
     <ClCompile Include="src\Packages.cpp" />
     <ClCompile Include="src\Main.cpp" />

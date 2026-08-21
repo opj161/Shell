@@ -820,6 +820,7 @@ namespace Nilesoft
 				mii->fMask |= MIIM_STATE;
 
 				mii->wID = item->wid;
+				mii->retain_explorer_command(item->explorer_command);
 
 				if(mii->wID == 0 || mii->wID == (uint32_t)-1)
 					mii->wID = ident.get_id();
@@ -995,6 +996,7 @@ namespace Nilesoft
 					mii->fMask |= MIIM_SUBMENU;
 					mii->hSubMenu = CreatePopupMenu();
 					mii->system_source = item;
+					mii->retain_explorer_command(item->explorer_command);
 
 					auto m_sub = &_menus[mii->hSubMenu];
 					m_sub->handle = mii->hSubMenu;
@@ -1122,9 +1124,17 @@ namespace Nilesoft
 			}
 
 			// Just-in-time: the host popup behind this one is populated now, not
-			// when the root menu was built.
+			// when the root menu was built. Packaged IExplorerCommand flyouts
+			// have no native HMENU; EnumSubCommands is the documented child
+			// source, called when this wrapper is about to become active.
+			// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-enumsubcommands
 			if(menu->native_source)
-				materialize_native_children(menu->native_source);
+			{
+				if(menu->native_source->explorer_command)
+					materialize_explorer_command_children(menu->native_source);
+				else
+					materialize_native_children(menu->native_source);
+			}
 
 			prepare_system_items(_system_items, menu);
 			
@@ -1505,6 +1515,8 @@ namespace Nilesoft
 						else
 							_items_command.push_back(item);
 					}
+					else if(item->explorer_command && item->is_item())
+						_items_command.push_back(item);
 
 					if(menu->is_main && item->is_popup())
 						_main_popup.push_back(item);
@@ -4907,6 +4919,12 @@ namespace Nilesoft
 				}
 
 				{
+					Diagnostics::MenuPerfScope perf(L"explorer.commands");
+					append_explorer_commands(__system_menu_tree);
+					perf.annotate(static_cast<long>(__system_menu_tree->items.size()));
+				}
+
+				{
 					Diagnostics::MenuPerfScope perf(L"native.modify_rules");
 					apply_system_modify_rules(__system_menu_tree, true);
 				}
@@ -5026,6 +5044,15 @@ namespace Nilesoft
 					}
 
 					id = 0;
+					if(invoke_item && invoke_item->explorer_command)
+					{
+						// MenuItemInfo holds its own IUnknown ref, so this is
+						// still valid after Uninitialize released menuitem_t.
+						// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-invoke
+						invoke_explorer_command(invoke_item);
+						delete this;
+						return id;
+					}
 					if(invoke_item && invoke_item->dynamic)
 					{
 						// The worker is a new STA. Marshal IShellBrowser here, on

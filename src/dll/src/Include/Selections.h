@@ -1,5 +1,10 @@
 #pragma once
 
+struct IShellItemArray;
+struct IShellBrowser;
+struct IShellView;
+struct IFolderView2;
+
 namespace Nilesoft
 {
 	namespace Shell
@@ -229,6 +234,8 @@ namespace Nilesoft
 			// False for the UI-thread borrowed pointer from WM_GETISHELLBROWSER.
 			// True only for a proxy unmarshaled onto the dynamic-invoke STA.
 			bool			ShellBrowserOwned{};
+			IShellItemArray *ItemArray{};
+			bool			ItemArrayOwned{};
 
 			IShellView *ShellView{};
 			IFolderView2 *FolderView{};
@@ -269,6 +276,9 @@ namespace Nilesoft
 				if(ShellBrowserOwned && ShellBrowser)
 					ShellBrowser->Release();
 
+				if(ItemArrayOwned && ItemArray)
+					ItemArray->Release();
+
 				if(ShellView)
 					ShellView->Release();
 
@@ -277,6 +287,8 @@ namespace Nilesoft
 
 				ShellBrowser = {};
 				ShellBrowserOwned = false;
+				ItemArray = {};
+				ItemArrayOwned = false;
 				ShellView = {};
 				FolderView = {};
 			}

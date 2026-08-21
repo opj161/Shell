@@ -14,6 +14,9 @@ constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 #include "Include/Theme.h"
 #include "Include/NativeMenuLazy.h"
 #include "Include/OneShotMarshal.h"
+
+struct IExplorerCommand;
+struct IShellItemArray;
 #include <Library/PlutoVGWrap.h>
 #include "Include/Tip.h"
 #include <stack>
@@ -106,10 +109,21 @@ namespace Nilesoft
 			// Set for the root node and for every node that owns a host submenu.
 			// Empty `items` on a node with a handle means "not opened yet".
 			NativePopupState native_popup;
+
+			// Packaged IExplorerCommand this item was built from. Owned when
+			// explorer_command_owned is true. Not an IContextMenu handler.
+			// MenuItemInfo retains a second ref for Invoke after Uninitialize.
+			// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand
+			IExplorerCommand *explorer_command = nullptr;
+			bool explorer_command_owned = false;
+
 			~menuitem_t()
 			{
 				for(auto item : items)
 					delete item;
+				if(explorer_command_owned && explorer_command)
+					static_cast<IUnknown *>(explorer_command)->Release();
+				explorer_command = nullptr;
 			}
 
 			bool is_separator() const { return type == 2; }
@@ -761,6 +775,10 @@ plutovg_move_to(pluto, start.x, start.y);
 			bool materialize_native_children(menuitem_t *node);
 			void apply_system_modify_rules(menuitem_t *node, bool is_root);
 			bool has_applicable_native_moveto_rule() const;
+			void append_explorer_commands(menuitem_t *root);
+			bool materialize_explorer_command_children(menuitem_t *node);
+			bool invoke_explorer_command(MenuItemInfo *item);
+			IShellItemArray *ensure_selection_array();
 
 			// True while Shell is sending its own WM_INITMENUPOPUP to the host for
 			// this menu, so the subclass hook lets it through to the host window
