@@ -188,6 +188,52 @@ TEST(path_contracts, grow_on_exact_fill_stops_at_the_maximum_path)
 	CHECK_MSG(calls <= 8, "doubling from MAX_PATH reaches 32768 in a few steps");
 }
 
+TEST(path_contracts, grow_on_copied_fill_treats_nsize_minus_one_as_truncation)
+{
+	// GetModuleFileNameExW: truncated success copies nSize-1 characters and
+	// returns that count. grow_on_exact_fill would keep the truncated path.
+	const wchar_t *full = L"0123456789ABCDEF";
+	int calls = 0;
+
+	auto result = Contracts::grow_on_copied_fill(
+		[&](wchar_t *buffer, DWORD capacity) -> DWORD
+		{
+			calls++;
+			DWORD length = static_cast<DWORD>(::wcslen(full));
+			if(capacity <= length)
+			{
+				DWORD n = capacity - 1;
+				for(DWORD i = 0; i < n; ++i)
+					buffer[i] = full[i];
+				buffer[n] = L'\0';
+				return n;
+			}
+			::wcscpy_s(buffer, capacity, full);
+			return length;
+		},
+		4);
+
+	CHECK(::wcscmp(result.c_str(), full) == 0);
+	CHECK(consistent(result));
+	CHECK_MSG(calls >= 2, "a copied-fill of nSize-1 must retry");
+}
+
+TEST(path_contracts, grow_on_copied_fill_keeps_a_result_with_slack)
+{
+	int calls = 0;
+	auto result = Contracts::grow_on_copied_fill(
+		[&](wchar_t *buffer, DWORD capacity) -> DWORD
+		{
+			calls++;
+			::wcscpy_s(buffer, capacity, L"C:\\shell.exe");
+			return static_cast<DWORD>(::wcslen(L"C:\\shell.exe"));
+		});
+
+	CHECK(::wcscmp(result.c_str(), L"C:\\shell.exe") == 0);
+	CHECK_EQ(calls, 1);
+	CHECK(consistent(result));
+}
+
 // ---------------------------------------------------------------- contract C
 
 TEST(path_contracts, fill_then_resize_accepts_a_result_that_exactly_fits)
@@ -265,6 +311,17 @@ TEST(path, module_path_matches_the_running_executable)
 	CHECK(::wcscmp(path.c_str(), expected) == 0);
 	CHECK_EQ((int)path.length(), (int)n);
 	CHECK_MSG(consistent(path), "a module path must not carry a trailing NUL in its length");
+}
+
+TEST(path, module_filename_ex_matches_getmodulefilenamew_for_this_process)
+{
+	wchar_t expected[MAX_PATH]{};
+	DWORD n = ::GetModuleFileNameW(nullptr, expected, MAX_PATH);
+	CHECK(n > 0 && n < MAX_PATH);
+
+	auto via_ex = Diagnostics::Process::ModuleFileName(::GetCurrentProcess());
+	CHECK(::wcscmp(via_ex.c_str(), expected) == 0);
+	CHECK(consistent(via_ex));
 }
 
 TEST(path, current_directory_length_is_its_length)

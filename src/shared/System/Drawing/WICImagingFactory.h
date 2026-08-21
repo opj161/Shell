@@ -8,8 +8,16 @@ namespace Nilesoft
 		class WIC
 		{
 		private:
-			inline static std::mutex _factory_mutex;
-			inline static IWICImagingFactory* _factory = nullptr;
+			// This helper does not rely on IWICImagingFactory being agile across
+			// arbitrary host apartments. Cache one factory per calling thread and
+			// Release Shell-owned references before balancing Shell's
+			// CoInitializeEx with CoUninitialize. WIC codecs are apartment Both
+			// as of Windows 7; that is not a factory-agility guarantee.
+			// https://learn.microsoft.com/windows/win32/com/single-threaded-apartments
+			// https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex
+			// https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-couninitialize
+			// https://learn.microsoft.com/windows/win32/wic/-wic-howwicworks
+			inline static thread_local IWICImagingFactory* _factory = nullptr;
 
 		public:
 
@@ -18,7 +26,6 @@ namespace Nilesoft
 
 			static void release()
 			{
-				std::lock_guard<std::mutex> lock(_factory_mutex);
 				if(_factory) 
 					_factory->Release();
 				_factory = nullptr;
@@ -26,7 +33,6 @@ namespace Nilesoft
 
 			static bool init()
 			{
-				std::lock_guard<std::mutex> lock(_factory_mutex);
 				if(!_factory)
 				{
 					HRESULT hr = E_FAIL;
@@ -43,7 +49,7 @@ namespace Nilesoft
 					}
 					if(FAILED(hr) || !_factory)
 					{
-						::CoCreateInstance
+						hr = ::CoCreateInstance
 						(
 							CLSID_WICImagingFactory1,
 							nullptr,
@@ -58,7 +64,15 @@ namespace Nilesoft
 
 			static IWICBitmapSource* To32bppPBGRA(IWICBitmapSource* bitmap, uint32_t width = 0, uint32_t height = 0)
 			{
-				if(!(init() && bitmap)) return nullptr;
+				if(!bitmap)
+					return nullptr;
+				// Callers transfer ownership. init() failure must still Release.
+				// https://learn.microsoft.com/windows/win32/com/rules-for-managing-reference-counts
+				if(!init())
+				{
+					bitmap->Release();
+					return nullptr;
+				}
 
 				uint32_t w = 0, h = 0;
 
@@ -100,8 +114,12 @@ namespace Nilesoft
 					auto pixelFormat = GUID_WICPixelFormat32bppPBGRA;
 					if(S_OK == bitmap->GetPixelFormat(&pixelFormat))
 					{
-						if(pixelFormat != GUID_WICPixelFormat32bppBGRA ||
-						   pixelFormat != GUID_WICPixelFormat32bppPBGRA)
+					// PBGRA is already the requested premultiplied format. Creating a
+					// converter in that case adds a transform to every menu-image path
+					// for no result. WICConvertBitmapSource documents the same fast path:
+					// an already matching source is reused rather than converted.
+					// https://learn.microsoft.com/windows/win32/api/wincodec/nf-wincodec-wicconvertbitmapsource
+					if(pixelFormat != GUID_WICPixelFormat32bppPBGRA)
 						{
 							IWICFormatConverter* formatConverter = nullptr;
 							// Convert the format of the image frame to 32bppPBGR
@@ -202,7 +220,11 @@ namespace Nilesoft
 
 			static HBITMAP ToBitmap32(HBITMAP hbitmap, const SIZE &size = { -1, -1 }, uint8_t **lpbits = nullptr)
 			{
-				return ToHBITMAP(ToWICBitmap(hbitmap, size), lpbits);
+				auto bitmap = ToWICBitmap(hbitmap, size);
+				auto result = ToHBITMAP(bitmap, lpbits);
+				if(bitmap)
+					bitmap->Release();
+				return result;
 			}
 
 			static HBITMAP LoadPNG(const wchar_t *path)
@@ -217,13 +239,13 @@ namespace Nilesoft
 
 					if(S_OK == hr && decoder)
 					{
+						// ToWICBitmap consumes the decoder reference on every path.
 						auto bitmap = ToWICBitmap(decoder);
 						if(bitmap)
 						{
 							result = ToHBITMAP(bitmap);
 							bitmap->Release();
 						}
-						decoder->Release();
 					}
 				}
 				return result;
@@ -262,9 +284,9 @@ namespace Nilesoft
 						IWICBitmapSource *bitmapsrc = wicbitmap;
 						if(bitmap.bmBitsPixel < 32)
 						{
+							// To32bppPBGRA consumes the incoming owned reference when
+							// it replaces it with a scaler or converter.
 							bitmapsrc = To32bppPBGRA(wicbitmap, bitmap.bmWidth, bitmap.bmHeight);
-							if(wicbitmap != bitmapsrc)
-								wicbitmap->Release();
 						}
 
 						ID2D1Bitmap *d2DBitmap = nullptr;
@@ -297,9 +319,8 @@ namespace Nilesoft
 						IWICBitmapSource* bitmapsrc = wicbitmap;
 						if(bitmap.bmBitsPixel < 32)
 						{
+							// To32bppPBGRA transfers ownership to its returned source.
 							bitmapsrc = To32bppPBGRA(wicbitmap, size.cx, size.cy);
-							if(wicbitmap != bitmapsrc)
-								wicbitmap->Release();
 						}
 						
 						ID2D1Bitmap* d2DBitmap = nullptr;
@@ -482,8 +503,11 @@ namespace Nilesoft
 					}
 					//Logger::Info(L"%d %d", width, height);
 					auto bitmap = ToWICBitmap(decoder, width, height);
-					hbitmap = ToHBITMAP(bitmap);
-					bitmap->Release();
+					if(bitmap)
+					{
+						hbitmap = ToHBITMAP(bitmap);
+						bitmap->Release();
+					}
 				}
 
 				return hbitmap;

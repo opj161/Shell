@@ -1,6 +1,7 @@
 #pragma once
 #include <psapi.h>
 #include <tlhelp32.h>
+#include "../IO/PathContracts.h"
 
 namespace Nilesoft
 {
@@ -240,8 +241,16 @@ namespace Nilesoft
 
 			static string ModuleFileName(HANDLE hProcess, HMODULE hModule = {})
 			{
-				string name(MAX_PATH + 1);
-				return name.release(::GetModuleFileNameExW(hProcess, hModule, name.data(), MAX_PATH)).move();
+				// GetModuleFileNameExW truncates, succeeds, and returns the
+				// copied length (nSize-1), unlike GetModuleFileNameW which
+				// returns nSize. Non-NULL hModule also requires
+				// PROCESS_QUERY_INFORMATION | PROCESS_VM_READ.
+				// https://learn.microsoft.com/windows/win32/api/psapi/nf-psapi-getmodulefilenameexw
+				return IO::Contracts::grow_on_copied_fill(
+					[&](wchar_t *buffer, DWORD capacity)
+					{
+						return ::GetModuleFileNameExW(hProcess, hModule, buffer, capacity);
+					});
 			}
 		};
 

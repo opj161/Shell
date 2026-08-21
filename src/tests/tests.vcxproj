@@ -72,6 +72,7 @@
     <ClInclude Include="..\dll\src\Include\BitmapCache.h" />
     <ClInclude Include="..\dll\src\Include\MenuText.h" />
     <ClInclude Include="..\dll\src\Include\NativeMenuLazy.h" />
+    <ClInclude Include="..\dll\src\Include\OneShotMarshal.h" />
     <ClInclude Include="..\dll\src\Include\Packages.h" />
     <ClInclude Include="..\dll\src\Include\TaskbarHitCache.h" />
     <ClInclude Include="..\dll\src\Include\TaskbarOrigin.h" />
@@ -81,8 +82,10 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="test_stringcompare.cpp" />
+    <ClCompile Include="test_string_search.cpp" />
     <ClCompile Include="test_encoding.cpp" />
     <ClCompile Include="test_bitmapcache.cpp" />
+    <ClCompile Include="test_wic.cpp" />
     <ClCompile Include="test_shellext.cpp" />
     <ClCompile Include="test_selection_path_resolver.cpp" />
     <ClCompile Include="test_threadsafety.cpp" />
@@ -93,6 +96,7 @@
     <ClCompile Include="test_menutext.cpp" />
     <ClCompile Include="test_registry.cpp" />
     <ClCompile Include="test_regop.cpp" />
+    <ClCompile Include="test_fso.cpp" />
     <ClCompile Include="test_manifest.cpp" />
     <ClCompile Include="test_path.cpp" />
     <ClCompile Include="test_taskbar_origin.cpp" />
@@ -101,8 +105,14 @@
     <ClCompile Include="test_window_text.cpp" />
     <ClCompile Include="test_dll_load.cpp" />
 	<ClCompile Include="test_legacy_config_transfer.cpp" />
+    <ClCompile Include="test_treatas_plan.cpp" />
+    <ClCompile Include="test_oneshot_marshal.cpp" />
+    <ClCompile Include="test_loadstring.cpp" />
     <ClCompile Include="..\dll\src\Packages.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="tests.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <!-- Run the suite as part of the build so a regression fails CI, not just a

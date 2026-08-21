@@ -8,6 +8,7 @@ EXPORTS
 	PrepareTreatAs
 	TreatAsRollback
 	TreatAsApply
+	TreatAsCommit
 	NotifyShellChanged
 	;ShellExecute
 	ValidatePath

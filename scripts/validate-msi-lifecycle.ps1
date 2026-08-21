@@ -105,6 +105,7 @@ foreach ($item in $Path) {
         "PrepareTreatAs" = "1"
         "TreatAsRollback" = "11521"
         "TreatAsApply" = "11265"
+        "TreatAsCommit" = "11841"
         "NotifyShellChanged" = "65"
     }
     foreach ($entry in $expectedActions.GetEnumerator()) {
@@ -122,6 +123,7 @@ foreach ($item in $Path) {
         "CleanupLegacyConfig" = 4003
         "TreatAsRollback" = 5001
         "TreatAsApply" = 5002
+        "TreatAsCommit" = 5003
         "InstallFinalize" = 6600
         "NotifyShellChanged" = 6601
     }
@@ -136,7 +138,7 @@ foreach ($item in $Path) {
         $row = @($sequence | Where-Object Action -eq $action)
         Assert-True ($row[0].Condition -ceq $legacyCondition) "${name}: $action condition no longer isolates pre-1.9.20 upgrades."
     }
-    foreach ($action in @("PrepareTreatAs", "TreatAsRollback", "TreatAsApply")) {
+    foreach ($action in @("PrepareTreatAs", "TreatAsRollback", "TreatAsApply", "TreatAsCommit")) {
         $row = @($sequence | Where-Object Action -eq $action)
         Assert-True ($row[0].Condition -ceq $treatAsCondition) "${name}: $action condition changed."
     }
@@ -151,7 +153,7 @@ foreach ($item in $Path) {
 
     $hidden = Query-Msi $msi 'SELECT `Property`, `Value` FROM `Property` WHERE `Property` = ''MsiHiddenProperties'''
     Assert-True ($hidden.Count -eq 1) "${name}: hidden custom-action data property is missing."
-    foreach ($action in @("RestoreLegacyConfigRollback", "RestoreLegacyConfig", "CleanupLegacyConfig", "TreatAsRollback", "TreatAsApply")) {
+    foreach ($action in @("RestoreLegacyConfigRollback", "RestoreLegacyConfig", "CleanupLegacyConfig", "TreatAsRollback", "TreatAsApply", "TreatAsCommit")) {
         Assert-True ($action -in $hidden[0].Value.Split(';')) "${name}: $action data is not hidden from MSI logs."
     }
 

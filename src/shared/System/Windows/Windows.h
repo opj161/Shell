@@ -276,7 +276,12 @@ namespace Nilesoft
 		{
 			DWORD len = MAX_COMPUTERNAME_LENGTH + 1;
 			string temp(len);
-			::GetComputerNameW(temp.buffer(), &len);
+			// Failure returns 0. On success nSize is the copied TCHAR count
+			// excluding the terminator — unlike GetUserNameW, which includes it.
+			// Ignoring failure leaves a NUL-run that is not empty().
+			// https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-getcomputernamew
+			if(!::GetComputerNameW(temp.buffer(), &len))
+				return nullptr;
 			return temp.release(len).move();
 		}
 

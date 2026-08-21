@@ -564,6 +564,12 @@ TEST(shellext, independent_menus_own_independent_one_shot_streams)
 
 TEST(shellext, an_expired_unconsumed_stream_is_pruned_safely)
 {
+	// prune_unlocked moves the entry out; CapturedSelection::reset then
+	// CoGetInterfaceAndReleaseStream's the unconsumed stream. This suite
+	// keeps COM initialized until after nss_test::run returns, which is
+	// the documented requirement: do not uninitialize COM first.
+	// https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-cogetinterfaceandreleasestream
+	// https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-couninitialize
 	ShellExtCapture::clear_all();
 	Menu menu;
 	KnownFolderDataObject dto(FOLDERID_Desktop);

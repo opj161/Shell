@@ -507,10 +507,17 @@ namespace Nilesoft
 
 		Object &from(std::vector<string> const &list)
 		{
-			auto _array = new Object[list.size() + 1]{};
-			_array[0] = (uint32_t)list.size();
+			// Object arrays store their element count in a uint32_t header. Refuse
+			// an unrepresentable input before both the count cast and count + 1
+			// allocation, then use that one bounded count throughout.
+			if(list.size() > UINT32_MAX)
+				return *this;
+
+			auto count = static_cast<uint32_t>(list.size());
+			auto _array = std::make_unique<Object[]>(static_cast<size_t>(count) + 1);
+			_array[0] = count;
 			
-			for(auto i = 0u; i< list.size(); i++)
+			for(uint32_t i = 0; i < count; ++i)
 			{
 				try {
 					_array[i + 1] = list[i];
@@ -518,7 +525,7 @@ namespace Nilesoft
 				catch(...) {}
 			}
 
-			Object result(_array, true);
+			Object result(_array.release(), true);
 			*this = result.move();
 
 			return *this;

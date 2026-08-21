@@ -5019,12 +5019,16 @@ namespace Nilesoft
 					id = 0;
 					if(invoke_item && invoke_item->dynamic)
 					{
-
-						//Invoke(this);
-						//_thread.create(Invoke, this);
+						// The worker is a new STA. Marshal IShellBrowser here, on
+						// the menu thread, before detach. Failure leaves no raw
+						// pointer for the worker to call.
+						// https://learn.microsoft.com/windows/win32/com/single-threaded-apartments
+						if(Selected.ShellBrowser)
+						{
+							if(!_browser_marshal.assign(Selected.ShellBrowser, IID_IShellBrowser))
+								Selected.ShellBrowser = nullptr;
+						}
 						std::thread(&Invoke, this).detach();
-						//thread(Invoke, this).detach();
-						//thread::begin(Invoke, this);
 						return id;
 					}
 				}
@@ -5100,6 +5104,19 @@ namespace Nilesoft
 
 			COM_INITIALIZER com;
 			com.initialize(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
+			IShellBrowser *proxy = nullptr;
+			if(cm->_browser_marshal.consume(IID_IShellBrowser,
+				reinterpret_cast<void **>(&proxy)) && proxy)
+			{
+				cm->Selected.ShellBrowser = proxy;
+				cm->Selected.ShellBrowserOwned = true;
+			}
+			else
+			{
+				cm->Selected.ShellBrowser = nullptr;
+				cm->Selected.ShellBrowserOwned = false;
+			}
 
 			InvokeCommands(cm);
 		}

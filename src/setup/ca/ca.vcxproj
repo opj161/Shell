@@ -123,6 +123,9 @@
     <ClCompile Include="dllmain.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="TreatAsPlan.h" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="ca.def" />
     <None Include="packages.config" />
   </ItemGroup>

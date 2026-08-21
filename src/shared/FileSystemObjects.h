@@ -118,16 +118,17 @@ namespace Nilesoft
 			{
 			}
 
-			FileSystemObjects &operator=(FileSystemObjects const &fso)
-			{
-				::memcpy(this, &fso, sizeof(FileSystemObjects));
-				return *this;
-			}
+			FileSystemObjects &operator=(FileSystemObjects const &) = default;
 
 			void set(BOOL any = TRUE)
 			{
 				count = FSO_SIZE - 1;
-				::memset(&Types, any, sizeof(Types));
+				for(auto &type : Types)
+					type = any ? TRUE : FALSE;
+				// FSO_COUNT is a category-count sentinel, not a boolean type flag.
+				// Keeping it at the number of enabled categories preserves correct
+				// matching for multi-item selections without byte-fill artifacts.
+				Types[FSO_COUNT] = any ? FSO_SIZE - 1 : 0;
 			}
 
 			bool excluded(int32_t t) const
@@ -210,7 +211,10 @@ namespace Nilesoft
 					case IDENT_TYPE_VHD:
 					case IDENT_TYPE_DVD:
 					case IDENT_TYPE_REMOVABLE:
+					case IDENT_TYPE_REMOTE:
 					case IDENT_TYPE_NAMESPACE:
+					case IDENT_TYPE_COMPUTER:
+					case IDENT_TYPE_RECYCLEBIN:
 						return true;
 				}
 				return false;

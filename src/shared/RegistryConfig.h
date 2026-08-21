@@ -57,10 +57,10 @@ namespace Nilesoft
 
 			static bool IsRegisteredCached(bool force_refresh = false)
 			{
-				static std::atomic<uint32_t> cached_tick{ 0 };
+				static std::atomic<uint64_t> cached_tick{ 0 };
 				static std::atomic<bool> cached_state{ false };
 
-				auto now = ::GetTickCount();
+				auto now = ::GetTickCount64();
 				auto last = cached_tick.load(std::memory_order_relaxed);
 
 				if(!force_refresh && last != 0 && (now - last) < 2000)

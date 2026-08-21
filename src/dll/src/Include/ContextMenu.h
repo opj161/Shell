@@ -13,6 +13,7 @@ constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 
 #include "Include/Theme.h"
 #include "Include/NativeMenuLazy.h"
+#include "Include/OneShotMarshal.h"
 #include <Library/PlutoVGWrap.h>
 #include "Include/Tip.h"
 #include <stack>
@@ -698,6 +699,10 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			HINSTANCE hInstance{};
 			Selections Selected;
+			// Marshaled on the menu thread before a dynamic invoke detaches a
+			// new STA; consumed on that STA. The UI-thread IShellBrowser is a
+			// borrowed pointer and must not be called from the worker.
+			OneShotMarshal _browser_marshal;
 
 			DWORD ProcessId{};
 			DWORD ThreadId{};

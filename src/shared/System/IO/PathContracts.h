@@ -120,6 +120,47 @@ namespace Nilesoft
 				return {};
 			}
 
+			// Contract B2 - grow when the copied length fills the buffer minus
+			// the terminator.
+			//
+			// GetModuleFileNameExW succeeds on truncation: it null-terminates
+			// and returns the copied length, which is nSize-1, not nSize.
+			// grow_on_exact_fill would treat that as a complete path.
+			//
+			//   If the size of the file name is larger than the value of the
+			//   nSize parameter, the function succeeds but the file name is
+			//   truncated and null-terminated.
+			//
+			//   https://learn.microsoft.com/windows/win32/api/psapi/nf-psapi-getmodulefilenameexw
+			//
+			// written == capacity-1 is therefore "fits exactly or was cut".
+			// Retry. An exact (capacity-1)-character path is re-read into a
+			// larger buffer; that is the conservative signal.
+			template<typename Call>
+			string grow_on_copied_fill(Call call, DWORD initial = MAX_PATH)
+			{
+				DWORD capacity = initial < 2 ? 2 : initial;
+				while(capacity <= MaximumPath)
+				{
+					string result(static_cast<size_t>(capacity) + 1);
+
+					DWORD written = call(result.buffer(capacity + 1), capacity);
+					if(written == 0)
+						return {};
+
+					if(written < capacity - 1)
+						return result.release(written).move();
+
+					if(capacity == MaximumPath)
+						return result.release(written).move();
+
+					auto next = capacity * 2;
+					capacity = next > MaximumPath || next < capacity ? MaximumPath : next;
+				}
+
+				return {};
+			}
+
 			// Contract C - fill first, and the overflow return is a size.
 			//
 			// SearchPathW, GetCurrentDirectoryW and GetTempPathW answer a

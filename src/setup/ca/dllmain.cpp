@@ -6,12 +6,15 @@
 #include <msi.h>
 #include <msiquery.h>
 #include <string>
+#include <sddl.h>
 #include "../../shared/LegacyConfigTransfer.h"
+#include "TreatAsPlan.h"
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "msi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 template<typename ... Args>
 static void log(const char *format, Args ... args)
@@ -194,8 +197,16 @@ static TreatAsState QueryTreatAs(LSTATUS *error = nullptr)
 	return TreatAsState::foreign;
 }
 
-static LSTATUS CreateTreatAsIfAbsent()
+// created is set only when this invocation both created the key
+// (REG_CREATED_NEW_KEY) and wrote our CLSID. Opening an already-ours key is
+// success with created=false so rollback must not delete it.
+//
+//   https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regcreatekeyexw
+static LSTATUS CreateTreatAsIfAbsent(bool *created = nullptr)
 {
+	if(created)
+		*created = false;
+
 	RegKey parent;
 	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TREATAS_PARENT, 0,
 		KEY_CREATE_SUB_KEY | KEY_WOW64_64KEY, parent.put());
@@ -219,8 +230,11 @@ static LSTATUS CreateTreatAsIfAbsent()
 		// We created this empty key in this call, so taking it back is not a
 		// recursive/shared-key deletion.
 		::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, KEY_WOW64_64KEY, 0);
+		return rc;
 	}
-	return rc;
+	if(created)
+		*created = true;
+	return ERROR_SUCCESS;
 }
 
 static LSTATUS RemoveTreatAsIfOurs()
@@ -235,6 +249,111 @@ static LSTATUS RemoveTreatAsIfOurs()
 		return error;
 
 	return ::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, KEY_WOW64_64KEY, 0);
+}
+
+enum class MarkerState
+{
+	absent,
+	present,
+	invalid
+};
+
+static std::wstring JoinPath(const std::wstring &path1, const std::wstring &path2);
+static std::wstring ProgramDataFolder();
+static bool EnsurePlainDirectory(const std::wstring &path);
+static bool RandomToken(std::wstring &token);
+
+static bool EnsureMarkerParents(const std::wstring &marker)
+{
+	if(!Nilesoft::TreatAsPlan::MarkerPathLooksOwned(marker))
+		return false;
+
+	auto slash = marker.find_last_of(L'\\');
+	if(slash == std::wstring::npos)
+		return false;
+
+	auto root = ProgramDataFolder();
+	if(root.empty())
+		return false;
+	auto vendor = JoinPath(root, L"Nilesoft");
+	auto product = JoinPath(vendor, L"Shell");
+	auto staging = JoinPath(product, L"Staging");
+	if(::CompareStringOrdinal(marker.substr(0, slash).c_str(), -1,
+		staging.c_str(), -1, TRUE) != CSTR_EQUAL)
+		return false;
+
+	return EnsurePlainDirectory(vendor) && EnsurePlainDirectory(product)
+		&& EnsurePlainDirectory(staging);
+}
+
+// Restrictive DACL at create time: protected, SYSTEM + Administrators FILE_ALL,
+// no Users, no inherit. A world-writable marker would be a delete primitive
+// for the TreatAs key.
+//
+//   https://learn.microsoft.com/windows/win32/secbp/creating-a-dacl
+//   https://learn.microsoft.com/windows/win32/secauthz/security-descriptor-string-format
+//   https://learn.microsoft.com/windows/win32/api/sddl/nf-sddl-convertstringsecuritydescriptortosecuritydescriptorw
+//   https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-createfilew
+static bool WriteCreatedMarker(const std::wstring &path)
+{
+	if(!EnsureMarkerParents(path))
+		return false;
+
+	SECURITY_ATTRIBUTES sa{};
+	sa.nLength = sizeof(sa);
+	sa.bInheritHandle = FALSE;
+	if(!::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+		L"D:P(A;;FA;;;SY)(A;;FA;;;BA)",
+		SDDL_REVISION_1,
+		&sa.lpSecurityDescriptor,
+		nullptr))
+		return false;
+
+	HANDLE raw = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, &sa, CREATE_NEW,
+		FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_WRITE_THROUGH,
+		nullptr);
+	::LocalFree(sa.lpSecurityDescriptor);
+	FileHandle file{ raw };
+	return file.valid();
+}
+
+static MarkerState QueryCreatedMarker(const std::wstring &path)
+{
+	if(!Nilesoft::TreatAsPlan::MarkerPathLooksOwned(path))
+		return MarkerState::invalid;
+
+	auto attributes = ::GetFileAttributesW(path.c_str());
+	if(attributes == INVALID_FILE_ATTRIBUTES)
+	{
+		auto error = ::GetLastError();
+		if(error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+			return MarkerState::absent;
+		return MarkerState::invalid;
+	}
+	if(attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+		return MarkerState::invalid;
+
+	FileHandle file{ ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+		nullptr, OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
+	if(!file.valid() || !Nilesoft::LegacyConfigTransfer::regular_non_reparse(file))
+		return MarkerState::invalid;
+	return MarkerState::present;
+}
+
+static bool BuildCreatedMarkerPath(std::wstring &path)
+{
+	auto root = ProgramDataFolder();
+	if(root.empty())
+		return false;
+
+	std::wstring token;
+	if(!RandomToken(token))
+		return false;
+
+	path = JoinPath(JoinPath(JoinPath(JoinPath(root, L"Nilesoft"), L"Shell"),
+		L"Staging"), L"treatas." + token + L".created");
+	return Nilesoft::TreatAsPlan::MarkerPathLooksOwned(path);
 }
 
 static void InstallerMessage(MSIHANDLE hInstall, INSTALLMESSAGE type, int message_id,
@@ -624,12 +743,13 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 
 	LSTATUS error = ERROR_SUCCESS;
 	auto state = QueryTreatAs(&error);
-	const wchar_t *plan = L"noop";
+	Nilesoft::TreatAsPlan::Op op = Nilesoft::TreatAsPlan::Op::noop;
+	std::wstring marker;
 
 	if(uninstall)
 	{
 		if(state == TreatAsState::ours)
-			plan = L"uninstall-ours";
+			op = Nilesoft::TreatAsPlan::Op::uninstall_ours;
 		else if(state == TreatAsState::inaccessible)
 		{
 			wchar_t detail[32]{};
@@ -643,7 +763,11 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 	else
 	{
 		if(state == TreatAsState::absent)
-			plan = L"install-absent";
+		{
+			if(!BuildCreatedMarkerPath(marker))
+				return ERROR_INSTALL_FAILURE;
+			op = Nilesoft::TreatAsPlan::Op::install_absent;
+		}
 		else if(state == TreatAsState::foreign || state == TreatAsState::inaccessible)
 		{
 			wchar_t detail[32]{};
@@ -654,7 +778,11 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 		}
 	}
 
-	if(::CompareStringOrdinal(plan, -1, L"noop", -1, FALSE) != CSTR_EQUAL)
+	// Rollback and commit custom actions do not run when rollback is disabled.
+	// Refuse the mutating plan rather than apply TreatAs without an undo.
+	// https://learn.microsoft.com/windows/win32/msi/rollbackdisabled
+	// https://learn.microsoft.com/windows/win32/msi/rollback-custom-actions
+	if(op != Nilesoft::TreatAsPlan::Op::noop)
 	{
 		std::wstring rollback_disabled;
 		if(msi.get(L"RollbackDisabled", rollback_disabled))
@@ -666,23 +794,39 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 		}
 	}
 
-	if(!msi.set(L"TreatAsRollback", plan) || !msi.set(L"TreatAsApply", plan))
+	auto data = Nilesoft::TreatAsPlan::Serialize(op, marker);
+	if(!msi.set(L"TreatAsRollback", data.c_str())
+	   || !msi.set(L"TreatAsApply", data.c_str())
+	   || !msi.set(L"TreatAsCommit", data.c_str()))
 		return ERROR_INSTALL_FAILURE;
 
 	return ERROR_SUCCESS;
 }
 
+// Custom actions that change the system must be deferred, with rollback
+// scheduled immediately before them. TreatAsApply mutates HKLM; it only sees
+// CustomActionData, ProductCode, and UserSID.
+// https://learn.microsoft.com/windows/win32/msi/changing-the-system-state-using-a-custom-action
+// https://learn.microsoft.com/windows/win32/msi/deferred-execution-custom-actions
+// https://learn.microsoft.com/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
 UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 {
 	MSI msi(hInstall);
-	std::wstring plan;
-	if(!msi.get(L"CustomActionData", plan) || plan == L"noop")
+	std::wstring data;
+	if(!msi.get(L"CustomActionData", data))
+		return ERROR_SUCCESS;
+
+	Nilesoft::TreatAsPlan::Plan plan;
+	if(!Nilesoft::TreatAsPlan::Parse(data, plan))
+		return ERROR_INSTALL_FAILURE;
+	if(plan.op == Nilesoft::TreatAsPlan::Op::noop)
 		return ERROR_SUCCESS;
 
 	LSTATUS rc = ERROR_INVALID_DATA;
-	if(plan == L"install-absent")
+	if(plan.op == Nilesoft::TreatAsPlan::Op::install_absent)
 	{
-		rc = CreateTreatAsIfAbsent();
+		bool created = false;
+		rc = CreateTreatAsIfAbsent(&created);
 		if(rc != ERROR_SUCCESS)
 		{
 			wchar_t detail[32]{};
@@ -694,8 +838,21 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 			// valid and the classic context menu is still available.
 			return ERROR_SUCCESS;
 		}
+		// Marker after create: writing it first would let rollback delete a
+		// lookalike that appeared between plan and apply. If apply is
+		// interrupted after creating TreatAs but before the marker, rollback
+		// noops and our redirect remains — safer than deleting foreign state.
+		// https://learn.microsoft.com/windows/win32/msi/rollback-custom-actions
+		if(created && !WriteCreatedMarker(plan.marker))
+		{
+			RemoveTreatAsIfOurs();
+			InstallerMessage(hInstall,
+				INSTALLMESSAGE(INSTALLMESSAGE_WARNING | MB_OK | MB_ICONWARNING),
+				TREATAS_WARNING);
+			return ERROR_SUCCESS;
+		}
 	}
-	else if(plan == L"uninstall-ours")
+	else if(plan.op == Nilesoft::TreatAsPlan::Op::uninstall_ours)
 	{
 		rc = RemoveTreatAsIfOurs();
 		if(rc != ERROR_SUCCESS)
@@ -717,21 +874,59 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 UINT __stdcall TreatAsRollback(MSIHANDLE hInstall)
 {
 	MSI msi(hInstall);
-	std::wstring plan;
-	if(!msi.get(L"CustomActionData", plan) || plan == L"noop")
+	std::wstring data;
+	if(!msi.get(L"CustomActionData", data))
 		return ERROR_SUCCESS;
 
-	LSTATUS rc = ERROR_INVALID_DATA;
-	if(plan == L"install-absent")
+	Nilesoft::TreatAsPlan::Plan plan;
+	if(!Nilesoft::TreatAsPlan::Parse(data, plan))
+		return ERROR_INSTALL_FAILURE;
+	if(plan.op == Nilesoft::TreatAsPlan::Op::noop)
+		return ERROR_SUCCESS;
+
+	LSTATUS rc = ERROR_SUCCESS;
+	if(plan.op == Nilesoft::TreatAsPlan::Op::install_absent)
+	{
+		auto marker = QueryCreatedMarker(plan.marker);
+		if(marker == MarkerState::invalid)
+			return ERROR_INSTALL_FAILURE;
+		if(!Nilesoft::TreatAsPlan::RollbackRemovesTreatAs(plan,
+			marker == MarkerState::present))
+			return ERROR_SUCCESS;
+
 		rc = RemoveTreatAsIfOurs();
-	else if(plan == L"uninstall-ours")
+		if(rc == ERROR_SUCCESS)
+			::DeleteFileW(plan.marker.c_str());
+	}
+	else if(plan.op == Nilesoft::TreatAsPlan::Op::uninstall_ours)
 		rc = CreateTreatAsIfAbsent();
+	else
+		return ERROR_INSTALL_FAILURE;
 
 	if(rc != ERROR_SUCCESS)
 	{
 		log("TreatAs rollback failed: %ld", rc);
 		return ERROR_INSTALL_FAILURE;
 	}
+	return ERROR_SUCCESS;
+}
+
+// Commit custom actions run after a successful installation script, not during
+// rollback, so the marker is still present if TreatAsRollback needs it.
+// https://learn.microsoft.com/windows/win32/msi/commit-custom-actions
+UINT __stdcall TreatAsCommit(MSIHANDLE hInstall)
+{
+	MSI msi(hInstall);
+	std::wstring data;
+	if(!msi.get(L"CustomActionData", data))
+		return ERROR_SUCCESS;
+
+	Nilesoft::TreatAsPlan::Plan plan;
+	if(!Nilesoft::TreatAsPlan::Parse(data, plan))
+		return ERROR_SUCCESS;
+	if(plan.op == Nilesoft::TreatAsPlan::Op::install_absent
+	   && Nilesoft::TreatAsPlan::MarkerPathLooksOwned(plan.marker))
+		::DeleteFileW(plan.marker.c_str());
 	return ERROR_SUCCESS;
 }
 

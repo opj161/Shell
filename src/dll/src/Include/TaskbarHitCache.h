@@ -40,7 +40,7 @@ namespace Nilesoft
 			// larger than this, so a bucket cannot straddle "on a button" and
 			// "empty area" in a way that matters.
 			static constexpr long BUCKET = 16;
-			static constexpr uint32_t TTL_MS = 3000;
+			static constexpr uint64_t TTL_MS = 3000;
 			static constexpr size_t CAPACITY = 64;
 
 			static long bucket_of(long v) noexcept
@@ -50,7 +50,7 @@ namespace Nilesoft
 				return (v >= 0 ? v : (v - BUCKET + 1)) / BUCKET;
 			}
 
-			std::optional<bool> lookup(HWND taskbar, POINT pt, uint32_t now) const
+			std::optional<bool> lookup(HWND taskbar, POINT pt, uint64_t now) const
 			{
 				if(!taskbar)
 					return std::nullopt;
@@ -71,7 +71,7 @@ namespace Nilesoft
 				return std::nullopt;
 			}
 
-			void store(HWND taskbar, POINT pt, bool allowed, uint32_t now)
+			void store(HWND taskbar, POINT pt, bool allowed, uint64_t now)
 			{
 				if(!taskbar)
 					return;
@@ -130,7 +130,7 @@ namespace Nilesoft
 				long bx;
 				long by;
 				bool allowed;
-				uint32_t tick;
+				uint64_t tick;
 			};
 
 			mutable std::mutex _mutex;

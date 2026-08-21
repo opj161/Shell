@@ -305,7 +305,7 @@ public:
 	// one, otherwise hands the point to the worker and waits out the budget.
 	bool query(HWND taskbar, POINT pt, bool secondary)
 	{
-		auto now = ::GetTickCount();
+		auto now = ::GetTickCount64();
 		if(auto hit = _cache.lookup(taskbar, pt, now); hit)
 			return *hit;
 
@@ -352,7 +352,7 @@ public:
 			return false;
 		}
 
-		_cache.store(taskbar, pt, answer, ::GetTickCount());
+		_cache.store(taskbar, pt, answer, ::GetTickCount64());
 		return answer;
 	}
 
@@ -445,7 +445,7 @@ private:
 
 			// Published even if the caller has already given up, so the next
 			// click in this region is a cache hit.
-			_cache.store(request.taskbar, request.pt, allowed, ::GetTickCount());
+			_cache.store(request.taskbar, request.pt, allowed, ::GetTickCount64());
 			::SetEvent(_done);
 		}
 	}
@@ -1019,6 +1019,9 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		// The flag used to be cleared here, which was the only place it was
 		// cleared and not a place every taskbar menu passes through.
 		// ScopedTaskbarOrigin in ShowTaskbarContextMenu owns it now.
+		// The WIC factory is apartment-local and must not survive the
+		// CoUninitialize that can close this thread's apartment.
+		WIC::release();
 		if(need_uninit_com)
 			::CoUninitialize();
 		return result;

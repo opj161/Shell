@@ -1555,7 +1555,12 @@ namespace Nilesoft
 							string proc;
 							for(auto &process : Diagnostics::Process::EnumInfo())
 							{
-								auto hProcess = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, process.th32ProcessID);
+								// GetModuleFileNameExW with a non-NULL module
+								// handle requires PROCESS_QUERY_INFORMATION,
+								// not LIMITED. LIMITED is for QueryFullProcessImageName
+								// and for ExW only when hModule is NULL.
+								// https://learn.microsoft.com/windows/win32/api/psapi/nf-psapi-getmodulefilenameexw
+								auto hProcess = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process.th32ProcessID);
 								if(hProcess)
 								{
 									for(auto &module : Diagnostics::Process::Modules(hProcess))
@@ -3737,7 +3742,11 @@ namespace Nilesoft
 					ppidl = ::ILCombine(pidlFolder, pidlItem);
 					::ILFree(pidlItem);
 				}
-				psf->Release();
+				// IComPtr's Q** conversion already took ownership of the
+				// SHBindToObject out-pointer. A second Release drops the last
+				// reference; ~IComPtr then Releases a freed object.
+				// https://learn.microsoft.com/windows/win32/com/rules-for-managing-reference-counts
+				// https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shbindtoobject
 			}
 			return ppidl;
 		};

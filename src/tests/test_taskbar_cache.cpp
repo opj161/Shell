@@ -77,6 +77,16 @@ TEST(taskbar_cache, an_answer_expires)
 	CHECK(!cache.lookup(wnd(1), { 100, 100 }, 1000 + TaskbarHitCache::TTL_MS + 1).has_value());
 }
 
+TEST(taskbar_cache, uptime_beyond_the_32_bit_wrap_keeps_cache_age_exact)
+{
+	TaskbarHitCache cache;
+	constexpr uint64_t after_wrap = 0x1'0000'0000ULL + 1000;
+	cache.store(wnd(1), { 100, 100 }, true, after_wrap);
+
+	CHECK(cache.lookup(wnd(1), { 100, 100 }, after_wrap + TaskbarHitCache::TTL_MS).has_value());
+	CHECK(!cache.lookup(wnd(1), { 100, 100 }, after_wrap + TaskbarHitCache::TTL_MS + 1).has_value());
+}
+
 TEST(taskbar_cache, a_repeat_answer_refreshes_rather_than_duplicates)
 {
 	TaskbarHitCache cache;
@@ -94,7 +104,7 @@ TEST(taskbar_cache, the_cache_is_bounded)
 {
 	TaskbarHitCache cache;
 	for(long i = 0; i < 500; i++)
-		cache.store(wnd(1), { i * TaskbarHitCache::BUCKET, 0 }, true, 1000 + static_cast<uint32_t>(i));
+		cache.store(wnd(1), { i * TaskbarHitCache::BUCKET, 0 }, true, 1000 + static_cast<uint64_t>(i));
 
 	CHECK(cache.size() <= TaskbarHitCache::CAPACITY);
 }

@@ -169,10 +169,15 @@ namespace Nilesoft
 
 			void reset()
 			{
-				// CoGetInterfaceAndReleaseStream releases the stream even when
-				// unmarshaling fails. On success, releasing the returned interface
-				// also disposes a packet that was abandoned before normal match().
-				// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cogetinterfaceandreleasestream
+				// CoGetInterfaceAndReleaseStream unmarshals then releases the
+				// stream, even on failure. That COM work is only valid while this
+				// thread still has an apartment: CoUninitialize closes the COM
+				// library, unloads DLLs the thread loaded, and frees apartment
+				// resources. Destruction or expiration of a non-empty capture
+				// (this reset of an unconsumed stream) must therefore run on a
+				// COM-initialized thread while COM remains valid.
+				// https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-cogetinterfaceandreleasestream
+				// https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-couninitialize
 				consume();
 			}
 
@@ -257,7 +262,7 @@ namespace Nilesoft
 		{
 			// An abandoned capture - a menu that was built and never tracked -
 			// stops being offered after this long.
-			static constexpr uint32_t TTL_MS = 30000;
+			static constexpr uint64_t TTL_MS = 30000;
 
 		private:
 			struct Entry
@@ -265,11 +270,11 @@ namespace Nilesoft
 				CapturedSelection items;
 				unique_pidl folder;
 				bool background{};
-				uint32_t tick{};
+				uint64_t tick{};
 
 				bool is_valid() const
 				{
-					return (!items.empty() || folder) && ((::GetTickCount() - tick) <= TTL_MS);
+					return (!items.empty() || folder) && ((::GetTickCount64() - tick) <= TTL_MS);
 				}
 			};
 
@@ -278,11 +283,12 @@ namespace Nilesoft
 
 			// Moves expired entries out of the map. The caller destroys them after
 			// dropping the lock because discarding an unconsumed stream performs
-			// COM unmarshaling, and no foreign COM call may run while the registry
-			// is held.
+			// COM unmarshaling via CoGetInterfaceAndReleaseStream, and no foreign
+			// COM call may run while the registry is held. That destruction still
+			// requires a live COM apartment on this thread.
 			static void prune_unlocked(std::vector<Entry> &expired)
 			{
-				auto now = ::GetTickCount();
+				auto now = ::GetTickCount64();
 				for(auto it = _bound.begin(); it != _bound.end(); )
 				{
 					if((now - it->second.tick) > TTL_MS)
@@ -306,7 +312,7 @@ namespace Nilesoft
 				entry.items = std::move(pending.items);
 				entry.folder = std::move(pending.folder);
 				entry.background = pending.background;
-				entry.tick = ::GetTickCount();
+				entry.tick = ::GetTickCount64();
 
 				std::vector<Entry> expired;
 				{
@@ -412,7 +418,7 @@ namespace Nilesoft
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				if(auto it = _bound.find(h); it != _bound.end())
-					it->second.tick = ::GetTickCount() - TTL_MS - 1;
+					it->second.tick = ::GetTickCount64() - TTL_MS - 1;
 			}
 #endif
 		};

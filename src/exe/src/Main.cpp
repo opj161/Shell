@@ -85,13 +85,7 @@ T dpi(auto value) { return static_cast<T>((value * _dpi) / 96); }
 
 string loadstring(UINT id, HMODULE hmodule = nullptr)
 {
-	string str(MAX_PATH);
-	auto size = ::LoadStringW(hmodule, id, str.buffer(), MAX_PATH);
-	if(size > MAX_PATH)
-	{
-		size = ::LoadStringW(hmodule, id, str.buffer(size + 1), size);
-	}
-	return str.release(size).move();
+	return string::LoadStringW_full(hmodule, id).move();
 }
 
 
@@ -108,6 +102,8 @@ BOOL EnablePrivilege(const wchar_t *name)
 			tp.PrivilegeCount = 1;
 			tp.Privileges[0].Luid = luid;
 			tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+			// Success does not mean every requested privilege was assigned.
+			// https://learn.microsoft.com/windows/win32/api/securitybaseapi/nf-securitybaseapi-adjusttokenprivileges
 			if(::AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr))
 				result = (::GetLastError() == ERROR_SUCCESS);
 		}
@@ -139,8 +135,10 @@ BOOL EnablePrivilege(const wchar_t *name)
 	needs, no inheritance, and the previous owner and DACL go back afterwards
 	whether the write succeeded or not.
 
-	  https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
-	  https://learn.microsoft.com/en-us/windows/win32/secauthz/privilege-constants
+	  https://learn.microsoft.com/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
+	  https://learn.microsoft.com/windows/win32/sysinfo/registry-key-security-and-access-rights
+	  https://learn.microsoft.com/windows/win32/api/securitybaseapi/nf-securitybaseapi-adjusttokenprivileges
+	  https://learn.microsoft.com/windows/win32/secauthz/privilege-constants
 */
 class BorrowedKeyAccess
 {
@@ -151,9 +149,13 @@ public:
 	~BorrowedKeyAccess()
 	{
 		// Explicit callers observe the first result. The destructor is only the
-		// final best-effort retry required for every early-return path.
+		// final best-effort retry required for every early-return path. If both
+		// fail, keep the snapshot and key handles until process exit rather
+		// than discarding the only copy of the original owner and DACL.
 		if(!restore())
 			restore();
+		if(_dacl_changed || _owner_taken)
+			log_restore_held();
 	}
 
 	bool acquire(HKEY root, const wchar_t *subkey, ACCESS_MASK temporary_rights,
@@ -232,30 +234,52 @@ public:
 
 	// Puts the DACL back before the owner: restoring the owner first can cost us
 	// the implicit WRITE_DAC that the DACL restore depends on.
+	// SetSecurityInfo returns the Win32 error directly; GetLastError is captured
+	// immediately because it is not the documented failure channel.
+	// https://learn.microsoft.com/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
 	bool restore()
 	{
 		bool ok = true;
 		if(_dacl_changed)
 		{
-			if(_work_key && ERROR_SUCCESS == ::SetSecurityInfo(_work_key, SE_REGISTRY_KEY,
-														 DACL_SECURITY_INFORMATION,
-														 nullptr, nullptr, _saved_dacl, nullptr))
+			DWORD rc = ERROR_INVALID_HANDLE;
+			DWORD last = ERROR_INVALID_HANDLE;
+			if(_work_key)
+			{
+				rc = ::SetSecurityInfo(_work_key, SE_REGISTRY_KEY,
+					DACL_SECURITY_INFORMATION,
+					nullptr, nullptr, _saved_dacl, nullptr);
+				last = ::GetLastError();
+			}
+			if(rc == ERROR_SUCCESS)
 				_dacl_changed = false;
 			else
+			{
 				ok = false;
+				log_restore_phase(L"DACL", rc, last);
+			}
 		}
 
 		// Do not surrender ownership while the DACL is still widened: ownership
 		// carries the WRITE_DAC needed for a later restoration retry.
 		if(_owner_taken && !_dacl_changed)
 		{
-			if(_restore_key && _saved_owner
-			   && ERROR_SUCCESS == ::SetSecurityInfo(_restore_key, SE_REGISTRY_KEY,
-														  OWNER_SECURITY_INFORMATION,
-														  _saved_owner, nullptr, nullptr, nullptr))
+			DWORD rc = ERROR_INVALID_HANDLE;
+			DWORD last = ERROR_INVALID_HANDLE;
+			if(_restore_key && _saved_owner)
+			{
+				rc = ::SetSecurityInfo(_restore_key, SE_REGISTRY_KEY,
+					OWNER_SECURITY_INFORMATION,
+					_saved_owner, nullptr, nullptr, nullptr);
+				last = ::GetLastError();
+			}
+			if(rc == ERROR_SUCCESS)
 				_owner_taken = false;
 			else
+			{
 				ok = false;
+				log_restore_phase(L"owner", rc, last);
+			}
 		}
 
 		if(!_owner_taken && !_dacl_changed)
@@ -288,6 +312,28 @@ public:
 	}
 
 private:
+	void log_restore_phase(const wchar_t *phase, DWORD security_error, DWORD last_error) const
+	{
+		wchar_t detail[192]{};
+		::swprintf_s(detail,
+			L"BorrowedKeyAccess restore %s failed: SetSecurityInfo=%lu GetLastError=%lu",
+			phase,
+			static_cast<unsigned long>(security_error),
+			static_cast<unsigned long>(last_error));
+		if(_log)
+			_log->error(detail);
+	}
+
+	void log_restore_held() const
+	{
+		wchar_t detail[192]{};
+		::swprintf_s(detail,
+			L"BorrowedKeyAccess restore did not complete (DACL changed=%d owner taken=%d); snapshot and handles kept until process exit",
+			_dacl_changed ? 1 : 0, _owner_taken ? 1 : 0);
+		if(_log)
+			_log->error(detail);
+	}
+
 	HKEY _restore_key = nullptr;
 	HKEY _work_key = nullptr;
 	PSECURITY_DESCRIPTOR _saved = nullptr;   // one allocation backing both below
@@ -410,7 +456,8 @@ bool disable_modern(bool register_redirect)
 			return false;
 
 		rc = CreateTreatAsIfAbsent();
-		return borrowed.restore() && rc == ERROR_SUCCESS;
+		const bool restored = borrowed.restore();
+		return restored && rc == ERROR_SUCCESS;
 	}
 
 	if(state == TreatAsState::absent || state == TreatAsState::foreign)
@@ -519,7 +566,7 @@ bool Registration(REGOP reg)
 				{
 					//SOFTWARE\\Classes\\CLSID"
 					if(!disable_modern(true))
-						_log->warning(L"Windows 11 primary-menu redirect was not changed because it is foreign or inaccessible.");
+						_log->warning(L"Windows 11 primary-menu redirect was not applied.");
 				}
 
 				msg = string::Extract(IDS_REGISTER_SUCCESS).move();

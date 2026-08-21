@@ -261,10 +261,10 @@ namespace Nilesoft
 						if(uid->title.empty())
 						{
 							*uid = it;
-							auto len = ::LoadStringW(hModule, uid->res_id, uid->title.buffer(MAX_PATH), MAX_PATH);
-							if(len > 0)
+							auto loaded = string::LoadStringW_full(hModule, uid->res_id);
+							if(!loaded.empty())
 							{
-								uid->title.release(len);
+								uid->title = loaded.move();
 								uid->set_hash();
 							}
 						}

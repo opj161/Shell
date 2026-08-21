@@ -340,19 +340,30 @@
 		<!--
 			The Windows 11 primary-menu redirect is the sole protected registry
 			exception. Preparation is read-only; the checked deferred action and its
-			preceding rollback action receive only the absent/ours/foreign plan via
-			CustomActionData. Both use explicit HKLM and the 64-bit registry view.
+			preceding rollback action receive the plan via CustomActionData:
+			noop, uninstall-ours, or install-absent|MARKER. Apply of
+			install-absent writes the marker only if this invocation created TreatAs
+			(RegCreateKeyEx disposition REG_CREATED_NEW_KEY). Rollback deletes TreatAs
+			only if that marker is present. Commit deletes the marker after a
+			successful script; commit custom actions do not run during rollback.
+			HideTarget='yes' keeps the path out of the log. Actions use explicit
+			HKLM and the 64-bit registry view.
 
 			  .bin/wix-docs/schema/wxs/customaction.mdx
 			  https://learn.microsoft.com/windows/win32/com/treatas
 			  https://learn.microsoft.com/windows/win32/sysinfo/merged-view-of-hkey-classes-root
 			  https://learn.microsoft.com/windows/win32/msi/rollback-custom-actions
+			  https://learn.microsoft.com/windows/win32/msi/commit-custom-actions
+			  https://learn.microsoft.com/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
+			  https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regcreatekeyexw
 		-->
 		<CustomAction Id='PrepareTreatAs' Return='check' BinaryRef='CA' DllEntry='PrepareTreatAs' />
 		<CustomAction Id='TreatAsRollback' Execute='rollback' Impersonate='no' Return='check'
 					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsRollback' />
 		<CustomAction Id='TreatAsApply' Execute='deferred' Impersonate='no' Return='check'
 					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsApply' />
+		<CustomAction Id='TreatAsCommit' Execute='commit' Impersonate='no' Return='ignore'
+					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsCommit' />
 		<!--
 			Registration is declarative above. Notify the Shell after the MSI
 			transaction commits; SHCNE_ASSOCCHANGED requires SHCNF_IDLIST and null
@@ -378,6 +389,8 @@
 			<Custom Action='TreatAsRollback' After='WriteRegistryValues'
 					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
 			<Custom Action='TreatAsApply' After='TreatAsRollback'
+					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+			<Custom Action='TreatAsCommit' After='TreatAsApply'
 					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
 			<Custom Action='NotifyShellChanged' After='InstallFinalize' />
 			<!--

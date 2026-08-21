@@ -213,6 +213,29 @@ TEST(comptr, a_failed_out_parameter_leaves_it_empty)
 			  "the destructor would otherwise release this a second time");
 }
 
+TEST(comptr, implicit_out_conversion_then_destructor_is_one_release)
+{
+	// GeneratePidlFromName used IComPtr as the SHBindToObject out-parameter
+	// (operator Q**) and then called Release again. The conversion already
+	// took ownership of the written pointer.
+	int first_gone = 0, second_gone = 0;
+	CountedUnknown first(&first_gone);
+	CountedUnknown second(&second_gone);
+	{
+		IComPtr<IUnknown> ptr;
+		ptr.attach(&first);
+
+		void **out = ptr;
+		CHECK_EQ(first_gone, 1);
+		CHECK(ptr.pointer == nullptr);
+
+		*out = &second;
+		CHECK(ptr.pointer == &second);
+	}
+	CHECK_EQ(second_gone, 1);
+	CHECK_EQ((int)second.refs.load(), 0);
+}
+
 TEST(comptr, put_releases_before_handing_out_its_address)
 {
 	int destroyed = 0;

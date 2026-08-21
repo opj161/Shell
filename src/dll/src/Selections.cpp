@@ -427,7 +427,7 @@ namespace Nilesoft
 			_fso.start = Types[FSO_START];
 			_fso.taskbar = Types[FSO_TASKBAR];
 			_fso.desktop = Types[FSO_DESKTOP];
-			_fso.file = Types[FSO_DIRECTORY];
+			_fso.file = Types[FSO_FILE];
 			_fso.dirctory = Types[FSO_DIRECTORY];
 			_fso.ns = Types[FSO_NAMESPACE];
 			_fso.drive = Types[FSO_DRIVE];

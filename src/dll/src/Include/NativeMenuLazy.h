@@ -97,8 +97,11 @@ namespace Nilesoft
 			if(!state.handle || state.initialized || state.initializing)
 				return false;
 
-			// Scope guard: the host may throw or longjmp out of the notification,
-			// and a stuck `initializing` would wedge that popup permanently empty.
+			// C++ unwind from notify runs this destructor and clears `initializing`.
+			// Under /EHsc it does not run on SEH; portable C++ does not guarantee
+			// destructor unwind on longjmp, and /EHsc + noexcept may skip it.
+			// https://learn.microsoft.com/cpp/build/reference/eh-exception-handling-model
+			// https://learn.microsoft.com/cpp/c-runtime-library/reference/longjmp
 			struct guard
 			{
 				NativePopupState *s;

@@ -37,7 +37,7 @@ namespace Nilesoft
 			WC_Shell_SecondaryTrayWnd = 0x3861CCEDU, // Shell_SecondaryTrayWnd
 			WC_MSTASKLISTWCLASS = 0x8BFA5681U, // taskbar
 			WC_TrayNotifyWnd = 0xFD59B287U,
-			
+
 			WC__EDIT = 0x7C96292BU,
 			WC__SEARCHEDITBOXFAKEWINDOW = 0xAF224CF8U, // _SearchEditBoxFakeWindow
 			WC_BREADCRUMB = 0xDE0145C6U, // Breadcrumb Parent
@@ -226,6 +226,9 @@ namespace Nilesoft
 			WINDOW			Window{};
 			bool			destroy = true;
 			IShellBrowser*	ShellBrowser{};
+			// False for the UI-thread borrowed pointer from WM_GETISHELLBROWSER.
+			// True only for a proxy unmarshaled onto the dynamic-invoke STA.
+			bool			ShellBrowserOwned{};
 
 			IShellView *ShellView{};
 			IFolderView2 *FolderView{};
@@ -261,8 +264,10 @@ namespace Nilesoft
 			{
 				this->Clear();
 
-				//if(ShellBrowser)
-				//	ShellBrowser->Release();
+				// The UI-thread pointer is borrowed and must not be Released.
+				// A proxy unmarshaled onto the dynamic-invoke STA is owned.
+				if(ShellBrowserOwned && ShellBrowser)
+					ShellBrowser->Release();
 
 				if(ShellView)
 					ShellView->Release();
@@ -271,6 +276,7 @@ namespace Nilesoft
 					FolderView->Release();
 
 				ShellBrowser = {};
+				ShellBrowserOwned = false;
 				ShellView = {};
 				FolderView = {};
 			}
@@ -281,14 +287,14 @@ namespace Nilesoft
 			void Clear();
 			void Add(PathItem *pathItem);
 			void Add(PathType const &pathType, PathType const &groupType, const string &name);
-			
+
 			PathItem *Get(size_t index);
 			PathType Type(size_t index = 0);
 			PathType GroupType(size_t index);
 			string Path(size_t index, const string &quote = nullptr);
 			string Path(const string &quote = nullptr);
 			string Root(size_t index = 0);
-		
+
 			string ShortPath(size_t index = 0);
 
 			string Name(size_t index = 0);
@@ -317,7 +323,7 @@ namespace Nilesoft
 
 			bool verify_mode(SelectionMode mode);
 			bool verify_types(const FileSystemObjects &fso) const;
-			
+
 			void QuerySelectionMode();
 			bool QueryShellWindow();
 			bool QuerySelected();

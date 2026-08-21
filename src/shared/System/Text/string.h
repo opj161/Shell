@@ -2378,10 +2378,11 @@ std::wstring replace(std::wstring const &original,
 				if(!value || !pattern)
 					return nullptr;
 
-				// i is unsigned, so it wraps rather than going negative; the
-				// i < value_length test is what terminates the loop.
-				for(size_t i = value_length - pattern_length; i < value_length; i--)
+				// Start one past the final candidate so the pre-decrement loop also
+				// checks index zero without relying on unsigned wraparound.
+				for(size_t i = value_length - pattern_length + 1; i != 0; )
 				{
+					--i;
 					T const *v = value + i;
 					if(Ordinal::equals_t(v, pattern, pattern_length, ignoreCase))
 						return v;
@@ -3053,6 +3054,29 @@ std::wstring replace(std::wstring const &original,
 				return nullptr;
 			}
 
+			// LoadStringW with a non-zero cchBufferMax truncates and never
+			// returns more than cchBufferMax-1, so a retry on "length >=
+			// capacity" cannot run. cchBufferMax 0 returns a pointer to the
+			// resource and its character count; the resource is not promised
+			// to be null-terminated.
+			// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-loadstringw
+			static string LoadStringW_full(HMODULE module, UINT id)
+			{
+				wchar_t *resource = nullptr;
+				int n = ::LoadStringW(module, id, reinterpret_cast<LPWSTR>(&resource), 0);
+				if(n <= 0 || !resource)
+					return {};
+
+				string str;
+				auto buf = str.buffer(static_cast<size_t>(n) + 1);
+				if(!buf)
+					return {};
+				for(int i = 0; i < n; ++i)
+					buf[i] = resource[i];
+				buf[n] = L'\0';
+				return str.release(static_cast<size_t>(n)).move();
+			}
+
 			static string Extract(uint32_t id)
 			{
 				return Extract(CurrentModule, id).move();
@@ -3060,20 +3084,7 @@ std::wstring replace(std::wstring const &original,
 
 			static string Extract(HMODULE module, uint32_t id)
 			{
-				string str(string::MAX);
-				auto length = ::LoadStringW(module, id, str.buffer(), str.capacity<int>());
-				if(length > 0)
-				{
-					if(length >= str.capacity<int>())
-					{
-						str.capacity<int>(length);
-						length = ::LoadStringW(module, id, str.buffer(), str.capacity<int>());
-					}
-
-					str.release(length);
-				}
-				
-				return str.move();
+				return LoadStringW_full(module, id).move();
 			}
 
 			static string Extract(const wchar_t *path, uint32_t id)
