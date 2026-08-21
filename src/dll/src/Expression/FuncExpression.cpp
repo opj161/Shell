@@ -4642,7 +4642,10 @@ namespace Nilesoft
 					string proc;
 					for(auto &process : Diagnostics::Process::EnumInfo())
 					{
-						auto hProcess = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, process.th32ProcessID);
+						// Same right as IDENT_USED above: ExW with a module
+						// handle needs PROCESS_QUERY_INFORMATION.
+						// https://learn.microsoft.com/windows/win32/api/psapi/nf-psapi-getmodulefilenameexw
+						auto hProcess = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process.th32ProcessID);
 						if(hProcess)
 						{
 							for(auto &module : Diagnostics::Process::Modules(hProcess))
