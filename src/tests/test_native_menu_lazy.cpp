@@ -177,6 +177,37 @@ TEST(native_menu_lazy, only_active_parent_movement_selects_legacy_eager)
 	CHECK(choose_native_tree_policy(true, true, false, true) == NativeTreePolicy::LegacyEager);
 }
 
+TEST(native_menu_lazy, unmaterialized_empty_children_are_pending_not_empty)
+{
+	NativePopupState state;
+	state.handle = fake(0x600);
+
+	CHECK(!state.materialized);
+	CHECK(!native_popup_contents_known_empty(state, true));
+
+	// Notification without copy is still pending, not known empty.
+	state.initialized = true;
+	CHECK(!native_popup_contents_known_empty(state, true));
+}
+
+TEST(native_menu_lazy, materialized_empty_children_are_known_empty)
+{
+	NativePopupState state;
+	state.handle = fake(0x601);
+	state.materialized = true;
+
+	CHECK(native_popup_contents_known_empty(state, true));
+}
+
+TEST(native_menu_lazy, materialized_nonempty_children_are_not_empty)
+{
+	NativePopupState state;
+	state.handle = fake(0x602);
+	state.materialized = true;
+
+	CHECK(!native_popup_contents_known_empty(state, false));
+}
+
 // ---------------------------------------------------------------------------
 // Real menus, real owner window, real message dispatch.
 // ---------------------------------------------------------------------------
@@ -403,6 +434,13 @@ TEST(native_menu_lazy, opening_the_root_does_not_pay_for_unopened_submenus)
 	CHECK_EQ(children()[1].initialised, 0);
 	CHECK_EQ(children()[2].initialised, 0);
 
+	// Copied children are still empty; that is pending, not known empty.
+	for(int i = 0; i < 3; i++)
+	{
+		CHECK(!child_state[i].materialized);
+		CHECK(!native_popup_contents_known_empty(child_state[i], true));
+	}
+
 	// The old whole-tree walk paid 3 x CHILD_DELAY_MS here.
 	CHECK(root_ms < CHILD_DELAY_MS);
 
@@ -416,6 +454,17 @@ TEST(native_menu_lazy, opening_the_root_does_not_pay_for_unopened_submenus)
 	CHECK_EQ(children()[2].initialised, 0);
 	CHECK(child_ms >= CHILD_DELAY_MS);
 	CHECK_EQ(::GetMenuItemCount(children()[1].menu), 1);
+
+	// Production marks the level materialized after enumerating it.
+	child_state[1].materialized = true;
+	CHECK(!native_popup_contents_known_empty(child_state[1], false));
+
+	// A deliberately empty materialized popup is known empty; an unopened
+	// sibling with the same empty child list is still pending.
+	NativePopupState empty_materialized = child_state[2];
+	empty_materialized.materialized = true;
+	CHECK(native_popup_contents_known_empty(empty_materialized, true));
+	CHECK(!native_popup_contents_known_empty(child_state[2], true));
 
 	// Re-opening it costs nothing.
 	t0 = std::chrono::steady_clock::now();

@@ -80,6 +80,20 @@ namespace Nilesoft
 			bool rules_applied{};
 		};
 
+		// Before materialization an empty copied-child list means "unknown / not
+		// opened yet", not "empty". A native popup is known empty only after this
+		// level has been enumerated. `initialized` is not a substitute:
+		// WM_INITMENUPOPUP is sent when that submenu is about to become active,
+		// and there is a legitimate interval after the notification and before
+		// the copy finishes (including re-entrant host code).
+		// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-initmenupopup
+		inline bool native_popup_contents_known_empty(
+			const NativePopupState &state,
+			bool children_empty) noexcept
+		{
+			return state.materialized && children_empty;
+		}
+
 		/*
 			Sends the just-in-time notification for one popup, at most once.
 

@@ -994,7 +994,7 @@ namespace Nilesoft
 					mii->type = NativeMenuType::Menu;
 					mii->fMask |= MIIM_SUBMENU;
 					mii->hSubMenu = CreatePopupMenu();
-					mii->sys_items = &item->items;
+					mii->system_source = item;
 
 					auto m_sub = &_menus[mii->hSubMenu];
 					m_sub->handle = mii->hSubMenu;
@@ -1328,7 +1328,11 @@ namespace Nilesoft
 			add_custom_items(_new_items.Custom);
 			add_custom_items(_system_items.Custom);
 
-			// remove empty dynmic items 
+			// Remove popups that are known to be empty. An unmaterialized native
+			// popup is pending, not empty; its host may populate it on
+			// WM_INITMENUPOPUP, which is sent when that submenu is about to
+			// become active:
+			// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-initmenupopup
 			for(auto i = items.begin(); i < items.end(); i++)
 			{
 				auto item = *i;
@@ -1350,8 +1354,13 @@ namespace Nilesoft
 								items.erase(i--);
 						}
 
-						if(item->sys_items && item->sys_items->empty())
+						if(item->system_source &&
+						   native_popup_contents_known_empty(
+							   item->system_source->native_popup,
+							   item->system_source->items.empty()))
+						{
 							items.erase(i--);
+						}
 					}
 				}
 

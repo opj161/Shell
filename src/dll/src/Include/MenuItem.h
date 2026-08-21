@@ -201,7 +201,10 @@ namespace Nilesoft
 			std::vector<MenuItemInfo *> items;
 			std::vector<NativeMenu *> native_items;
 
-			std::vector<struct menuitem_t *> *sys_items=0;
+			// The native menuitem_t this rendered system popup was built from.
+			// Needed for lifecycle, not only the child vector: an unmaterialized
+			// native popup with empty `items` is pending, not known empty.
+			struct menuitem_t *system_source = nullptr;
 
 			//Expression *tip{};
 			uint32_t hash = 0;
