@@ -1555,22 +1555,18 @@ namespace Nilesoft
 				Flag<uint32_t> style(mi.dwStyle);
 				style.add(MNS_CHECKORBMP);
 				style.add(MNS_NOCHECK);
+				mi.dwStyle = style.value;
 
-				menu->popup_height += 100;
-				auto h = _rcMonitor.height();
-				if(menu->popup_height >= h)
-				{
-					menu->popup_height = 0;
-					if(menu->is_main)
-					{
-						//mi.cyMax = h - 100;
-						//style.add(MIM_MAXHEIGHT);
-						//menu->popup_height = mi.cyMax;
-					}
-				}
-				else {
-					menu->popup_height = 0;
-				}
+				// cyMax 0 means screen height; an explicit cap makes Windows
+				// install scroll affordances when items exceed it. Owner-draw
+				// still paints items; hit-testing of the arrows stays in #32768.
+				// https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+				// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setmenuinfo
+				auto monitor_h = _rcMonitor.height();
+				auto margin = dpi(40);
+				mi.cyMax = monitor_h > margin
+					? static_cast<UINT>(monitor_h - margin)
+					: (monitor_h > 0 ? static_cast<UINT>(monitor_h) : 0);
 
 				mi.hbrBack = composition ? GetStockBrush(BLACK_BRUSH) : ::CreateSolidBrush(_theme.background.color.to_BGR());
 				m.set(&mi);
@@ -6201,11 +6197,6 @@ namespace Nilesoft
 							nc->rgrc[0].top += theme->border.size + theme->border.padding.top;
 							nc->rgrc[0].right += theme->border.size + theme->border.padding.right;
 							nc->rgrc[0].bottom += theme->border.size + theme->border.padding.bottom;
-							if(wnd->has_scroll)
-							{
-								nc->rgrc[0].top += ctx->dpi(10);
-								nc->rgrc[0].bottom -= ctx->dpi(10);
-							}
 						}
 					//	return WVR_VALIDRECTS;
 					}
@@ -6259,11 +6250,10 @@ namespace Nilesoft
 							wp->cx += bz + theme->border.padding.width();
 							wp->cy += bz + theme->border.padding.height();
 
-							if((wp->cy + 100) > ctx->_rcMonitor.height())
-							{
-								wnd->has_scroll = true;
-								wp->cy -= ctx->dpi(10);
-							}
+							// cyMax already limited the item list. Do not grow the
+							// popup past the monitor after adding our frame.
+							if(wp->cy > ctx->_rcMonitor.height())
+								wp->cy = ctx->_rcMonitor.height();
 							/*else
 							{
 								auto hMenu = (HMENU)::SendMessageW(hWnd, MN_GETHMENU, 0, 0);
@@ -6403,34 +6393,6 @@ namespace Nilesoft
 				case WM_PAINT:
 				{
 					lret = defSubclassProc();
-					//auto_gdi<HBRUSH> _hblack(CreateSolidBrush(0x000000));
-					//::FillRect(wnd->hdc, &wnd->rect, _hblack.get());
-
-					if(wnd->has_scroll)
-					{
-						auto_gdi<HBRUSH> hbblack(CreateSolidBrush(0x000000));
-
-						int h = ctx->dpi(14);
-						Rect rc = { 0, 0, wnd->width, h };
-						::FillRect(wnd->hdc, rc, hbblack.get());
-						
-						rc = { 0, wnd->height - h, wnd->width, wnd->height };
-						::FillRect(wnd->hdc, rc, hbblack.get());
-						
-						auto txtfmt = DT_NOCLIP | DT_SINGLELINE | DT_VCENTER| DT_CENTER;
-
-						rc = { 0, 0, wnd->width, h };
-						ctx->draw_string(wnd->hdc, ctx->font.icon, &rc, ctx->_theme.symbols.chevron.nor, L"\uE009", 1, txtfmt);
-
-						rc = { 0, wnd->height - h, wnd->width, wnd->height };
-						ctx->draw_string(wnd->hdc, ctx->font.icon, &rc, ctx->_theme.symbols.chevron.nor, L"\uE00A", 1, txtfmt);
-
-						//::ExcludeClipRect(wnd->hdc, 0, 0, wnd->width, 20);
-						//::ExcludeClipRect(wnd->hdc, 0, wnd->height - 20, wnd->width, wnd->height);
-					}
-
-					// exlude menu item rectangle to prevent drawing by windows after us
-					//dc.exclude_clip_rect(*rc);
 					return lret;
 				}
 				case WM_NCPAINT:
