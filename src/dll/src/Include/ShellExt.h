@@ -34,19 +34,23 @@
 	  pointers into the registry after dropping the lock, so another thread
 	  pruning or clearing an entry freed them underneath the caller.
 
-	Interface pointers must be marshaled when passed between apartments
-	(https://learn.microsoft.com/en-us/windows/win32/com/single-threaded-apartments),
-	and a registry keyed by HMENU is reachable from every thread in the process.
-	Microsoft's guidance for new code is an agile reference rather than the
-	Global Interface Table - same purpose, but refcounted like any COM object,
-	so there is no cookie to revoke exactly once, and it eager-marshals:
+	Interface pointers must be marshaled when passed between apartments, and a
+	registry keyed by HMENU is reachable from every thread in the process:
 
-		https://learn.microsoft.com/en-us/windows/win32/com/accessing-interfaces-across-apartments
-		https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-rogetagilereference
+		https://learn.microsoft.com/en-us/windows/win32/com/single-threaded-apartments
 
-	RoGetAgileReference needs Windows 8.1, and refuses objects that implement
-	INoMarshal. Either way the capture falls back to holding the pointer
-	directly, which is what it always did.
+	There is one item-array consumer per menu. Microsoft recommends the stream
+	technique when an interface is unmarshaled only once, rather than the Global
+	Interface Table used for repeated unmarshaling:
+
+		https://learn.microsoft.com/en-us/windows/win32/com/when-to-use-the-global-interface-table
+
+	The marshaled stream is therefore move-only and consumed once. All unmarshal
+	and discard work happens after the capture mutex is released. A discard also
+	consumes and immediately releases the interface because an unconsumed normal
+	marshal packet is itself an object reference that must be released:
+
+		https://learn.microsoft.com/en-us/windows/win32/api/wtypesbase/ne-wtypesbase-mshlflags
 */
 
 #include <windows.h>
@@ -135,85 +139,89 @@ namespace Nilesoft
 			return unique_pidl(pidl ? ::ILCloneFull(pidl) : nullptr);
 		}
 
-		/*
-			A captured IShellItemArray, held so it stays valid wherever it is used.
-
-			Prefers an agile reference; falls back to holding the pointer directly
-			when the platform or the object does not support one.
-		*/
+		// A one-shot marshaled IShellItemArray. The stream is the only cross-
+		// apartment state; an apartment-specific interface pointer is never kept.
 		class CapturedSelection
 		{
 		public:
 			CapturedSelection() = default;
+			~CapturedSelection() { reset(); }
+
+			CapturedSelection(const CapturedSelection &) = delete;
+			CapturedSelection &operator=(const CapturedSelection &) = delete;
+
+			CapturedSelection(CapturedSelection &&other) noexcept
+				: _stream(other._stream)
+			{
+				other._stream = nullptr;
+			}
+
+			CapturedSelection &operator=(CapturedSelection &&other) noexcept
+			{
+				if(this != &other)
+				{
+					reset();
+					_stream = other._stream;
+					other._stream = nullptr;
+				}
+				return *this;
+			}
 
 			void reset()
 			{
-				_agile.reset();
-				_direct.reset();
+				// CoGetInterfaceAndReleaseStream releases the stream even when
+				// unmarshaling fails. On success, releasing the returned interface
+				// also disposes a packet that was abandoned before normal match().
+				// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cogetinterfaceandreleasestream
+				consume();
 			}
 
-			bool empty() const { return !_agile && !_direct; }
+			bool empty() const { return _stream == nullptr; }
 
-			void assign(IShellItemArray *items)
+			bool assign(IShellItemArray *items)
 			{
 				reset();
 				if(!items)
-					return;
+					return false;
 
-				if(auto agile = make_agile(items))
+				IStream *stream = nullptr;
+				// Available since Windows 2000. A failure deliberately leaves no
+				// raw-pointer fallback.
+				// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-comarshalinterthreadinterfaceinstream
+				auto hr = ::CoMarshalInterThreadInterfaceInStream(
+					IID_IShellItemArray, items, &stream);
+				if(FAILED(hr) || !stream)
 				{
-					_agile.attach(agile);
-					return;
+					if(stream)
+						stream->Release();
+					return false;
 				}
 
-				_direct.attach_addref(items);
+				_stream = stream;
+				return true;
 			}
 
-			// An owning pointer valid in the calling apartment, or empty.
-			com_ref<IShellItemArray> resolve() const
+			// Consumes the stream and returns an owning pointer valid in the
+			// calling apartment. A second call is deterministically empty.
+			com_ref<IShellItemArray> consume()
 			{
 				com_ref<IShellItemArray> out;
-
-				if(_agile)
-				{
-					if(FAILED(_agile->Resolve(IID_IShellItemArray,
-											  reinterpret_cast<void **>(out.put()))))
-						out.reset();
-					return out;
-				}
-
-				out.attach_addref(_direct.get());
+				auto stream = _stream;
+				_stream = nullptr;
+				if(stream && FAILED(::CoGetInterfaceAndReleaseStream(
+					stream, IID_IShellItemArray, reinterpret_cast<void **>(out.put()))))
+					out.reset();
 				return out;
 			}
 
-		private:
-			// Resolved dynamically: the export exists from Windows 8.1, and Shell
-			// still loads on older systems.
-			static IAgileReference *make_agile(IShellItemArray *items)
+			// Ownership-only operation: safe while the capture mutex is held.
+			void swap(CapturedSelection &other) noexcept
 			{
-				using fn_t = HRESULT(WINAPI *)(DWORD, REFIID, IUnknown *, IAgileReference **);
-
-				static const fn_t fn = []() noexcept -> fn_t
-				{
-					if(auto ole32 = ::GetModuleHandleW(L"ole32.dll"))
-						return reinterpret_cast<fn_t>(reinterpret_cast<void *>(
-							::GetProcAddress(ole32, "RoGetAgileReference")));
-					return nullptr;
-				}();
-
-				if(!fn)
-					return nullptr;
-
-				IAgileReference *agile = nullptr;
-				// AGILEREFERENCE_DEFAULT. Fails with CO_E_NOT_SUPPORTED for an
-				// object that implements INoMarshal, which is not an error here.
-				if(FAILED(fn(0, IID_IShellItemArray, items, &agile)))
-					return nullptr;
-				return agile;
+				std::swap(_stream, other._stream);
 			}
 
-			com_ref<IAgileReference> _agile;
-			com_ref<IShellItemArray> _direct;
+		private:
+			IStream *_stream = nullptr;
 		};
 
 		// What a handler has collected so far, before it knows which menu it is for.
@@ -269,9 +277,9 @@ namespace Nilesoft
 			inline static std::unordered_map<HMENU, Entry> _bound;
 
 			// Moves expired entries out of the map. The caller destroys them after
-			// dropping the lock: an entry that fell back to holding the interface
-			// directly releases a possibly-proxied pointer, and no foreign COM
-			// call may run while the registry is held.
+			// dropping the lock because discarding an unconsumed stream performs
+			// COM unmarshaling, and no foreign COM call may run while the registry
+			// is held.
 			static void prune_unlocked(std::vector<Entry> &expired)
 			{
 				auto now = ::GetTickCount();
@@ -304,14 +312,21 @@ namespace Nilesoft
 				{
 					std::lock_guard<std::mutex> lock(_mutex);
 					prune_unlocked(expired);
-					_bound[h] = std::move(entry);
+
+					// Moving a replaced entry out first keeps its stream cleanup out
+					// of the critical section.
+					if(auto old = _bound.find(h); old != _bound.end())
+					{
+						expired.push_back(std::move(old->second));
+						_bound.erase(old);
+					}
+					_bound.emplace(h, std::move(entry));
 				}
-				// `expired` releases here, outside the lock.
+				// `expired` consumes/discards streams here, outside the lock.
 			}
 
-			// The capture for one menu, as an owning copy. Resolving the interface
-			// happens after the lock is dropped: it can marshal, and no foreign COM
-			// call may run while the registry is held.
+			// The capture for one menu. The item stream is moved out while locked,
+			// then consumed after unlocking; PIDL state remains independently owned.
 			static ShellExtMatch match(HMENU h)
 			{
 				if(!h) return {};
@@ -328,12 +343,12 @@ namespace Nilesoft
 					if(it == _bound.end() || !it->second.is_valid())
 						return {};
 
-					items = it->second.items;
+					items.swap(it->second.items);
 					result.folder = clone_pidl(it->second.folder.get());
 					result.background = it->second.background;
 				}
 
-				result.items = items.resolve();
+				result.items = items.consume();
 				return result;
 			}
 
@@ -391,6 +406,15 @@ namespace Nilesoft
 				std::lock_guard<std::mutex> lock(_mutex);
 				return _bound.size();
 			}
+
+#ifdef SHELLEXT_CAPTURE_TESTING
+			static void expire_for_test(HMENU h)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(auto it = _bound.find(h); it != _bound.end())
+					it->second.tick = ::GetTickCount() - TTL_MS - 1;
+			}
+#endif
 		};
 
 		// IShellExtInit + IContextMenu.

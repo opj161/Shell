@@ -1,6 +1,7 @@
 #include <pch.h>
 #include "Resource.h"
 #include "Expression\Constants.h"
+#include "Expression\SelectionPathResolver.h"
 #include "Expression\Variable.h"
 
 #include <propsys.h>
@@ -15,6 +16,32 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
+		namespace
+		{
+			SelectionPaths::SelectionPathResolver selection_path_resolver(Context *context)
+			{
+				auto selections = context ? context->Selections : nullptr;
+				if(!selections)
+					return { {}, {} };
+
+				auto directory = selections->Directory.empty()
+					? std::wstring_view{}
+					: std::wstring_view(selections->Directory.c_str(), selections->Directory.length());
+				auto parent = selections->Parent.empty()
+					? std::wstring_view{}
+					: std::wstring_view(selections->Parent.c_str(), selections->Parent.length());
+				return { directory, parent };
+			}
+
+			string resolve_selection_path(const SelectionPaths::SelectionPathResolver &resolver,
+										  const string &path)
+			{
+				if(path.empty())
+					return path;
+				return string(resolver.resolve(std::wstring_view(path.c_str(), path.length())));
+			}
+		}
+
 		template<typename T>
 		T FuncExpression::eval_arg(size_t arg, T const &default_value)
 		{
@@ -2997,6 +3024,11 @@ namespace Nilesoft
 		{
 			auto argc = Arguments.size();
 			string arg0 = eval_arg(0).to_string().move();
+			auto path_resolver = selection_path_resolver(context);
+			auto resolve_path = [&](const string &path)
+			{
+				return resolve_selection_path(path_resolver, path);
+			};
 
 			switch(Id[1])
 			{
@@ -3036,10 +3068,10 @@ namespace Nilesoft
 					_result = Path::Title(arg0).move();
 					break;
 				case IDENT_SHORT:
-					_result = Path::Short(arg0).move();
+					_result = Path::Short(resolve_path(arg0)).move();
 					break;
 				case IDENT_FULL:
-					_result = Path::Full(arg0).move();
+					_result = Path::Full(resolve_path(arg0)).move();
 					break;
 				case IDENT_PARENT:
 				case IDENT_LOCATION:
@@ -3055,19 +3087,19 @@ namespace Nilesoft
 				}
 				case IDENT_EMPTY:
 				{
-					uint32_t empties = Path::IsDirectoryEmpty(arg0);
+					uint32_t empties = Path::IsDirectoryEmpty(resolve_path(arg0));
 					for(size_t i = 1; i < argc; i++)
-						empties += Path::IsDirectoryEmpty(eval_arg(i).to_string());
+						empties += Path::IsDirectoryEmpty(resolve_path(eval_arg(i).to_string()));
 					_result = empties != 0;
 					break;
 				}
 				case IDENT_EXISTS:
 				{
-					uint32_t exists = Path::Exists(arg0);
+					uint32_t exists = Path::Exists(resolve_path(arg0));
 					if(exists == 0)
 					{
 						for(size_t i = 1; i < argc; i++)
-							exists += Path::Exists(eval_arg(i).to_string());
+							exists += Path::Exists(resolve_path(eval_arg(i).to_string()));
 					}
 					_result = exists != 0;
 					break;
@@ -3100,11 +3132,11 @@ namespace Nilesoft
 					_result = Path::IsRelative(arg0);
 					break;
 				case IDENT_ISFILE:
-					_result = Path::IsFileExists(arg0);
+					_result = Path::IsFileExists(resolve_path(arg0));
 					break;
 				case IDENT_ISDIR:
 				case IDENT_ISDIRECTORY:
-					_result = Path::IsDirectoryExists(arg0);
+					_result = Path::IsDirectoryExists(resolve_path(arg0));
 					break;
 				case IDENT_ISROOT:
 				case IDENT_ISDRIVE:
@@ -3134,6 +3166,7 @@ namespace Nilesoft
 				case IDENT_LNK:
 				case IDENT_LNKTARGET:
 				{
+					arg0 = resolve_path(arg0);
 					if(Id[2] == IDENT_DIR || Id[2] == IDENT_LOCATION)
 					{
 						string w;
@@ -3154,7 +3187,7 @@ namespace Nilesoft
 							break;
 						}
 						//path.lnk.create(path, target, args, icon, dir, run, comment)
-						string target = eval_arg(1).to_string().move();
+						string target = resolve_path(eval_arg(1).to_string());
 						if(target.empty())
 						{
 							_result = false;
@@ -3168,11 +3201,13 @@ namespace Nilesoft
 
 						int iconIndex = Path::ParseLocation(iconPath);
 
-						string wdir = argc > 4 ? eval_arg(4).to_string().c_str() : nullptr;
+						string wdir;
+						if(argc > 4)
+							wdir = resolve_path(eval_arg(4).to_string());
 						if(wdir.empty()/* && argc < 4*/)
 							wdir = Path::Parent(target);
 						
-						_result = Path::CreateLnk(arg0, eval_arg(1).to_string(),
+						_result = Path::CreateLnk(arg0, target,
 												  argc > 2 ? eval_arg(2).to_string().c_str() : nullptr,
 												  iconPath,
 												  iconIndex,
@@ -3256,10 +3291,10 @@ namespace Nilesoft
 								for(auto c : arg0)
 									flt.push_back(c == L'|' ? L'\0' : c);
 
-								if(argc == 2)
-									initialDir = eval_arg(1).to_string().move();
+								if(argc >= 2)
+									initialDir = resolve_path(eval_arg(1).to_string());
 
-								if(argc == 3)
+								if(argc >= 3)
 									string::Copy(szFile, eval_arg(2).to_string());
 							}
 
@@ -3309,6 +3344,7 @@ namespace Nilesoft
 					// path.files(path, sep, 1|2|4|8|16)
 
 					arg0.trim(L"\"'");
+					arg0 = resolve_path(arg0);
 
 					string file_name = arg0;
 					string flt = L"*";
@@ -3524,7 +3560,11 @@ namespace Nilesoft
 				}
 				case IDENT_REFRESH:
 				{
-					::SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATH, arg0.c_str(), nullptr);
+					if(!arg0.empty())
+					{
+						auto path = resolve_path(arg0);
+						::SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATH, path.c_str(), nullptr);
+					}
 					/*
 					INPUT inputs[4] = {};
 					ZeroMemory(inputs, sizeof(inputs));
@@ -3710,19 +3750,10 @@ namespace Nilesoft
 				Object obj0 = eval_arg(0).move();
 				string arg0 = obj0.to_string();
 
-				auto resolve_arg = [&](const string &p) -> string {
-					if(p.empty()) return p;
-					auto s = p.c_str();
-					const bool rooted = (p.length() > 2 && s[1] == L':' && (s[2] == L'\\' || s[2] == L'/'))
-									 || (p.length() > 1 && s[0] == L'\\' && s[1] == L'\\');
-					if(!rooted && context && context->Selections)
-					{
-						if(!context->Selections->Directory.empty())
-							return Path::Combine(context->Selections->Directory, p);
-						if(!context->Selections->Parent.empty())
-							return Path::Combine(context->Selections->Parent, p);
-					}
-					return p;
+				auto path_resolver = selection_path_resolver(context);
+				auto resolve_arg = [&](const string &path)
+				{
+					return resolve_selection_path(path_resolver, path);
 				};
 
 				arg0 = resolve_arg(arg0);
@@ -4077,7 +4108,8 @@ namespace Nilesoft
 					}
 					case IDENT_META:
 					{
-						string path = eval_arg(0).to_string().trim().move();
+						string path = arg0;
+						path.trim();
 						
 						if(path.empty())
 							break;

@@ -36,6 +36,30 @@ namespace Nilesoft
 			LegacyEager
 		};
 
+		// Ordinary configurations stay just-in-time. Parent movement is the one
+		// operation that needs descendant topology before a submenu is opened, so
+		// an applicable moveto rule reuses the pre-lazy whole-tree behavior. The
+		// registry flag remains a diagnostic override, not a user-visible repair.
+		inline NativeTreePolicy choose_native_tree_policy(bool modify_enabled,
+			bool parent_movement_enabled, bool has_applicable_moveto,
+			bool diagnostic_eager_override) noexcept
+		{
+			return diagnostic_eager_override
+				|| (modify_enabled && parent_movement_enabled && has_applicable_moveto)
+				? NativeTreePolicy::LegacyEager
+				: NativeTreePolicy::Lazy;
+		}
+
+		// A moveto rule without a location selector is root-only: the production
+		// rule walker explicitly skips non-root levels when location is absent.
+		// Such a rule can operate on the already materialized root and must not
+		// forfeit lazy submenu initialization.
+		inline bool native_moveto_requires_descendant_discovery(bool has_moveto,
+			bool has_location_selector) noexcept
+		{
+			return has_moveto && has_location_selector;
+		}
+
 		struct NativePopupState
 		{
 			// Borrowed. The host owns this menu and destroys it; Shell never does.

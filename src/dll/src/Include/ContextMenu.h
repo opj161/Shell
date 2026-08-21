@@ -755,6 +755,7 @@ plutovg_move_to(pluto, start.x, start.y);
 			void enumerate_native_menu_level(HMENU native_menu, menuitem_t *target, bool is_root);
 			bool materialize_native_children(menuitem_t *node);
 			void apply_system_modify_rules(menuitem_t *node, bool is_root);
+			bool has_applicable_native_moveto_rule() const;
 
 			// True while Shell is sending its own WM_INITMENUPOPUP to the host for
 			// this menu, so the subclass hook lets it through to the host window

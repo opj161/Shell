@@ -4703,6 +4703,27 @@ namespace Nilesoft
 				build_main_system_menuitems(node, is_root);
 		}
 
+		bool ContextMenu::has_applicable_native_moveto_rule() const
+		{
+			if(!_cache)
+				return false;
+
+			for(auto rule : _cache->statics)
+			{
+				// CLSID-scoped rules are handled while individual context-menu
+				// handlers are queried; build_main_system_menuitems skips them too.
+				if(!rule || rule->has_clsid
+					|| !native_moveto_requires_descendant_discovery(
+						static_cast<bool>(rule->moveto), static_cast<bool>(rule->location)))
+					continue;
+
+				if(Selected.verify_types(rule->fso))
+					return true;
+			}
+
+			return false;
+		}
+
 		bool ContextMenu::Initialize()
 		{
 			try
@@ -4853,12 +4874,21 @@ namespace Nilesoft
 				__system_menu_tree->type = 10;
 				__map_system_menu[0] = __system_menu_tree;
 
-				// Undocumented diagnostic escape hatch. A configuration that moves
-				// an item out of a host submenu the user has not opened yet cannot
-				// see that item under the lazy policy; this restores the
-				// pre-1.9.20 whole-tree walk while such a case is investigated.
-				if(int eager = 0; RegistryConfig::get(nullptr, L"modify.native_eager", eager) && eager == 1)
-					_native_policy = NativeTreePolicy::LegacyEager;
+				// WM_INITMENUPOPUP is normally just-in-time, but a parent-moving rule
+				// needs descendant topology before the target popup is opened. Rule
+				// expressions that depend on `this` cannot be evaluated before those
+				// items exist, so moveto plus a descendant-capable location selector
+				// is intentionally the conservative gate. A move with no location is
+				// root-only and needs no eager scan. No host notification is sent here.
+				// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-initmenupopup
+				int eager = 0;
+				auto diagnostic_eager = RegistryConfig::get(
+					nullptr, L"modify.native_eager", eager) && eager == 1;
+				_native_policy = choose_native_tree_policy(
+					_settings.modify_items.enabled,
+					_settings.modify_items.parent,
+					has_applicable_native_moveto_rule(),
+					diagnostic_eager);
 
 				if(0 == ::GetPropW(hwnd.owner, UxSubclass))
 				{

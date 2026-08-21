@@ -55,16 +55,18 @@
       <Optimization>MaxSpeed</Optimization>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <TreatWarningAsError>true</TreatWarningAsError>
+	  <PreprocessorDefinitions>SHELLEXT_CAPTURE_TESTING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- The test sources carry non-ASCII literals on purpose. -->
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>shlwapi.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shlwapi.lib;ole32.lib;oleaut32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+	<None Include="fixtures\native_moveto_nested.nss" />
     <ClInclude Include="test.h" />
     <ClInclude Include="..\shared\System\Text\StringCompare.h" />
     <ClInclude Include="..\dll\src\Include\BitmapCache.h" />
@@ -73,6 +75,8 @@
     <ClInclude Include="..\dll\src\Include\Packages.h" />
     <ClInclude Include="..\dll\src\Include\TaskbarHitCache.h" />
     <ClInclude Include="..\dll\src\Include\TaskbarOrigin.h" />
+	<ClInclude Include="..\dll\src\Expression\SelectionPathResolver.h" />
+	<ClInclude Include="..\shared\LegacyConfigTransfer.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
@@ -80,6 +84,7 @@
     <ClCompile Include="test_encoding.cpp" />
     <ClCompile Include="test_bitmapcache.cpp" />
     <ClCompile Include="test_shellext.cpp" />
+    <ClCompile Include="test_selection_path_resolver.cpp" />
     <ClCompile Include="test_threadsafety.cpp" />
     <ClCompile Include="test_parser.cpp" />
     <ClCompile Include="test_native_menu_lazy.cpp" />
@@ -87,6 +92,7 @@
     <ClCompile Include="test_taskbar_cache.cpp" />
     <ClCompile Include="test_menutext.cpp" />
     <ClCompile Include="test_registry.cpp" />
+    <ClCompile Include="test_regop.cpp" />
     <ClCompile Include="test_manifest.cpp" />
     <ClCompile Include="test_path.cpp" />
     <ClCompile Include="test_taskbar_origin.cpp" />
@@ -94,6 +100,7 @@
     <ClCompile Include="test_comptr.cpp" />
     <ClCompile Include="test_window_text.cpp" />
     <ClCompile Include="test_dll_load.cpp" />
+	<ClCompile Include="test_legacy_config_transfer.cpp" />
     <ClCompile Include="..\dll\src\Packages.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />
   </ItemGroup>

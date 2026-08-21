@@ -93,6 +93,14 @@
         /EHs or /EHsc in the same executable module".
       -->
       <ExceptionHandling>Sync</ExceptionHandling>
+      <!--
+        Control Flow Guard requires compiler instrumentation as well as the
+        existing /GUARD:CF linker option. A Guard-marked PE alone does not add
+        checks to object files compiled without /guard:cf.
+
+          https://learn.microsoft.com/cpp/build/reference/guard-enable-control-flow-guard
+      -->
+      <ControlFlowGuard>Guard</ControlFlowGuard>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <CompileAsManaged>false</CompileAsManaged>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -169,6 +177,7 @@
     <ClInclude Include="src\Expression\ExpressionType.h" />
     <ClInclude Include="src\Expression\IdentExpression.h" />
     <ClInclude Include="src\Expression\OperatorExpression.h" />
+    <ClInclude Include="src\Expression\SelectionPathResolver.h" />
     <ClInclude Include="src\Expression\Scope.h" />
     <ClInclude Include="src\Expression\StatementExpression.h" />
     <ClInclude Include="src\Expression\LiteralExpression.h" />

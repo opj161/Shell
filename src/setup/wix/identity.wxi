@@ -78,6 +78,7 @@
 	<?define CleanupComponentGuid     = '{838501CD-485B-4587-9195-6CFB416202B9}' ?>
 	<?define DisplayIconComponentGuid = '{69292D86-8518-4C68-867C-192767154C54}' ?>
 	<?define StartMenuShortcutComponentGuid = '{41AFAF39-4B3F-4D1E-800E-DD3231C004C9}' ?>
+	<?define RegistrationComponentGuid = '{0147E9FC-AA82-4EBE-A3AD-8D97CCD6E1A9}' ?>
 <?elseif $(sys.BUILDARCH) = arm64 ?>
 	<?define ComponentBitness = 'always64' ?>
 	<?define ApplicationComponentGuid = '{8FA5A26E-3122-49E8-8EFA-3533DB4E4C55}' ?>
@@ -88,6 +89,7 @@
 	<?define CleanupComponentGuid     = '{BDD09075-091E-4D8C-AC16-CFA94B31CB7F}' ?>
 	<?define DisplayIconComponentGuid = '{C78A1884-3BB2-4A60-943F-3DCFEA97F243}' ?>
 	<?define StartMenuShortcutComponentGuid = '{CFA3E8DD-0F09-4E35-BF3E-9F7491E51887}' ?>
+	<?define RegistrationComponentGuid = '{FFBD0320-871D-4961-8146-8330E17F7DD6}' ?>
 <?else ?>
 	<?define ComponentBitness = 'always32' ?>
 	<?define ApplicationComponentGuid = '{B4125EFB-BFA8-456A-9928-46761D87655C}' ?>
@@ -98,5 +100,6 @@
 	<?define CleanupComponentGuid     = '{CB582199-5CBD-4ADB-8D42-C6041F459A73}' ?>
 	<?define DisplayIconComponentGuid = '{7B93EFBB-D3D8-4418-BFC5-FE3BEB3F0E99}' ?>
 	<?define StartMenuShortcutComponentGuid = '{2530D345-4238-418B-8E41-7C4E1AE7DB3F}' ?>
+	<?define RegistrationComponentGuid = '{7F754C0B-5C79-4BD9-9FE5-F0B40ECEA830}' ?>
 <?endif ?>
 </Include>

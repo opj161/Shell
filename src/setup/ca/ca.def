@@ -1,12 +1,14 @@
 ;LIBRARY "ca"
 
 EXPORTS
-	Install
-	InstallRollback
-	RestartExplorer
-	Uninstall
-	Update
-	RestoreConfig
+	BackupLegacyConfig
+	RestoreLegacyConfigRollback
+	RestoreLegacyConfig
+	CleanupLegacyConfig
+	PrepareTreatAs
+	TreatAsRollback
+	TreatAsApply
+	NotifyShellChanged
 	;ShellExecute
 	ValidatePath
 

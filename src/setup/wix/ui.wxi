@@ -505,6 +505,9 @@
 		</Dialog>
 
 		<Error Id='0' Message='{{Fatal error: }}' />
+		<Error Id='25001' Message='Shell installed, but Windows 11 primary-menu takeover could not be established safely ([2]). The classic context menu remains available.' />
+		<Error Id='25002' Message='Setup could not safely remove Shell&apos;s Windows 11 primary-menu redirect ([2]). Uninstall was rolled back to avoid leaving a dangling redirect.' />
+		<Error Id='25003' Message='Setup cannot change the Windows 11 primary-menu redirect while Windows Installer rollback is disabled.' />
 		<Error Id='1' Message='{{Error [1]. }}' />
 		<Error Id='2' Message='Warning [1].' />
 		<Error Id='3' />

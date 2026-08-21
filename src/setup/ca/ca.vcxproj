@@ -34,7 +34,7 @@
   <Import Project="$(SolutionDir)shared\VC-LTL.props" Condition="Exists('$(SolutionDir)shared\VC-LTL.props')" />
   
   <PropertyGroup>
-    <ProjectAdditionalLinkLibraries>msi.lib;shlwapi.lib</ProjectAdditionalLinkLibraries>
+    <ProjectAdditionalLinkLibraries>msi.lib;shlwapi.lib;shell32.lib;bcrypt.lib;ole32.lib</ProjectAdditionalLinkLibraries>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>

@@ -1,12 +1,17 @@
 #define VC_EXTRALEAN
 //#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shlobj.h>
 #include <shlwapi.h>
 #include <msi.h>
 #include <msiquery.h>
 #include <string>
+#include "../../shared/LegacyConfigTransfer.h"
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "msi.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "ole32.lib")
 
 template<typename ... Args>
 static void log(const char *format, Args ... args)
@@ -50,15 +55,23 @@ struct MSI
 	{
 		if(hInstall && name != nullptr)
 		{
-			DWORD length = 0;
-			auto hr = ::MsiGetPropertyW(hInstall, name, nullptr, &length);
-			if(length > 0)
+			wchar_t empty = L'\0';
+			DWORD required = 0;
+			auto result = ::MsiGetPropertyW(hInstall, name, &empty, &required);
+			if(result == ERROR_MORE_DATA && required > 0)
 			{
-				value.resize(length++);
-				hr = ::MsiGetPropertyW(hInstall, name, value.data(), &length);
-				return true;
+				std::wstring buffer(required + 1, L'\0');
+				DWORD capacity = required + 1;
+				result = ::MsiGetPropertyW(hInstall, name, buffer.data(), &capacity);
+				if(result == ERROR_SUCCESS)
+				{
+					buffer.resize(capacity);
+					value = std::move(buffer);
+					return true;
+				}
 			}
 		}
+		value.clear();
 		return false;
 	}
 
@@ -87,130 +100,155 @@ struct MSI
 	}
 };
 
-bool streq(const std::wstring &s1, const wchar_t *s2)
-{
-	return ::memicmp(s1.c_str(), s2, s1.size() * sizeof(wchar_t)) == 0;
-}
-
-#undef ShellExecute
-
-constexpr auto FILEEXE = L"shell.exe";
-constexpr auto FILEDLL = L"shell.dll";
-constexpr auto FILEOLD = L"shell.old";
 constexpr auto FILECONFIG = L"shell.nss";
-constexpr auto FILECONFIGBACKUP = L"shell.nss.upgrade";
 constexpr auto FILECONFIGSTOCK = L"shell.nss.stock-new";
 
-constexpr auto upgrading = L"UPGRADINGPRODUCTCODE";
+constexpr wchar_t TREATAS_PARENT[] = L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}";
+constexpr wchar_t TREATAS_KEY[] = L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\TreatAs";
+constexpr wchar_t CONTEXT_MENU_CLSID[] = L"{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}";
+constexpr auto TREATAS_WARNING = 25001;
+constexpr auto TREATAS_REMOVE_ERROR = 25002;
+constexpr auto ROLLBACK_REQUIRED_ERROR = 25003;
 
-BOOL ShellExec(const wchar_t *file, const wchar_t *parameters, const wchar_t *directory, bool run_as_admin = false, int nshow = SW_NORMAL, bool wait = false)
+class RegKey
 {
-	SHELLEXECUTEINFOW sei = { };
-	sei.cbSize = sizeof(SHELLEXECUTEINFO);
-	sei.fMask = SEE_MASK_FLAG_NO_UI | (wait ? SEE_MASK_NOCLOSEPROCESS : 0);
-	sei.lpFile = file;
-	sei.lpVerb = run_as_admin ? L"runas" : nullptr;
-	sei.lpParameters = parameters;
-	sei.lpDirectory = directory;
-	sei.nShow = nshow;
+public:
+	RegKey() = default;
+	RegKey(const RegKey &) = delete;
+	RegKey &operator=(const RegKey &) = delete;
+	~RegKey() { if(_key) ::RegCloseKey(_key); }
 
-	auto res = ::ShellExecuteExW(&sei) || (wait && !sei.hProcess);
-	if(!res)
-		return res;
+	operator HKEY() const { return _key; }
+	HKEY *put() { return &_key; }
 
-	if(!wait)
-		return res;
+private:
+	HKEY _key{};
+};
 
-	// Wait until child process exits.
-	MSG msg;
-	DWORD dw;
-	while(wait)
+class FileHandle
+{
+public:
+	FileHandle() = default;
+	explicit FileHandle(HANDLE handle) : _handle{ handle } {}
+	FileHandle(const FileHandle &) = delete;
+	FileHandle &operator=(const FileHandle &) = delete;
+	~FileHandle() { if(valid()) ::CloseHandle(_handle); }
+
+	bool valid() const { return _handle && _handle != INVALID_HANDLE_VALUE; }
+	operator HANDLE() const { return _handle; }
+	void close() { if(valid()) ::CloseHandle(_handle); _handle = INVALID_HANDLE_VALUE; }
+
+private:
+	HANDLE _handle{ INVALID_HANDLE_VALUE };
+};
+
+enum class TreatAsState
+{
+	absent,
+	ours,
+	foreign,
+	inaccessible
+};
+
+static TreatAsState QueryTreatAs(LSTATUS *error = nullptr)
+{
+	RegKey key;
+	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, 0,
+		KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_WOW64_64KEY, key.put());
+	if(rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
 	{
-		dw = ::MsgWaitForMultipleObjects(1, &sei.hProcess, FALSE, 30000, QS_ALLINPUT);
-		if(dw == WAIT_OBJECT_0)
-		{
-			wait = false;
-			break;
-		}
-		else if(dw == WAIT_OBJECT_0 + 1)
-		{
-			while(::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
-			{
-				if(msg.message == WM_QUIT)
-				{
-					wait = false;
-					break;
-				}
-				::DispatchMessageW(&msg);
-			}
-		}
-		else
-		{
-			// Timeout (30s) or unexpected error
-			wait = false;
-			break;
-		}
+		if(error) *error = ERROR_SUCCESS;
+		return TreatAsState::absent;
 	}
-	::CloseHandle(sei.hProcess);
-	return res;
-}
-
-/*
-static BOOL ProcessStart(const wchar_t *application, const wchar_t *parameters, const wchar_t *directory = nullptr, bool wait = false, int showCmd = SW_SHOWNORMAL)
-{
-	PROCESS_INFORMATION processInfo = { };
-	STARTUPINFOW startupInfo = { };
-	startupInfo.cb = sizeof(STARTUPINFOW);
-	startupInfo.wShowWindow = (WORD)showCmd;
-	startupInfo.dwFlags = STARTF_USESHOWWINDOW;
-	std::wstring commandLine= parameters;
-
-	auto result = ::CreateProcessW(application,
-							commandLine.data(), nullptr, nullptr, FALSE,
-							NORMAL_PRIORITY_CLASS,
-							nullptr, directory,
-							&startupInfo, &processInfo);
-	if(!result)
-		return FALSE;
-
-	// Wait until child process exits.
-	if(wait && processInfo.hProcess)
-		::WaitForSingleObject(processInfo.hProcess, INFINITE);
-
-	if(processInfo.hThread)
-		::CloseHandle(processInfo.hThread);
-	if(processInfo.hProcess)
-		::CloseHandle(processInfo.hProcess);
-
-	return result;
-}
-
-static bool IsDirectoryExists(const std::wstring_view &path)
-{
-	auto attr = ::GetFileAttributesW(path.data());
-	return (attr != UINT32_MAX && (attr & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-// Checks if a file exists (accessible)
-static bool IsFileExists(const std::wstring_view &path)
-{
-	auto attr = ::GetFileAttributesW(path.data());
-	//return (attr != INVALID_FILE_ATTRIBUTES && (!(attr & FILE_ATTRIBUTE_DIRECTORY)));
-	if(attr == INVALID_FILE_ATTRIBUTES)
+	if(rc != ERROR_SUCCESS)
 	{
-		auto errval = ::GetLastError();
-		return (errval != ERROR_FILE_NOT_FOUND)
-			&& (errval != ERROR_PATH_NOT_FOUND)
-			&& (errval != ERROR_INVALID_NAME)
-			&& (errval != ERROR_INVALID_DRIVE)
-			&& (errval != ERROR_NOT_READY)
-			&& (errval != ERROR_INVALID_PARAMETER)
-			&& (errval != ERROR_BAD_PATHNAME)
-			&& (errval != ERROR_BAD_NETPATH);
+		if(error) *error = rc;
+		return TreatAsState::inaccessible;
 	}
-	return true;
+
+	DWORD subkeys = 0;
+	DWORD values = 0;
+	rc = ::RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, &subkeys, nullptr,
+		                     nullptr, &values, nullptr, nullptr, nullptr, nullptr);
+	if(rc != ERROR_SUCCESS)
+	{
+		if(error) *error = rc;
+		return TreatAsState::inaccessible;
+	}
+
+	wchar_t value[64]{};
+	DWORD bytes = sizeof(value);
+	rc = ::RegGetValueW(key, nullptr, nullptr,
+		RRF_RT_REG_SZ | RRF_ZEROONFAILURE, nullptr, value, &bytes);
+	if(rc != ERROR_SUCCESS)
+	{
+		if(error) *error = (rc == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : rc);
+		return rc == ERROR_FILE_NOT_FOUND ? TreatAsState::foreign : TreatAsState::inaccessible;
+	}
+
+	if(error) *error = ERROR_SUCCESS;
+	if(subkeys == 0 && values == 1
+	   && ::CompareStringOrdinal(value, -1, CONTEXT_MENU_CLSID, -1, TRUE) == CSTR_EQUAL)
+		return TreatAsState::ours;
+
+	return TreatAsState::foreign;
 }
-*/
+
+static LSTATUS CreateTreatAsIfAbsent()
+{
+	RegKey parent;
+	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TREATAS_PARENT, 0,
+		KEY_CREATE_SUB_KEY | KEY_WOW64_64KEY, parent.put());
+	if(rc != ERROR_SUCCESS)
+		return rc;
+
+	RegKey key;
+	DWORD disposition = 0;
+	rc = ::RegCreateKeyExW(parent, L"TreatAs", 0, nullptr, REG_OPTION_NON_VOLATILE,
+		KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_WOW64_64KEY, nullptr, key.put(), &disposition);
+	if(rc != ERROR_SUCCESS)
+		return rc;
+
+	if(disposition != REG_CREATED_NEW_KEY)
+		return QueryTreatAs() == TreatAsState::ours ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
+
+	rc = ::RegSetValueExW(key, nullptr, 0, REG_SZ,
+		reinterpret_cast<const BYTE *>(CONTEXT_MENU_CLSID), sizeof(CONTEXT_MENU_CLSID));
+	if(rc != ERROR_SUCCESS)
+	{
+		// We created this empty key in this call, so taking it back is not a
+		// recursive/shared-key deletion.
+		::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, KEY_WOW64_64KEY, 0);
+	}
+	return rc;
+}
+
+static LSTATUS RemoveTreatAsIfOurs()
+{
+	LSTATUS error = ERROR_SUCCESS;
+	auto state = QueryTreatAs(&error);
+	if(state == TreatAsState::absent)
+		return ERROR_SUCCESS;
+	if(state == TreatAsState::foreign)
+		return ERROR_ALREADY_EXISTS;
+	if(state == TreatAsState::inaccessible)
+		return error;
+
+	return ::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, KEY_WOW64_64KEY, 0);
+}
+
+static void InstallerMessage(MSIHANDLE hInstall, INSTALLMESSAGE type, int message_id,
+	                         const wchar_t *detail = nullptr)
+{
+	PMSIHANDLE record = ::MsiCreateRecord(detail ? 2 : 1);
+	if(!record)
+		return;
+
+	::MsiRecordSetInteger(record, 1, message_id);
+	if(detail)
+		::MsiRecordSetStringW(record, 2, detail);
+	::MsiProcessMessage(hInstall, type, record);
+}
 
 static std::wstring JoinPath(const std::wstring &path1, const std::wstring &path2)
 {
@@ -225,521 +263,483 @@ static std::wstring JoinPath(const std::wstring &path1, const std::wstring &path
 	return path + path2;
 }
 
-static bool InstallFolder(MSIHANDLE hInstall, std::wstring& install_folder, bool find_by_reg)
+static bool InstallFolder(MSIHANDLE hInstall, std::wstring& install_folder)
 {
 	MSI msi(hInstall);
 	install_folder = msi.InstallFolder();
-
-	// A deferred custom action runs in the installer's own elevated process and
-	// cannot read INSTALLFOLDER - the only property it can see is the
-	// CustomActionData its immediate counterpart set for it.
-	if(install_folder.size() == 0)
-		msi.get(L"CustomActionData", install_folder);
-
-	if(install_folder.size() == 0)
-	{
-		if(find_by_reg)
-		{
-			install_folder.resize(MAX_PATH);
-
-			// This must stay in step with CLS_ContextMenu in src/shared/Globals.h.
-			// pcbData is a byte count, not a character count.
-			DWORD length = static_cast<DWORD>(install_folder.size() * sizeof(wchar_t));
-			auto rc = ::RegGetValueW(HKEY_CLASSES_ROOT,
-									 L"CLSID\\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}\\InprocServer32",
-									 nullptr, RRF_RT_REG_SZ, nullptr,
-									 static_cast<void *>(install_folder.data()), &length);
-			if(rc == ERROR_SUCCESS && length >= sizeof(wchar_t))
-			{
-				// The reported size includes the terminating null, which must not
-				// stay inside the string.
-				install_folder.resize(length / sizeof(wchar_t) - 1);
-				auto p = install_folder.find_last_of(L"\\");
-				if(p != install_folder.npos)
-					install_folder = install_folder.substr(0, p + 1);
-				else
-					install_folder.clear();
-			}
-			else
-			{
-				// Without this the failed read leaves MAX_PATH nulls behind and the
-				// size check below reports success.
-				install_folder.clear();
-			}
-		}
-	}
-	return install_folder.size() > 0;
+	return !install_folder.empty();
 }
 /*
-bool start(MSIHANDLE hInstall, const wchar_t *parameters, bool run_as_admin, bool wait, bool find_dir_by_reg)
-{
-	auto result = false;
-	MSI msi(hInstall);
-	std::wstring install_folder;
-	if(InstallFolder(hInstall, install_folder, find_dir_by_reg))
-	{
-		std::wstring sh = std::move(JoinPath(install_folder, FILEEXE));
-		result = ShellExec(JoinPath(install_folder, FILEEXE).c_str(), 
-							parameters, install_folder.c_str(), true, SW_HIDE, true);
-		std::wstring old = std::move(JoinPath(install_folder, FILEOLD));
-		if(::PathFileExistsW(old.c_str()))
-			::DeleteFileW(old.c_str());
-	}
-	return result;
-}
-*/
-//MsiGetProperty (hMSI, "CustomActionData", strOurVersion, numSize);
-//::MsiSetPropertyW(hInstall, L"MSIRESTARTMANAGERCONTROL", L"Disable");
+	Only a package older than 1.9.20 can remove shell.nss during its removal half;
+	CONFIG has been permanent since 1.9.20. The one-time bridge snapshots that
+	legacy file before RemoveExistingProducts, passes a random path plus SHA-256
+	through hidden CustomActionData, and restores only bytes read from the same
+	validated non-reparse handle. A checked rollback action restores the new stock
+	file, and a commit action removes the staging files.
 
-//constexpr auto UninstallKey = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\";
-
-/*
-	shell.nss is the user's file, and a major upgrade destroys it.
-
-	The new product cannot simply decline to overwrite it, which is what CONFIG
-	used to ask for with NeverOverwrite. Whether a component installs at all is
-	resolved during costing, and costing happens before RemoveExistingProducts
-	runs - so with the old product's config still on disk the new product resolved
-	CONFIG to "install nothing", and the removal that followed took the file away.
-	An upgrade log of that authoring shows the two halves cancelling:
-
-		Component: CONFIG; Installed: Absent; Request: Local;  Action: Null
-		Component: CONFIG; Installed: Local;  Request: Absent; Action: Absent
-		Executing op: FileRemove(,FileName=shell.nss,,)
-
-	So the file is copied out before the removal and copied back after the new
-	files land. There is no elevated slot for the first half: RemoveExistingProducts
-	sits between InstallValidate and InstallInitialize, and a deferred action -
-	the only kind that runs outside the user's security context - "must come after
-	InstallInitialize".
-
-		https://learn.microsoft.com/en-us/windows/win32/msi/removeexistingproducts-action
-		https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
-
-	The backup therefore runs immediately, as the invoking user, and writes under
-	%ProgramData%, whose default ACL grants BUILTIN\Users (CI)(WD,AD) and gives the
-	creator full control of what it makes there. Not into the install folder: the
-	outgoing product's own cleanup wipes that directory.
-
-	Every config is carried across, not just one that looks edited. Windows
-	Installer's own test for that - "if the Modified date is later than the Create
-	date ... do not install the file" - reports a config restored by a script or a
-	backup tool as untouched, because those preserve the write time and set a new
-	creation time. Losing the user's menu is the failure this exists to prevent,
-	so the version's own config is written beside the restored one as
-	shell.nss.stock-new when the two differ, rather than instead of it.
-
-		https://learn.microsoft.com/en-us/windows/win32/msi/file-versioning-rules
-
-	The copy is not deleted once restored. If the transaction rolls back after the
-	restore, file-level rollback takes the restored config with it and this copy is
-	the only one left. It is overwritten by the next upgrade that finds a config,
-	and removed on a real uninstall.
+	  https://learn.microsoft.com/windows/win32/msi/installing-permanent-components-files-fonts-registry-keys
+	  https://learn.microsoft.com/windows/win32/msi/rollback-custom-actions
+	  https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-createfilew
+	  https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex
 */
 static std::wstring ProgramDataFolder()
 {
-	wchar_t root[MAX_PATH]{};
-	auto length = ::ExpandEnvironmentStringsW(L"%ProgramData%", root, ARRAYSIZE(root));
-
-	// The return is a character count including the terminator, and zero on
-	// failure; anything larger than the buffer means it was truncated.
-	if(length == 0 || length > ARRAYSIZE(root))
+	auto initialized = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if(FAILED(initialized) && initialized != RPC_E_CHANGED_MODE)
 		return {};
 
-	return root;
+	PWSTR raw = nullptr;
+	auto result = ::SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_DEFAULT,
+		nullptr, &raw);
+	std::wstring path = SUCCEEDED(result) && raw ? raw : L"";
+	::CoTaskMemFree(raw);
+	if(SUCCEEDED(initialized))
+		::CoUninitialize();
+	return path;
 }
 
-static std::wstring ConfigBackupPath()
+static bool EnsurePlainDirectory(const std::wstring &path)
 {
-	auto root = ProgramDataFolder();
-	if(root.empty())
-		return {};
-
-	return JoinPath(JoinPath(JoinPath(root, L"Nilesoft"), L"Shell"), FILECONFIGBACKUP);
-}
-
-static void BackupUserConfig(const std::wstring &install_folder)
-{
-	auto config = JoinPath(install_folder, FILECONFIG);
-
-	// Nothing to save. An earlier backup is deliberately left where it is - this
-	// also runs after the removal, where the file is already gone.
-	if(!::PathFileExistsW(config.c_str()))
-		return;
-
-	auto root = ProgramDataFolder();
-	if(root.empty())
-		return;
-
-	// Two levels, and CreateDirectory on one that already exists is harmless.
-	// SHCreateDirectoryEx would pull shell32 into a DLL that otherwise needs
-	// only shlwapi and msi.
-	auto vendor = JoinPath(root, L"Nilesoft");
-	auto folder = JoinPath(vendor, L"Shell");
-	::CreateDirectoryW(vendor.c_str(), nullptr);
-	::CreateDirectoryW(folder.c_str(), nullptr);
-
-	::CopyFileW(config.c_str(), JoinPath(folder, FILECONFIGBACKUP).c_str(), FALSE);
-}
-
-// Byte-for-byte, so a config that only moved is not reported as changed.
-static bool SameContent(const std::wstring &a, const std::wstring &b)
-{
-	WIN32_FILE_ATTRIBUTE_DATA fa{}, fb{};
-	if(!::GetFileAttributesExW(a.c_str(), GetFileExInfoStandard, &fa)
-	   || !::GetFileAttributesExW(b.c_str(), GetFileExInfoStandard, &fb))
+	if(!::CreateDirectoryW(path.c_str(), nullptr)
+	   && ::GetLastError() != ERROR_ALREADY_EXISTS)
 		return false;
 
-	if(fa.nFileSizeHigh != fb.nFileSizeHigh || fa.nFileSizeLow != fb.nFileSizeLow)
+	auto attributes = ::GetFileAttributesW(path.c_str());
+	return attributes != INVALID_FILE_ATTRIBUTES
+		&& (attributes & FILE_ATTRIBUTE_DIRECTORY)
+		&& !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
+static bool RandomToken(std::wstring &token)
+{
+	unsigned char random[16]{};
+	if(::BCryptGenRandom(nullptr, random, sizeof(random),
+		BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
 		return false;
 
-	auto open = [](const std::wstring &path)
+	static constexpr wchar_t alphabet[] = L"0123456789abcdef";
+	token.resize(sizeof(random) * 2);
+	for(size_t i = 0; i < sizeof(random); ++i)
 	{
-		return ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-							 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-	};
+		token[i * 2] = alphabet[random[i] >> 4];
+		token[i * 2 + 1] = alphabet[random[i] & 0x0f];
+	}
+	return true;
+}
 
-	auto ha = open(a);
-	auto hb = open(b);
+struct LegacyConfigPlan
+{
+	bool restore{};
+	std::wstring stage;
+	Nilesoft::LegacyConfigTransfer::Digest digest{};
+	std::wstring install_folder;
+	std::wstring rollback_file;
+	std::wstring restore_file;
+	bool stock_new_existed{};
+};
 
-	auto same = (ha != INVALID_HANDLE_VALUE && hb != INVALID_HANDLE_VALUE);
-	while(same)
+static std::wstring Serialize(const LegacyConfigPlan &plan)
+{
+	if(!plan.restore)
+		return L"0||||||0";
+
+	return L"1|" + plan.stage + L"|"
+		+ Nilesoft::LegacyConfigTransfer::hex(plan.digest) + L"|"
+		+ plan.install_folder + L"|" + plan.rollback_file + L"|"
+		+ plan.restore_file + L"|" + (plan.stock_new_existed ? L"1" : L"0");
+}
+
+static bool ParseLegacyConfigPlan(const std::wstring &data, LegacyConfigPlan &plan)
+{
+	std::array<std::wstring, 7> fields;
+	size_t start = 0;
+	for(size_t i = 0; i < fields.size(); ++i)
 	{
-		char ba[4096], bb[4096];
-		DWORD ra = 0, rb = 0;
-		if(!::ReadFile(ha, ba, sizeof(ba), &ra, nullptr)
-		   || !::ReadFile(hb, bb, sizeof(bb), &rb, nullptr))
+		auto separator = data.find(L'|', start);
+		if(i + 1 == fields.size())
 		{
-			same = false;
-			break;
+			if(separator != std::wstring::npos)
+				return false;
+			fields[i] = data.substr(start);
 		}
-		if(ra != rb || ::memcmp(ba, bb, ra) != 0)
+		else
 		{
-			same = false;
-			break;
+			if(separator == std::wstring::npos)
+				return false;
+			fields[i] = data.substr(start, separator - start);
+			start = separator + 1;
 		}
-		if(ra == 0)
-			break;
 	}
 
-	if(ha != INVALID_HANDLE_VALUE) ::CloseHandle(ha);
-	if(hb != INVALID_HANDLE_VALUE) ::CloseHandle(hb);
-	return same;
-}
-
-static void RestoreUserConfig(const std::wstring &install_folder)
-{
-	auto backup = ConfigBackupPath();
-	if(backup.empty() || !::PathFileExistsW(backup.c_str()))
-		return;
-
-	auto config = JoinPath(install_folder, FILECONFIG);
-
-	// The user's file is about to win, so anything new in the version's own
-	// config would be lost silently. Leave that copy beside theirs instead -
-	// the same thing scripts/backup-and-upgrade.ps1 does.
-	if(::PathFileExistsW(config.c_str()) && !SameContent(config, backup))
-		::CopyFileW(config.c_str(), JoinPath(install_folder, FILECONFIGSTOCK).c_str(), FALSE);
-
-	// Failing here leaves the stock config in place, which is a working menu -
-	// the state this whole path exists to avoid is no config file at all.
-	::CopyFileW(backup.c_str(), config.c_str(), FALSE);
-}
-
-static void DiscardUserConfigBackup()
-{
-	auto backup = ConfigBackupPath();
-	if(backup.empty())
-		return;
-
-	::DeleteFileW(backup.c_str());
-
-	// Both refuse when the directory is not empty, which is the wanted answer.
-	auto root = ProgramDataFolder();
-	if(!root.empty())
+	if(fields[0] == L"0")
 	{
-		auto vendor = JoinPath(root, L"Nilesoft");
-		::RemoveDirectoryW(JoinPath(vendor, L"Shell").c_str());
-		::RemoveDirectoryW(vendor.c_str());
-	}
-}
-
-/*
-	Frees the canonical shell.dll path so Windows Installer can write the new
-	binary instead of demanding a reboot.
-
-	Windows will not let a mapped image be overwritten or deleted, but it will
-	let it be renamed within its volume - and shell.dll is mapped into every
-	process that has ever raised a shell context menu, because Shell pins its own
-	module for the life of that process. On an ordinary desktop that is a couple
-	of dozen processes, none of which the installer can close.
-
-	This used to rotate to a fixed "shell.old", which worked exactly once. After
-	that the name was taken by a rotation that was itself still mapped, so
-	MoveFileW refused to overwrite it and the DeleteFileW that followed could not
-	remove a mapped file either - and neither result was checked. The rotated
-	shell.old sitting in install folders dated years back is what that looks like.
-*/
-static bool RotateOutOfTheWay(const std::wstring &path)
-{
-	if(!::PathFileExistsW(path.c_str()))
+		plan = {};
 		return true;
-
-	SYSTEMTIME st{};
-	::GetLocalTime(&st);
-
-	// A name that cannot already be taken, however many times this has run.
-	// No MOVEFILE_REPLACE_EXISTING: a name that is already there belongs to an
-	// earlier rotation that something may still have mapped, so the next
-	// candidate is wanted rather than a destroyed one.
-	for(int attempt = 0; attempt < 64; attempt++)
-	{
-		wchar_t suffix[96]{};
-		::swprintf(suffix, ARRAYSIZE(suffix), L".old.%04u%02u%02u%02u%02u%02u_%lu_%d",
-				   st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
-				   ::GetCurrentProcessId(), attempt);
-
-		std::wstring rotated = path + suffix;
-		if(::PathFileExistsW(rotated.c_str()))
-			continue;
-
-		if(::MoveFileExW(path.c_str(), rotated.c_str(), 0))
-			return true;
 	}
-
-	return false;
-}
-
-// Rotations left by earlier installs, once nothing maps them any more. Deleting
-// one that is still mapped fails harmlessly and it is tried again next time.
-static void PruneRotations(const std::wstring &install_folder)
-{
-	const wchar_t *patterns[] = { L"shell.dll.old*", L"shell.exe.old*", FILEOLD };
-
-	for(auto pattern : patterns)
-	{
-		WIN32_FIND_DATAW fd{};
-		auto find = ::FindFirstFileW(JoinPath(install_folder, pattern).c_str(), &fd);
-		if(find == INVALID_HANDLE_VALUE)
-			continue;
-
-		do
-		{
-			if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-				::DeleteFileW(JoinPath(install_folder, fd.cFileName).c_str());
-		}
-		while(::FindNextFileW(find, &fd));
-
-		::FindClose(find);
-	}
-}
-
-/*
-	Runs shell.exe and reports what it said.
-
-	ShellExec (above) is the interactive path: it uses the "runas" verb and
-	throws the child's exit code away. Neither is right for a deferred custom
-	action. The action already runs in the installer's elevated,
-	non-impersonating context, so asking the shell to elevate again is at best
-	pointless; and registration that cannot report failure is registration the
-	installer cannot roll back.
-
-	  https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
-
-	Returns false if the process could not be started, timed out, or exited
-	non-zero. shell.exe's own exit code was inverted until this change - it
-	returned a bool straight out of wWinMain, so success was 1 - which is
-	exactly why an exit code has to be checked deliberately rather than
-	inherited.
-*/
-static bool RunAndWait(const std::wstring &exe, const std::wstring &arguments,
-					   const std::wstring &directory, DWORD timeout_ms = 120000)
-{
-	// CreateProcessW may write to the command line it is given.
-	std::wstring command = L"\"" + exe + L"\" " + arguments;
-
-	STARTUPINFOW si {};
-	si.cb = sizeof(si);
-	si.dwFlags = STARTF_USESHOWWINDOW;
-	si.wShowWindow = SW_HIDE;
-
-	PROCESS_INFORMATION pi {};
-	if(!::CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE,
-						 CREATE_NO_WINDOW, nullptr,
-						 directory.empty() ? nullptr : directory.c_str(), &si, &pi))
-	{
-		log("CreateProcess failed: %lu", ::GetLastError());
+	if(fields[0] != L"1" || fields[1].empty() || fields[3].empty()
+	   || fields[4].empty() || fields[5].empty()
+	   || !Nilesoft::LegacyConfigTransfer::parse_hex(fields[2], plan.digest))
 		return false;
+
+	plan.restore = true;
+	plan.stage = std::move(fields[1]);
+	plan.install_folder = std::move(fields[3]);
+	plan.rollback_file = std::move(fields[4]);
+	plan.restore_file = std::move(fields[5]);
+	plan.stock_new_existed = fields[6] == L"1";
+	return fields[6] == L"0" || fields[6] == L"1";
+}
+
+static bool SetLegacyConfigData(MSIHANDLE hInstall, const std::wstring &data)
+{
+	MSI msi(hInstall);
+	return msi.set(L"RestoreLegacyConfigRollback", data.c_str())
+		&& msi.set(L"RestoreLegacyConfig", data.c_str())
+		&& msi.set(L"CleanupLegacyConfig", data.c_str());
+}
+
+UINT __stdcall BackupLegacyConfig(MSIHANDLE hInstall)
+{
+	std::wstring install_folder;
+	if(!InstallFolder(hInstall, install_folder))
+		return ERROR_INSTALL_FAILURE;
+
+	auto config = JoinPath(install_folder, FILECONFIG);
+	FileHandle source{ ::CreateFileW(config.c_str(), GENERIC_READ, FILE_SHARE_READ,
+		nullptr, OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
+		nullptr) };
+	if(!source.valid())
+	{
+		auto error = ::GetLastError();
+		if(error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+			return SetLegacyConfigData(hInstall, Serialize({}))
+				? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
+		return ERROR_INSTALL_FAILURE;
+	}
+	if(!Nilesoft::LegacyConfigTransfer::regular_non_reparse(source))
+		return ERROR_INSTALL_FAILURE;
+
+	MSI msi(hInstall);
+	std::wstring rollback_disabled;
+	if(msi.get(L"RollbackDisabled", rollback_disabled))
+		return ERROR_INSTALL_FAILURE;
+
+	auto root = ProgramDataFolder();
+	if(root.empty())
+		return ERROR_INSTALL_FAILURE;
+	auto vendor = JoinPath(root, L"Nilesoft");
+	auto product = JoinPath(vendor, L"Shell");
+	auto staging = JoinPath(product, L"Staging");
+	if(!EnsurePlainDirectory(vendor) || !EnsurePlainDirectory(product)
+	   || !EnsurePlainDirectory(staging))
+		return ERROR_INSTALL_FAILURE;
+
+	std::wstring token;
+	std::wstring stage_path;
+	HANDLE stage_raw = INVALID_HANDLE_VALUE;
+	for(unsigned attempt = 0; attempt < 16 && stage_raw == INVALID_HANDLE_VALUE; ++attempt)
+	{
+		if(!RandomToken(token))
+			return ERROR_INSTALL_FAILURE;
+		stage_path = JoinPath(staging, L"shell.nss." + token + L".stage");
+		stage_raw = ::CreateFileW(stage_path.c_str(), GENERIC_WRITE, 0, nullptr,
+			CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN
+				| FILE_FLAG_WRITE_THROUGH, nullptr);
+		if(stage_raw == INVALID_HANDLE_VALUE && ::GetLastError() != ERROR_FILE_EXISTS)
+			return ERROR_INSTALL_FAILURE;
+	}
+	FileHandle stage{ stage_raw };
+	if(!stage.valid())
+		return ERROR_INSTALL_FAILURE;
+
+	LegacyConfigPlan plan;
+	plan.restore = true;
+	plan.stage = stage_path;
+	plan.install_folder = install_folder;
+	plan.rollback_file = JoinPath(install_folder, L"shell.nss.rollback." + token);
+	plan.restore_file = JoinPath(install_folder, L"shell.nss.restore." + token);
+	plan.stock_new_existed = ::GetFileAttributesW(
+		JoinPath(install_folder, FILECONFIGSTOCK).c_str()) != INVALID_FILE_ATTRIBUTES;
+
+	if(!Nilesoft::LegacyConfigTransfer::hash_and_copy(source, stage, plan.digest)
+	   || !::FlushFileBuffers(stage))
+	{
+		stage.close();
+		::DeleteFileW(stage_path.c_str());
+		return ERROR_INSTALL_FAILURE;
+	}
+	stage.close();
+
+	if(!SetLegacyConfigData(hInstall, Serialize(plan)))
+	{
+		::DeleteFileW(stage_path.c_str());
+		return ERROR_INSTALL_FAILURE;
+	}
+	return ERROR_SUCCESS;
+}
+
+UINT __stdcall RestoreLegacyConfig(MSIHANDLE hInstall)
+{
+	MSI msi(hInstall);
+	std::wstring data;
+	LegacyConfigPlan plan;
+	if(!msi.get(L"CustomActionData", data) || !ParseLegacyConfigPlan(data, plan))
+		return ERROR_INSTALL_FAILURE;
+	if(!plan.restore)
+		return ERROR_SUCCESS;
+
+	FileHandle stage{ ::CreateFileW(plan.stage.c_str(), GENERIC_READ, 0, nullptr,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+			| FILE_FLAG_SEQUENTIAL_SCAN, nullptr) };
+	if(!stage.valid() || !Nilesoft::LegacyConfigTransfer::regular_non_reparse(stage))
+		return ERROR_INSTALL_FAILURE;
+
+	Nilesoft::LegacyConfigTransfer::Digest actual{};
+	if(!Nilesoft::LegacyConfigTransfer::hash(stage, actual)
+	   || !Nilesoft::LegacyConfigTransfer::equal(actual, plan.digest))
+		return ERROR_INSTALL_FAILURE;
+
+	auto config = JoinPath(plan.install_folder, FILECONFIG);
+	FileHandle stock{ ::CreateFileW(config.c_str(), GENERIC_READ, FILE_SHARE_READ,
+		nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+			| FILE_FLAG_SEQUENTIAL_SCAN, nullptr) };
+	if(!stock.valid() || !Nilesoft::LegacyConfigTransfer::regular_non_reparse(stock))
+		return ERROR_INSTALL_FAILURE;
+
+	Nilesoft::LegacyConfigTransfer::Digest stock_digest{};
+	if(!Nilesoft::LegacyConfigTransfer::hash(stock, stock_digest))
+		return ERROR_INSTALL_FAILURE;
+
+	FileHandle rollback{ ::CreateFileW(plan.rollback_file.c_str(), GENERIC_WRITE, 0,
+		nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN
+			| FILE_FLAG_WRITE_THROUGH, nullptr) };
+	Nilesoft::LegacyConfigTransfer::Digest rollback_digest{};
+	if(!rollback.valid()
+	   || !Nilesoft::LegacyConfigTransfer::hash_and_copy(stock, rollback, rollback_digest)
+	   || !::FlushFileBuffers(rollback))
+		return ERROR_INSTALL_FAILURE;
+	rollback.close();
+
+	if(!plan.stock_new_existed
+	   && !Nilesoft::LegacyConfigTransfer::equal(stock_digest, plan.digest))
+	{
+		auto stock_new = JoinPath(plan.install_folder, FILECONFIGSTOCK);
+		auto stock_temp = plan.restore_file + L".stock";
+		FileHandle output{ ::CreateFileW(stock_temp.c_str(), GENERIC_WRITE, 0, nullptr,
+			CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN
+				| FILE_FLAG_WRITE_THROUGH, nullptr) };
+		Nilesoft::LegacyConfigTransfer::Digest copied{};
+		if(!output.valid()
+		   || !Nilesoft::LegacyConfigTransfer::hash_and_copy(stock, output, copied)
+		   || !::FlushFileBuffers(output))
+			return ERROR_INSTALL_FAILURE;
+		output.close();
+		if(!::MoveFileExW(stock_temp.c_str(), stock_new.c_str(), MOVEFILE_WRITE_THROUGH))
+			return ERROR_INSTALL_FAILURE;
 	}
 
-	bool ok = false;
-	if(::WaitForSingleObject(pi.hProcess, timeout_ms) == WAIT_OBJECT_0)
+	FileHandle replacement{ ::CreateFileW(plan.restore_file.c_str(), GENERIC_WRITE, 0,
+		nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN
+			| FILE_FLAG_WRITE_THROUGH, nullptr) };
+	Nilesoft::LegacyConfigTransfer::Digest copied{};
+	if(!replacement.valid()
+	   || !Nilesoft::LegacyConfigTransfer::hash_and_copy(stage, replacement, copied)
+	   || !Nilesoft::LegacyConfigTransfer::equal(copied, plan.digest)
+	   || !::FlushFileBuffers(replacement))
+		return ERROR_INSTALL_FAILURE;
+	replacement.close();
+
+	if(!::ReplaceFileW(config.c_str(), plan.restore_file.c_str(), nullptr, 0,
+					   nullptr, nullptr))
+		return ERROR_INSTALL_FAILURE;
+
+	return ERROR_SUCCESS;
+}
+
+UINT __stdcall RestoreLegacyConfigRollback(MSIHANDLE hInstall)
+{
+	MSI msi(hInstall);
+	std::wstring data;
+	LegacyConfigPlan plan;
+	if(!msi.get(L"CustomActionData", data) || !ParseLegacyConfigPlan(data, plan))
+		return ERROR_INSTALL_FAILURE;
+	if(!plan.restore)
+		return ERROR_SUCCESS;
+
+	bool restored = true;
+	if(::GetFileAttributesW(plan.rollback_file.c_str()) != INVALID_FILE_ATTRIBUTES)
 	{
-		DWORD code = 1;
-		if(::GetExitCodeProcess(pi.hProcess, &code))
+		FileHandle rollback{ ::CreateFileW(plan.rollback_file.c_str(), GENERIC_READ, 0,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+			nullptr) };
+		restored = rollback.valid()
+			&& Nilesoft::LegacyConfigTransfer::regular_non_reparse(rollback);
+		rollback.close();
+
+		auto config = JoinPath(plan.install_folder, FILECONFIG);
+		if(restored && !::ReplaceFileW(config.c_str(), plan.rollback_file.c_str(),
+				nullptr, 0, nullptr, nullptr))
 		{
-			ok = (code == 0);
-			if(!ok)
-				log("shell.exe exited with %lu", code);
+			if(::GetLastError() == ERROR_FILE_NOT_FOUND)
+				restored = !!::MoveFileExW(plan.rollback_file.c_str(), config.c_str(),
+					MOVEFILE_WRITE_THROUGH);
+			else
+				restored = false;
+		}
+	}
+
+	if(!plan.stock_new_existed)
+		::DeleteFileW(JoinPath(plan.install_folder, FILECONFIGSTOCK).c_str());
+	::DeleteFileW(plan.stage.c_str());
+	::DeleteFileW(plan.restore_file.c_str());
+	::DeleteFileW((plan.restore_file + L".stock").c_str());
+	::DeleteFileW(plan.rollback_file.c_str());
+	return restored ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
+}
+
+UINT __stdcall CleanupLegacyConfig(MSIHANDLE hInstall)
+{
+	MSI msi(hInstall);
+	std::wstring data;
+	LegacyConfigPlan plan;
+	if(!msi.get(L"CustomActionData", data) || !ParseLegacyConfigPlan(data, plan))
+		return ERROR_SUCCESS;
+	if(plan.restore)
+	{
+		::DeleteFileW(plan.stage.c_str());
+		::DeleteFileW(plan.rollback_file.c_str());
+		::DeleteFileW(plan.restore_file.c_str());
+		::DeleteFileW((plan.restore_file + L".stock").c_str());
+	}
+	return ERROR_SUCCESS;
+}
+
+UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
+{
+	MSI msi(hInstall);
+	std::wstring remove;
+	const bool uninstall = msi.get(L"REMOVE", remove)
+		&& ::CompareStringOrdinal(remove.c_str(), -1, L"ALL", -1, TRUE) == CSTR_EQUAL;
+
+	LSTATUS error = ERROR_SUCCESS;
+	auto state = QueryTreatAs(&error);
+	const wchar_t *plan = L"noop";
+
+	if(uninstall)
+	{
+		if(state == TreatAsState::ours)
+			plan = L"uninstall-ours";
+		else if(state == TreatAsState::inaccessible)
+		{
+			wchar_t detail[32]{};
+			::swprintf_s(detail, L"%ld", error);
+			InstallerMessage(hInstall,
+				INSTALLMESSAGE(INSTALLMESSAGE_ERROR | MB_OK | MB_ICONERROR),
+				TREATAS_REMOVE_ERROR, detail);
+			return ERROR_INSTALL_FAILURE;
 		}
 	}
 	else
 	{
-		log("shell.exe did not exit within %lu ms", timeout_ms);
-		::TerminateProcess(pi.hProcess, 1);
+		if(state == TreatAsState::absent)
+			plan = L"install-absent";
+		else if(state == TreatAsState::foreign || state == TreatAsState::inaccessible)
+		{
+			wchar_t detail[32]{};
+			::swprintf_s(detail, L"%ld", error);
+			InstallerMessage(hInstall,
+				INSTALLMESSAGE(INSTALLMESSAGE_WARNING | MB_OK | MB_ICONWARNING),
+				TREATAS_WARNING, detail);
+		}
 	}
 
-	::CloseHandle(pi.hThread);
-	::CloseHandle(pi.hProcess);
-	return ok;
-}
-
-/*
-	Machine registration, deferred and checked.
-
-	This used to be an immediate action scheduled after InstallFinalize with
-	Return='ignore', which put it outside the installation's transaction
-	entirely: nothing it did could be rolled back, and whatever it reported was
-	discarded, so an install whose registration failed completely still
-	reported success. Windows Installer's rule for this is not subtle - a custom
-	action that changes machine state must be deferred, and every such action
-	needs a rollback action scheduled before it.
-
-	  https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
-	  https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions
-
-	-restart is deliberately not passed any more. Explorer restart is a session
-	action and this runs as SYSTEM with no impersonation;
-	Windows::Explorer::Restart enumerates every process named explorer.exe and
-	terminates each one it can open, which from SYSTEM reaches other users'
-	sessions. OnRestartExplorer below does that part, impersonated, afterwards.
-*/
-UINT __stdcall Install(MSIHANDLE hInstall)
-{
-	std::wstring install_folder;
-	if(!InstallFolder(hInstall, install_folder, false))
+	if(::CompareStringOrdinal(plan, -1, L"noop", -1, FALSE) != CSTR_EQUAL)
 	{
-		log("Install: no install folder");
-		return ERROR_INSTALL_FAILURE;
+		std::wstring rollback_disabled;
+		if(msi.get(L"RollbackDisabled", rollback_disabled))
+		{
+			InstallerMessage(hInstall,
+				INSTALLMESSAGE(INSTALLMESSAGE_ERROR | MB_OK | MB_ICONERROR),
+				ROLLBACK_REQUIRED_ERROR);
+			return ERROR_INSTALL_FAILURE;
+		}
 	}
 
-	if(!RunAndWait(JoinPath(install_folder, FILEEXE), L"-r -s -t", install_folder))
+	if(!msi.set(L"TreatAsRollback", plan) || !msi.set(L"TreatAsApply", plan))
 		return ERROR_INSTALL_FAILURE;
 
-	// Best-effort tidying, and explicitly not a reason to fail the install.
-	PruneRotations(install_folder);
-
 	return ERROR_SUCCESS;
 }
 
-/*
-	Undoes Install if anything later in the script fails. Unregistering
-	something that is not registered is success, so this is safe to run when
-	Install never got as far as writing anything.
-
-	A rollback action must not fail the rollback - there is nothing left to do
-	about it - so this reports success regardless and leaves the reason in the
-	log.
-*/
-UINT __stdcall InstallRollback(MSIHANDLE hInstall)
+UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 {
-	std::wstring install_folder;
-	if(InstallFolder(hInstall, install_folder, true))
-		RunAndWait(JoinPath(install_folder, FILEEXE), L"-u -s -t", install_folder);
+	MSI msi(hInstall);
+	std::wstring plan;
+	if(!msi.get(L"CustomActionData", plan) || plan == L"noop")
+		return ERROR_SUCCESS;
 
-	return ERROR_SUCCESS;
-}
-
-/*
-	Restarting Explorer so the new menu appears, in the session that asked for
-	the install. Immediate and impersonated, after InstallFinalize: it changes
-	no machine state, it must not run as SYSTEM, and it is not worth failing an
-	otherwise complete install over.
-*/
-UINT __stdcall RestartExplorer(MSIHANDLE hInstall)
-{
-	std::wstring install_folder;
-	if(InstallFolder(hInstall, install_folder, true))
-		RunAndWait(JoinPath(install_folder, FILEEXE), L"-restart -s", install_folder, 60000);
-
-	return ERROR_SUCCESS;
-}
-
-/*
-	Unregistering, deferred and synchronous, before RemoveFiles.
-
-	Three things were wrong with the way this was scheduled. It was
-	Execute='firstSequence', which is documented to "always skip action in
-	execute sequence if UI sequence has run" - and "the action is not required
-	to be present or run in the UI sequence to be skipped" - so an ordinary
-	uninstall from Settings or Programs and Features never ran it at all, and
-	the machine kept its COM registration afterwards. It was Return='asyncWait',
-	"an asynchronous execution that waits for exit code at the end of the
-	sequence", so it raced RemoveFiles for the very binary it was running. And
-	its REMOVE="ALL" condition sat after FindRelatedProducts, while the property
-	"may not equal ALL until after the InstallValidate action. This means that
-	any custom action that depends upon REMOVE=ALL must be sequenced after the
-	InstallValidate."
-
-	  https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-execution-scheduling-options
-	  https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-return-processing-options
-	  https://learn.microsoft.com/en-us/windows/win32/msi/remove
-*/
-UINT __stdcall Uninstall(MSIHANDLE hInstall)
-{
-	UINT result = ERROR_SUCCESS;
-
-	std::wstring install_folder;
-	if(InstallFolder(hInstall, install_folder, true))
+	LSTATUS rc = ERROR_INVALID_DATA;
+	if(plan == L"install-absent")
 	{
-		if(!RunAndWait(JoinPath(install_folder, FILEEXE), L"-u -s -t", install_folder))
-			result = ERROR_INSTALL_FAILURE;
+		rc = CreateTreatAsIfAbsent();
+		if(rc != ERROR_SUCCESS)
+		{
+			wchar_t detail[32]{};
+			::swprintf_s(detail, L"%ld", rc);
+			InstallerMessage(hInstall,
+				INSTALLMESSAGE(INSTALLMESSAGE_WARNING | MB_OK | MB_ICONWARNING),
+				TREATAS_WARNING, detail);
+			// Primary-menu takeover is optional; ordinary MSI registration remains
+			// valid and the classic context menu is still available.
+			return ERROR_SUCCESS;
+		}
+	}
+	else if(plan == L"uninstall-ours")
+	{
+		rc = RemoveTreatAsIfOurs();
+		if(rc != ERROR_SUCCESS)
+		{
+			wchar_t detail[32]{};
+			::swprintf_s(detail, L"%ld", rc);
+			InstallerMessage(hInstall,
+				INSTALLMESSAGE(INSTALLMESSAGE_ERROR | MB_OK | MB_ICONERROR),
+				TREATAS_REMOVE_ERROR, detail);
+			return ERROR_INSTALL_FAILURE;
+		}
 	}
 	else
-		log("Uninstall: no install folder");
+		return ERROR_INSTALL_FAILURE;
 
-	// A real uninstall, not the removal half of an upgrade - the condition on
-	// this action in InstallExecuteSequence excludes UPGRADINGPRODUCTCODE. So
-	// nothing is going to ask for the saved config again. Best-effort: failing
-	// to delete a backup directory is no reason to block an uninstall.
-	DiscardUserConfigBackup();
-
-	return result;
+	return ERROR_SUCCESS;
 }
 
-UINT __stdcall Update(MSIHANDLE hInstall)
+UINT __stdcall TreatAsRollback(MSIHANDLE hInstall)
 {
-	std::wstring install_folder;
-	if(InstallFolder(hInstall, install_folder, true))
-	{
-		// This entry point is scheduled twice - see the sequencing comment in
-		// setup.wxs - but only the immediate one runs before RemoveExistingProducts,
-		// and only that one can still see the config. MSIRUNMODE_SCHEDULED is "a
-		// custom action called from install script execution", which is exactly the
-		// deferred half:
-		//
-		//   https://learn.microsoft.com/en-us/windows/win32/api/msiquery/nf-msiquery-msigetmode
-		//
-		// Letting the deferred half run this too would have it create the backup
-		// directory as LocalSystem, whose inherited ACL leaves Users read-only -
-		// and every later upgrade's immediate half then fails to write into it.
-		if(!::MsiGetMode(hInstall, MSIRUNMODE_SCHEDULED))
-			BackupUserConfig(install_folder);
+	MSI msi(hInstall);
+	std::wstring plan;
+	if(!msi.get(L"CustomActionData", plan) || plan == L"noop")
+		return ERROR_SUCCESS;
 
-		RotateOutOfTheWay(JoinPath(install_folder, FILEDLL));
-		PruneRotations(install_folder);
+	LSTATUS rc = ERROR_INVALID_DATA;
+	if(plan == L"install-absent")
+		rc = RemoveTreatAsIfOurs();
+	else if(plan == L"uninstall-ours")
+		rc = CreateTreatAsIfAbsent();
+
+	if(rc != ERROR_SUCCESS)
+	{
+		log("TreatAs rollback failed: %ld", rc);
+		return ERROR_INSTALL_FAILURE;
 	}
 	return ERROR_SUCCESS;
 }
 
-// Deferred, after InstallFiles: the package's own files are on disk by now, so
-// this is the point at which the saved config can be put back over them.
-UINT __stdcall RestoreConfig(MSIHANDLE hInstall)
+UINT __stdcall NotifyShellChanged(MSIHANDLE)
 {
-	std::wstring install_folder;
-	if(InstallFolder(hInstall, install_folder, true))
-		RestoreUserConfig(install_folder);
-
+	// SHCNE_ASSOCCHANGED requires SHCNF_IDLIST and two null items.
+	// https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shchangenotify
+	::SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 	return ERROR_SUCCESS;
 }
 

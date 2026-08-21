@@ -4,15 +4,23 @@ namespace Nilesoft
 {
 	struct REGOP
 	{
-		bool REGISTER;
-		bool UNREGISTER;
-		bool TREAT;
-		bool CONTEXTMENU;
-		bool FOLDEREXTENSIONS;
-		bool ICONOVERLAY;
-		bool RESTART;
-		bool SILENT;
+		bool REGISTER{};
+		bool UNREGISTER{};
+		bool TREAT{};
+		bool CONTEXTMENU{};
+		bool FOLDEREXTENSIONS{};
+		bool ICONOVERLAY{};
+		bool RESTART{};
+		bool SILENT{};
 	};
+
+	// Command-level idempotence: an absent registration is already in the
+	// requested state, while a present registration must actually be removed.
+	template<typename Remove>
+	bool unregister_if_present(bool registered, Remove remove)
+	{
+		return !registered || remove();
+	}
 
 	class RegistryConfig
 	{

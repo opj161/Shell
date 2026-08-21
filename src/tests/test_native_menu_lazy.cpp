@@ -161,6 +161,22 @@ TEST(native_menu_lazy, a_throwing_host_does_not_wedge_the_guard)
 	CHECK_EQ(log().size(), size_t(1));
 }
 
+TEST(native_menu_lazy, only_active_parent_movement_selects_legacy_eager)
+{
+	CHECK(!native_moveto_requires_descendant_discovery(false, false));
+	CHECK(!native_moveto_requires_descendant_discovery(true, false));
+	CHECK(native_moveto_requires_descendant_discovery(true, true));
+
+	CHECK(choose_native_tree_policy(true, true, false, false) == NativeTreePolicy::Lazy);
+	CHECK(choose_native_tree_policy(true, false, true, false) == NativeTreePolicy::Lazy);
+	CHECK(choose_native_tree_policy(false, true, true, false) == NativeTreePolicy::Lazy);
+	CHECK(choose_native_tree_policy(true, true, true, false) == NativeTreePolicy::LegacyEager);
+
+	// The hidden registry value is still a diagnostic override, including for a
+	// configuration with no moveto rule.
+	CHECK(choose_native_tree_policy(true, true, false, true) == NativeTreePolicy::LegacyEager);
+}
+
 // ---------------------------------------------------------------------------
 // Real menus, real owner window, real message dispatch.
 // ---------------------------------------------------------------------------
@@ -217,6 +233,122 @@ namespace
 		return std::chrono::duration<double, std::milli>(
 			std::chrono::steady_clock::now() - t0).count();
 	}
+
+	constexpr UINT REGRESSION_COMMAND = 0x4242;
+	HMENU regression_root = nullptr;
+	HMENU regression_child = nullptr;
+	int regression_root_initialised = 0;
+	int regression_child_initialised = 0;
+	LPARAM regression_child_lparam = 0;
+
+	LRESULT CALLBACK RegressionOwnerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+	{
+		if(msg == WM_INITMENUPOPUP)
+		{
+			auto menu = reinterpret_cast<HMENU>(wp);
+			if(menu == regression_root)
+				regression_root_initialised++;
+			else if(menu == regression_child)
+			{
+				regression_child_initialised++;
+				regression_child_lparam = lp;
+				if(::GetMenuItemCount(menu) == 0)
+					::AppendMenuW(menu, MF_STRING, REGRESSION_COMMAND,
+						L"Regression Nested Item");
+			}
+			return 0;
+		}
+		return ::DefWindowProcW(hwnd, msg, wp, lp);
+	}
+
+	struct MoveScenarioResult
+	{
+		bool moved{};
+		int root_notifications{};
+		int child_notifications{};
+		LPARAM child_lparam{};
+	};
+
+	MoveScenarioResult run_nested_move_scenario(HWND owner, NativeTreePolicy policy)
+	{
+		regression_root = ::CreatePopupMenu();
+		regression_child = ::CreatePopupMenu();
+		regression_root_initialised = 0;
+		regression_child_initialised = 0;
+		regression_child_lparam = 0;
+		::AppendMenuW(regression_root, MF_POPUP,
+			reinterpret_cast<UINT_PTR>(regression_child), L"Regression Parent");
+
+		auto notify = [owner](HMENU menu, LPARAM lparam)
+		{
+			::SendMessageW(owner, WM_INITMENUPOPUP,
+				reinterpret_cast<WPARAM>(menu), lparam);
+		};
+
+		NativePopupState root;
+		root.handle = regression_root;
+		initialize_native_popup(root, notify);
+
+		NativePopupState child;
+		child.handle = regression_child;
+		child.parent_position = 0;
+		if(policy == NativeTreePolicy::LegacyEager)
+			initialize_native_popup(child, notify);
+
+		bool moved = false;
+		if(policy == NativeTreePolicy::LegacyEager)
+		{
+			for(int i = 0; i < ::GetMenuItemCount(regression_child); ++i)
+			{
+				if(::GetMenuItemID(regression_child, i) == REGRESSION_COMMAND)
+				{
+					::RemoveMenu(regression_child, static_cast<UINT>(i), MF_BYPOSITION);
+					::AppendMenuW(regression_root, MF_STRING, REGRESSION_COMMAND,
+						L"Regression Nested Item");
+					moved = true;
+					break;
+				}
+			}
+		}
+
+		MoveScenarioResult result{
+			moved, regression_root_initialised, regression_child_initialised,
+			regression_child_lparam
+		};
+		::DestroyMenu(regression_root);
+		regression_root = nullptr;
+		regression_child = nullptr;
+		return result;
+	}
+}
+
+TEST(native_menu_lazy, nested_moveto_requires_eager_discovery_and_then_moves)
+{
+	WNDCLASSW wc{};
+	wc.lpfnWndProc = RegressionOwnerProc;
+	wc.hInstance = ::GetModuleHandleW(nullptr);
+	wc.lpszClassName = L"NssMovetoRegressionOwner";
+	::RegisterClassW(&wc);
+
+	auto owner = ::CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPED,
+		0, 0, 0, 0, HWND_MESSAGE, nullptr, wc.hInstance, nullptr);
+	CHECK(owner != nullptr);
+	if(!owner) return;
+
+	auto lazy = run_nested_move_scenario(owner, NativeTreePolicy::Lazy);
+	CHECK(!lazy.moved);
+	CHECK_EQ(lazy.root_notifications, 1);
+	CHECK_EQ(lazy.child_notifications, 0);
+
+	auto eager = run_nested_move_scenario(owner, NativeTreePolicy::LegacyEager);
+	CHECK(eager.moved);
+	CHECK_EQ(eager.root_notifications, 1);
+	CHECK_EQ(eager.child_notifications, 1);
+	CHECK_EQ(LOWORD(eager.child_lparam), 0);
+	CHECK_EQ(HIWORD(eager.child_lparam), FALSE);
+
+	::DestroyWindow(owner);
+	::UnregisterClassW(wc.lpszClassName, wc.hInstance);
 }
 
 TEST(native_menu_lazy, opening_the_root_does_not_pay_for_unopened_submenus)

@@ -11,8 +11,13 @@
 #include "../dll/src/Include/ShellExt.h"
 
 using Nilesoft::Shell::com_object_count;
+using Nilesoft::Shell::CapturedSelection;
 using Nilesoft::Shell::ShellExtCapture;
 using Nilesoft::Shell::ShellExtFactory;
+
+static_assert(!std::is_copy_constructible_v<CapturedSelection>);
+static_assert(!std::is_copy_assignable_v<CapturedSelection>);
+static_assert(std::is_nothrow_move_constructible_v<CapturedSelection>);
 
 namespace
 {
@@ -155,6 +160,102 @@ namespace
 		HMENU h = ::CreatePopupMenu();
 		~Menu() { if(h) ::DestroyMenu(h); }
 	};
+
+	struct KnownFolderDataObject
+	{
+		Pidl pidl;
+		IShellItem *item = nullptr;
+		IDataObject *data = nullptr;
+
+		explicit KnownFolderDataObject(REFKNOWNFOLDERID id) : pidl(id)
+		{
+			if(pidl && SUCCEEDED(::SHCreateItemFromIDList(pidl.p, IID_PPV_ARGS(&item))))
+				item->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&data));
+		}
+
+		~KnownFolderDataObject()
+		{
+			if(data) data->Release();
+			if(item) item->Release();
+		}
+
+		explicit operator bool() const { return data != nullptr; }
+	};
+
+	// A real, callable IShellItemArray that explicitly opts out of marshaling.
+	// https://learn.microsoft.com/en-us/windows/win32/api/objidl/nn-objidl-inomarshal
+	class NoMarshalShellItemArray final : public IShellItemArray, public INoMarshal
+	{
+		LONG _refs = 1;
+
+	public:
+		IFACEMETHODIMP QueryInterface(REFIID riid, void **ppv) override
+		{
+			if(!ppv) return E_POINTER;
+			*ppv = nullptr;
+			if(riid == IID_IUnknown || riid == IID_IShellItemArray)
+				*ppv = static_cast<IShellItemArray *>(this);
+			else if(riid == __uuidof(INoMarshal))
+				*ppv = static_cast<INoMarshal *>(this);
+			else
+				return E_NOINTERFACE;
+			AddRef();
+			return S_OK;
+		}
+
+		IFACEMETHODIMP_(ULONG) AddRef() override
+		{
+			return static_cast<ULONG>(::InterlockedIncrement(&_refs));
+		}
+
+		IFACEMETHODIMP_(ULONG) Release() override
+		{
+			auto refs = ::InterlockedDecrement(&_refs);
+			if(refs == 0) delete this;
+			return static_cast<ULONG>(refs);
+		}
+
+		IFACEMETHODIMP BindToHandler(IBindCtx *, REFGUID, REFIID, void **) override
+		{
+			return E_NOTIMPL;
+		}
+
+		IFACEMETHODIMP GetPropertyStore(GETPROPERTYSTOREFLAGS, REFIID, void **) override
+		{
+			return E_NOTIMPL;
+		}
+
+		IFACEMETHODIMP GetPropertyDescriptionList(REFPROPERTYKEY, REFIID, void **) override
+		{
+			return E_NOTIMPL;
+		}
+
+		IFACEMETHODIMP GetAttributes(SIATTRIBFLAGS, SFGAOF, SFGAOF *) override
+		{
+			return E_NOTIMPL;
+		}
+
+		IFACEMETHODIMP GetCount(DWORD *count) override
+		{
+			if(!count) return E_POINTER;
+			*count = 1;
+			return S_OK;
+		}
+
+		IFACEMETHODIMP GetItemAt(DWORD, IShellItem **) override { return E_NOTIMPL; }
+		IFACEMETHODIMP EnumItems(IEnumShellItems **) override { return E_NOTIMPL; }
+	};
+}
+
+TEST(shellext, marshal_failure_never_falls_back_to_a_raw_interface_pointer)
+{
+	auto blocked = new NoMarshalShellItemArray();
+	CapturedSelection captured;
+
+	CHECK(!captured.assign(blocked));
+	CHECK(captured.empty());
+	// A raw fallback would still own a reference here.
+	CHECK_EQ(blocked->Release(), ULONG(0));
 }
 
 TEST(shellext, an_empty_capture_is_never_reported_as_a_match)
@@ -415,12 +516,69 @@ TEST(shellext, end_to_end_selected_file_data_object_capture)
 				CHECK(count > 0);
 			}
 
+			// CoGetInterfaceAndReleaseStream is one-shot. The registry entry may
+			// remain until menu teardown, but its item-array portion is consumed.
+			auto second = ShellExtCapture::match(menu.h);
+			CHECK(!static_cast<bool>(second.items));
+
 			dto->Release();
 		}
 		item->Release();
 	}
 
 	ShellExtCapture::clear_all();
+}
+
+TEST(shellext, independent_menus_own_independent_one_shot_streams)
+{
+	ShellExtCapture::clear_all();
+	Menu menu_a, menu_b;
+	KnownFolderDataObject dto(FOLDERID_Desktop);
+	if(!dto) return;
+
+	Handler a, b;
+	if(!a.valid() || !b.valid()) return;
+
+	CHECK(a.init->Initialize(nullptr, dto.data, nullptr) == S_OK);
+	CHECK(b.init->Initialize(nullptr, dto.data, nullptr) == S_OK);
+	a.cm->QueryContextMenu(menu_a.h, 0, 1, 0x7FFF, CMF_NORMAL);
+	b.cm->QueryContextMenu(menu_b.h, 0, 1, 0x7FFF, CMF_NORMAL);
+
+	auto first_a = ShellExtCapture::match(menu_a.h);
+	auto second_a = ShellExtCapture::match(menu_a.h);
+	auto first_b = ShellExtCapture::match(menu_b.h);
+
+	CHECK(static_cast<bool>(first_a.items));
+	CHECK(!static_cast<bool>(second_a.items));
+	CHECK(static_cast<bool>(first_b.items));
+
+	DWORD count_a = 0;
+	DWORD count_b = 0;
+	if(first_a.items)
+		CHECK(SUCCEEDED(first_a.items->GetCount(&count_a)) && count_a > 0);
+	if(first_b.items)
+		CHECK(SUCCEEDED(first_b.items->GetCount(&count_b)) && count_b > 0);
+
+	ShellExtCapture::clear_all();
+}
+
+TEST(shellext, an_expired_unconsumed_stream_is_pruned_safely)
+{
+	ShellExtCapture::clear_all();
+	Menu menu;
+	KnownFolderDataObject dto(FOLDERID_Desktop);
+	if(!dto) return;
+
+	Handler h;
+	if(!h.valid()) return;
+
+	CHECK(h.init->Initialize(nullptr, dto.data, nullptr) == S_OK);
+	h.cm->QueryContextMenu(menu.h, 0, 1, 0x7FFF, CMF_NORMAL);
+	CHECK(ShellExtCapture::has(menu.h));
+
+	ShellExtCapture::expire_for_test(menu.h);
+	CHECK(!ShellExtCapture::has_active_captures());
+	CHECK_EQ(ShellExtCapture::bound_count(), size_t(0));
 }
 
 // Interface pointers must be marshaled when passed between apartments, and the
@@ -439,12 +597,13 @@ TEST(shellext, a_capture_taken_on_one_apartment_is_usable_on_another)
 		bool captured;
 		bool resolved;
 		bool callable;
+		bool second_empty;
 	} shared{ menu.h, ::CreateEventW(nullptr, TRUE, FALSE, nullptr),
-			  ::CreateEventW(nullptr, TRUE, FALSE, nullptr), false, false, false };
+			  ::CreateEventW(nullptr, TRUE, FALSE, nullptr), false, false, false, false };
 
 	// Apartment A takes the capture and, like the host thread it stands in for,
 	// stays alive while the menu is used. An apartment that shuts down takes its
-	// objects with it, agile reference or not.
+	// objects with it, marshaled stream or not.
 	auto producer = [](void *p) -> DWORD
 	{
 		auto *s = static_cast<Shared *>(p);
@@ -479,6 +638,8 @@ TEST(shellext, a_capture_taken_on_one_apartment_is_usable_on_another)
 
 		// A single-threaded apartment has to pump while it waits, or the
 		// cross-apartment call the consumer is about to make never arrives.
+		// CoWaitForMultipleHandles enters COM's modal loop for an STA:
+		// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cowaitformultiplehandles
 		for(;;)
 		{
 			DWORD index = 0;
@@ -507,6 +668,9 @@ TEST(shellext, a_capture_taken_on_one_apartment_is_usable_on_another)
 				DWORD count = 0;
 				s->callable = SUCCEEDED(matched.items->GetCount(&count)) && count > 0;
 			}
+
+			auto second = ShellExtCapture::match(s->menu);
+			s->second_empty = !static_cast<bool>(second.items);
 		}
 
 		::CoUninitialize();
@@ -527,6 +691,7 @@ TEST(shellext, a_capture_taken_on_one_apartment_is_usable_on_another)
 		}
 		CHECK(shared.resolved);
 		CHECK(shared.callable);
+		CHECK(shared.second_empty);
 	}
 
 	::SetEvent(shared.release_evt);

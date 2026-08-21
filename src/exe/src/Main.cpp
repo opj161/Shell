@@ -108,11 +108,12 @@ BOOL EnablePrivilege(const wchar_t *name)
 			tp.PrivilegeCount = 1;
 			tp.Privileges[0].Luid = luid;
 			tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-			result = ::AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr);
+			if(::AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr))
+				result = (::GetLastError() == ERROR_SUCCESS);
 		}
 		::CloseHandle(hToken);
 	}
-	return result == TRUE && (::GetLastError() == ERROR_SUCCESS);
+	return result;
 }
 
 /*
@@ -147,10 +148,19 @@ public:
 	BorrowedKeyAccess() = default;
 	BorrowedKeyAccess(const BorrowedKeyAccess &) = delete;
 	BorrowedKeyAccess &operator=(const BorrowedKeyAccess &) = delete;
-	~BorrowedKeyAccess() { restore(); }
-
-	bool acquire(HKEY root, const wchar_t *subkey, REGSAM reg_view = KEY_WOW64_64KEY)
+	~BorrowedKeyAccess()
 	{
+		// Explicit callers observe the first result. The destructor is only the
+		// final best-effort retry required for every early-return path.
+		if(!restore())
+			restore();
+	}
+
+	bool acquire(HKEY root, const wchar_t *subkey, ACCESS_MASK temporary_rights,
+				 REGSAM reg_view = KEY_WOW64_64KEY)
+	{
+		restore();
+
 		// Taking ownership needs SeTakeOwnership; handing it back to whoever had
 		// it - TrustedInstaller, a SID we are not a member of - needs SeRestore.
 		// Without the second one this could take ownership and never return it,
@@ -159,11 +169,11 @@ public:
 			return false;
 
 		if(ERROR_SUCCESS != ::RegOpenKeyExW(root, subkey, 0,
-											READ_CONTROL | WRITE_OWNER | reg_view, &_key))
+											READ_CONTROL | WRITE_OWNER | reg_view, &_restore_key))
 			return false;
 
 		// Snapshot first. Everything below is undone from this.
-		if(ERROR_SUCCESS != ::GetSecurityInfo(_key, SE_REGISTRY_KEY,
+		if(ERROR_SUCCESS != ::GetSecurityInfo(_restore_key, SE_REGISTRY_KEY,
 											  OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
 											  &_saved_owner, nullptr, &_saved_dacl, nullptr, &_saved))
 			return false;
@@ -174,7 +184,7 @@ public:
 									   DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &admins))
 			return false;
 
-		if(ERROR_SUCCESS != ::SetSecurityInfo(_key, SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION,
+		if(ERROR_SUCCESS != ::SetSecurityInfo(_restore_key, SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION,
 											  admins, nullptr, nullptr, nullptr))
 		{
 			::FreeSid(admins);
@@ -182,18 +192,14 @@ public:
 		}
 		_owner_taken = true;
 
-		// Reopen now that we own it: the handle above was granted WRITE_OWNER
-		// only, and the DACL edit needs WRITE_DAC. Ownership carries READ_CONTROL
-		// and WRITE_DAC implicitly, and WRITE_OWNER is held by privilege, so this
-		// one handle can also put everything back.
-		::RegCloseKey(_key);
-		_key = nullptr;
-
+		// Keep the original WRITE_OWNER handle alive. If the work-handle reopen
+		// fails, it is still the path that can restore the original owner.
 		if(ERROR_SUCCESS != ::RegOpenKeyExW(root, subkey, 0,
-											READ_CONTROL | WRITE_DAC | WRITE_OWNER | KEY_SET_VALUE
-											| KEY_CREATE_SUB_KEY | reg_view, &_key))
+											READ_CONTROL | WRITE_DAC | temporary_rights | reg_view,
+											&_work_key))
 		{
 			::FreeSid(admins);
+			restore();
 			return false;
 		}
 
@@ -201,7 +207,7 @@ public:
 		// nothing.
 		EXPLICIT_ACCESSW ea {};
 		ea.grfAccessMode = GRANT_ACCESS;
-		ea.grfAccessPermissions = KEY_SET_VALUE | KEY_CREATE_SUB_KEY;
+		ea.grfAccessPermissions = temporary_rights;
 		ea.grfInheritance = NO_INHERITANCE;
 		ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
 		ea.Trustee.TrusteeType = TRUSTEE_IS_GROUP;
@@ -211,7 +217,7 @@ public:
 		bool ok = false;
 		if(ERROR_SUCCESS == ::SetEntriesInAclW(1, &ea, _saved_dacl, &widened))
 		{
-			ok = ERROR_SUCCESS == ::SetSecurityInfo(_key, SE_REGISTRY_KEY,
+			ok = ERROR_SUCCESS == ::SetSecurityInfo(_work_key, SE_REGISTRY_KEY,
 													DACL_SECURITY_INFORMATION,
 													nullptr, nullptr, widened, nullptr);
 			_dacl_changed = ok;
@@ -219,112 +225,215 @@ public:
 		}
 
 		::FreeSid(admins);
+		if(!ok)
+			restore();
 		return ok;
 	}
 
 	// Puts the DACL back before the owner: restoring the owner first can cost us
 	// the implicit WRITE_DAC that the DACL restore depends on.
-	void restore()
+	bool restore()
 	{
-		if(_key)
+		bool ok = true;
+		if(_dacl_changed)
 		{
-			if(_dacl_changed)
-			{
-				::SetSecurityInfo(_key, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION,
-								  nullptr, nullptr, _saved_dacl, nullptr);
+			if(_work_key && ERROR_SUCCESS == ::SetSecurityInfo(_work_key, SE_REGISTRY_KEY,
+														 DACL_SECURITY_INFORMATION,
+														 nullptr, nullptr, _saved_dacl, nullptr))
 				_dacl_changed = false;
-			}
-
-			if(_owner_taken && _saved_owner)
-			{
-				::SetSecurityInfo(_key, SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION,
-								  _saved_owner, nullptr, nullptr, nullptr);
-				_owner_taken = false;
-			}
-
-			::RegCloseKey(_key);
-			_key = nullptr;
+			else
+				ok = false;
 		}
 
-		if(_saved)
+		// Do not surrender ownership while the DACL is still widened: ownership
+		// carries the WRITE_DAC needed for a later restoration retry.
+		if(_owner_taken && !_dacl_changed)
 		{
-			::LocalFree(_saved);
-			_saved = nullptr;
-			_saved_owner = nullptr;
-			_saved_dacl = nullptr;
+			if(_restore_key && _saved_owner
+			   && ERROR_SUCCESS == ::SetSecurityInfo(_restore_key, SE_REGISTRY_KEY,
+														  OWNER_SECURITY_INFORMATION,
+														  _saved_owner, nullptr, nullptr, nullptr))
+				_owner_taken = false;
+			else
+				ok = false;
 		}
+
+		if(!_owner_taken && !_dacl_changed)
+		{
+			if(_work_key) { ::RegCloseKey(_work_key); _work_key = nullptr; }
+			if(_restore_key) { ::RegCloseKey(_restore_key); _restore_key = nullptr; }
+			if(_saved)
+			{
+				::LocalFree(_saved);
+				_saved = nullptr;
+				_saved_owner = nullptr;
+				_saved_dacl = nullptr;
+			}
+		}
+		return ok && !_owner_taken && !_dacl_changed;
+	}
+
+	void release_deleted()
+	{
+		// The key has been successfully marked for deletion. Its security
+		// descriptor is no longer persistent state; closing the retained handles
+		// completes deletion.
+		_owner_taken = false;
+		_dacl_changed = false;
+		if(_work_key) { ::RegCloseKey(_work_key); _work_key = nullptr; }
+		if(_restore_key) { ::RegCloseKey(_restore_key); _restore_key = nullptr; }
+		if(_saved) { ::LocalFree(_saved); _saved = nullptr; }
+		_saved_owner = nullptr;
+		_saved_dacl = nullptr;
 	}
 
 private:
-	HKEY _key = nullptr;
+	HKEY _restore_key = nullptr;
+	HKEY _work_key = nullptr;
 	PSECURITY_DESCRIPTOR _saved = nullptr;   // one allocation backing both below
 	PSID _saved_owner = nullptr;
 	PACL _saved_dacl = nullptr;
 	bool _owner_taken = false;
 	bool _dacl_changed = false;
 };
-//RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND
-void disable_modern(bool _register)
+enum class TreatAsState
 {
-	string k;
-	k.format(L"CLSID\\%s", string::ToString(IID_FileExplorerContextMenu, 2).c_str());
-	auto setval = [=](auto reg)->LSTATUS
-	{
-		auto_regkey key{};
-		auto res = ::RegOpenKeyExW(HKEY_CLASSES_ROOT, k, 0, KEY_CREATE_SUB_KEY | KEY_WOW64_64KEY, key);
-		if(res == ERROR_SUCCESS)
-		{
-			auto treatAs = L"TreatAs";
-			if(reg)
-			{
-				auto_regkey subkey;
-				res = key.create_key(treatAs, subkey, KEY_SET_VALUE | KEY_WOW64_64KEY);
-				if(res == ERROR_SUCCESS)
-				{
-					//IID_ExplorerHostCreator
-					string treatas = CLS_ContextMenu;
-					// +1 for the terminator. A REG_SZ written without one is not
-					// something every reader copes with - RegistryKey::ReadString
-					// assumes it is there and hands back the value one character
-					// short, which is why the ownership check in Unregister could
-					// never recognise our own redirect.
-					res = subkey.set_value(nullptr, REG_SZ,
-										   reinterpret_cast<const uint8_t *>(treatas.c_str()),
-										   (treatas.length<int>() + 1) * sizeof(wchar_t));
-				}
-			}
-			else
-			{
-				key.delete_key(treatAs);
-			}
-		}
-		return res;
-	};
+	absent,
+	ours,
+	foreign,
+	inaccessible
+};
 
-	//E_ACCESSDENIED, OLE_E_NOTRUNNING, WS_E_ENDPOINT_ACCESS_DENIED
-	if(setval(_register) == ERROR_ACCESS_DENIED)
+static constexpr wchar_t TreatAsParent[] =
+	L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}";
+static constexpr wchar_t TreatAsKey[] =
+	L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\TreatAs";
+
+static TreatAsState QueryTreatAs(LSTATUS *error = nullptr)
+{
+	auto_regkey key{};
+	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TreatAsKey, 0,
+		KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_WOW64_64KEY, key);
+	if(rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
 	{
-		// Machine registration writes to HKLM explicitly rather than through the
-		// merged HKCR view, which is documented as a compatibility view and can
-		// resolve per-user for the calling context.
-		//
-		//   https://learn.microsoft.com/en-us/windows/win32/sysinfo/hkey-classes-root-key
-		BorrowedKeyAccess borrowed;
-		if(borrowed.acquire(HKEY_LOCAL_MACHINE,
-						   (L"SOFTWARE\\Classes\\" + std::wstring(k.c_str())).c_str()))
-		{
-			setval(_register);
-		}
-		// borrowed restores the owner and DACL here, whether that worked or not.
+		if(error) *error = ERROR_SUCCESS;
+		return TreatAsState::absent;
 	}
-	/*
-	IID treatAs{};
-	auto hres = ::CoGetTreatAsClass(IID_WindowsUIFileExplorer, &treatAs);
-	if(_register && treatAs != IID_ContextMenu)
-		hres = ::CoTreatAsClass(IID_WindowsUIFileExplorer, IID_ContextMenu);
-	else if(S_OK == hres && treatAs == IID_ContextMenu)
-		hres = ::CoTreatAsClass(IID_WindowsUIFileExplorer, GUID_NULL);
-	*/
+	if(rc != ERROR_SUCCESS)
+	{
+		if(error) *error = rc;
+		return TreatAsState::inaccessible;
+	}
+
+	DWORD subkeys = 0;
+	DWORD values = 0;
+	rc = ::RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, &subkeys, nullptr,
+		                     nullptr, &values, nullptr, nullptr, nullptr, nullptr);
+	if(rc != ERROR_SUCCESS)
+	{
+		if(error) *error = rc;
+		return TreatAsState::inaccessible;
+	}
+
+	wchar_t value[64]{};
+	DWORD bytes = sizeof(value);
+	rc = ::RegGetValueW(key, nullptr, nullptr,
+		RRF_RT_REG_SZ | RRF_ZEROONFAILURE, nullptr, value, &bytes);
+	if(rc != ERROR_SUCCESS)
+	{
+		if(error) *error = rc == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : rc;
+		return rc == ERROR_FILE_NOT_FOUND ? TreatAsState::foreign : TreatAsState::inaccessible;
+	}
+
+	if(error) *error = ERROR_SUCCESS;
+	if(subkeys == 0 && values == 1
+	   && ::CompareStringOrdinal(value, -1, CLS_ContextMenu, -1, TRUE) == CSTR_EQUAL)
+		return TreatAsState::ours;
+	return TreatAsState::foreign;
+}
+
+static LSTATUS CreateTreatAsIfAbsent()
+{
+	auto_regkey parent{};
+	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TreatAsParent, 0,
+		KEY_CREATE_SUB_KEY | KEY_WOW64_64KEY, parent);
+	if(rc != ERROR_SUCCESS)
+		return rc;
+
+	HKEY raw = nullptr;
+	DWORD disposition = 0;
+	rc = ::RegCreateKeyExW(parent, L"TreatAs", 0, nullptr, REG_OPTION_NON_VOLATILE,
+		KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_WOW64_64KEY, nullptr, &raw, &disposition);
+	if(rc != ERROR_SUCCESS)
+		return rc;
+	auto_regkey key{ raw };
+
+	if(disposition != REG_CREATED_NEW_KEY)
+		return QueryTreatAs() == TreatAsState::ours ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
+
+	rc = ::RegSetValueExW(key, nullptr, 0, REG_SZ,
+		reinterpret_cast<const BYTE *>(CLS_ContextMenu), sizeof(CLS_ContextMenu));
+	if(rc != ERROR_SUCCESS)
+		::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TreatAsKey, KEY_WOW64_64KEY, 0);
+	return rc;
+}
+
+static LSTATUS RemoveTreatAsIfOurs()
+{
+	LSTATUS error = ERROR_SUCCESS;
+	auto state = QueryTreatAs(&error);
+	if(state == TreatAsState::absent)
+		return ERROR_SUCCESS;
+	if(state == TreatAsState::foreign)
+		return ERROR_ALREADY_EXISTS;
+	if(state == TreatAsState::inaccessible)
+		return error;
+	return ::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TreatAsKey, KEY_WOW64_64KEY, 0);
+}
+
+bool disable_modern(bool register_redirect)
+{
+	auto state = QueryTreatAs();
+	if(register_redirect)
+	{
+		if(state == TreatAsState::ours)
+			return true;
+		if(state != TreatAsState::absent)
+			return false;
+
+		auto rc = CreateTreatAsIfAbsent();
+		if(rc != ERROR_ACCESS_DENIED)
+			return rc == ERROR_SUCCESS;
+
+		BorrowedKeyAccess borrowed;
+		if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TreatAsParent, KEY_CREATE_SUB_KEY))
+			return false;
+
+		rc = CreateTreatAsIfAbsent();
+		return borrowed.restore() && rc == ERROR_SUCCESS;
+	}
+
+	if(state == TreatAsState::absent || state == TreatAsState::foreign)
+		return true;
+	if(state != TreatAsState::ours)
+		return false;
+
+	auto rc = RemoveTreatAsIfOurs();
+	if(rc != ERROR_ACCESS_DENIED)
+		return rc == ERROR_SUCCESS;
+
+	BorrowedKeyAccess borrowed;
+	if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TreatAsKey, DELETE))
+		return false;
+
+	rc = RemoveTreatAsIfOurs();
+	if(rc == ERROR_SUCCESS)
+	{
+		borrowed.release_deleted();
+		return true;
+	}
+	borrowed.restore();
+	return false;
 }
 
 //printf("Please wait shell we'll process your command \n");
@@ -388,7 +497,7 @@ bool Registration(REGOP reg)
 			{
 				//logger->create();
 
-				REGOP regop;
+				REGOP regop{};
 				regop.CONTEXTMENU = regop.ICONOVERLAY = true;
 
 				if(!RegistryConfig::Register(dll_path, regop))
@@ -409,17 +518,22 @@ bool Registration(REGOP reg)
 				if(ver->IsWindows11OrGreater() && reg.TREAT)
 				{
 					//SOFTWARE\\Classes\\CLSID"
-					disable_modern(true);
+					if(!disable_modern(true))
+						_log->warning(L"Windows 11 primary-menu redirect was not changed because it is foreign or inaccessible.");
 				}
 
 				msg = string::Extract(IDS_REGISTER_SUCCESS).move();
 			}
 			else
 			{
-				if(!RegistryConfig::IsRegistered())
-					return false;
-
-				if(!RegistryConfig::Unregister())
+				// Registry deletion APIs report success only when they delete an
+				// existing resource. At the command level, however, an already absent
+				// registration is the requested end state and is therefore success.
+				// https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regdeletetreew
+				if(!unregister_if_present(RegistryConfig::IsRegistered(), []
+					{
+						return RegistryConfig::Unregister();
+					}))
 				{
 					msg = string::Extract(IDS_UNREGISTER_NOT_SUCCESS).move();
 					_log->error(msg);
@@ -433,7 +547,8 @@ bool Registration(REGOP reg)
 
 				// is windows 11 or later
 				if(ver->IsWindows11OrGreater() && reg.TREAT)
-					disable_modern(false);
+					if(!disable_modern(false))
+						_log->warning(L"Windows 11 primary-menu redirect could not be removed safely.");
 
 				msg = string::Extract(IDS_UNREGISTER_SUCCESS).move();
 			}

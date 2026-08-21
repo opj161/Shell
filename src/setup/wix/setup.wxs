@@ -118,6 +118,80 @@
 					<File Id='license.txt' Name='LICENSE' Source='$(var.bin)\license.txt' />
 				</Component>
 				<!--
+					Windows Installer owns Shell's registration so install, repair, rollback,
+					upgrade, and uninstall all operate on the same declared resources. The
+					registry value is the explicit key path; do not let child ordering choose it.
+
+					  .bin/wix-docs/schema/wxs/component.mdx
+					  .bin/wix-docs/schema/wxs/registryvalue.mdx
+					  https://learn.microsoft.com/windows/win32/msi/selfreg-table
+					  https://learn.microsoft.com/windows/win32/msi/registry-table
+				-->
+				<Component Id='REGISTRATION' Guid='$(var.RegistrationComponentGuid)' Bitness='$(var.ComponentBitness)'>
+					<RegistryValue Id='ContextClassName' Root='HKCR'
+						Key='CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}'
+						Type='string' Value='Nilesoft.Shell' KeyPath='yes' />
+					<!--
+						A Registry row cannot use [#shell.dll] across components: ICE69
+						requires a file reference to belong to the row's own component.
+						Use this registry-only component's target directory instead.
+						https://learn.microsoft.com/windows/win32/msi/ice69
+					-->
+					<RegistryValue Id='ContextServer' Root='HKCR'
+						Key='CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}\InprocServer32'
+						Type='string' Value='[$REGISTRATION]shell.dll' />
+					<RegistryValue Id='ContextThreadingModel' Root='HKCR'
+						Key='CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}\InprocServer32'
+						Name='ThreadingModel' Type='string' Value='Apartment' />
+					<RegistryValue Id='ApprovedContextHandler' Root='HKLM'
+						Key='SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved'
+						Name='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' Type='string'
+						Value='&#x20;@nilesoft.shell' />
+
+					<RegistryValue Id='ContextHandlerFiles' Root='HKCR'
+						Key='*\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+					<RegistryValue Id='ContextHandlerDirectory' Root='HKCR'
+						Key='Directory\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+					<RegistryValue Id='ContextHandlerDrive' Root='HKCR'
+						Key='Drive\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+					<RegistryValue Id='ContextHandlerFolder' Root='HKCR'
+						Key='Folder\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+					<RegistryValue Id='ContextHandlerDirectoryBackground' Root='HKCR'
+						Key='Directory\Background\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+					<RegistryValue Id='ContextHandlerDesktopBackground' Root='HKCR'
+						Key='DesktopBackground\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+					<RegistryValue Id='ContextHandlerLibraryFolder' Root='HKCR'
+						Key='LibraryFolder\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+					<RegistryValue Id='ContextHandlerLibraryBackground' Root='HKCR'
+						Key='LibraryFolder\Background\shellex\ContextMenuHandlers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' />
+
+					<RegistryValue Id='OverlayClassName' Root='HKCR'
+						Key='CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF2}'
+						Type='string' Value='Nilesoft.Shell' />
+					<RegistryValue Id='OverlayServer' Root='HKCR'
+						Key='CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF2}\InprocServer32'
+						Type='string' Value='[$REGISTRATION]shell.dll' />
+					<RegistryValue Id='OverlayThreadingModel' Root='HKCR'
+						Key='CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF2}\InprocServer32'
+						Name='ThreadingModel' Type='string' Value='Apartment' />
+					<RegistryValue Id='OverlayIdentifier' Root='HKLM'
+						Key='SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers\&#x20;@nilesoft.shell'
+						Type='string' Value='{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF2}' />
+
+					<RegistryValue Id='NssContentType' Root='HKCR' Key='.nss'
+						Name='Content Type' Type='string' Value='text/plain' />
+					<RegistryValue Id='NssOpenCommand' Root='HKCR' Key='.nss\shell\open\command'
+						Type='string' Value='notepad &quot;%1&quot;' />
+				</Component>
+				<!--
 					shell.nss is the user's own file, and three separate mechanisms keep
 					it that way, in order of how much has to work.
 
@@ -178,9 +252,9 @@
 				<Component Id='CLEANUP' Guid='$(var.CleanupComponentGuid)' KeyPath='yes'>
 					<RemoveFile Id='PurgeLog' Name='shell.log' On='uninstall' Directory='INSTALLFOLDER' />
 					<RemoveFile Id='PurgeStockConfig' Name='shell.nss.stock-new' On='uninstall' Directory='INSTALLFOLDER' />
-					<RemoveFile Id='PurgeDllOld' Name='shell.dll.old*' On='uninstall' Directory='INSTALLFOLDER' />
-					<RemoveFile Id='PurgeExeRotated' Name='shell.exe.old*' On='uninstall' Directory='INSTALLFOLDER' />
-					<RemoveFile Id='PurgeExeOld' Name='shell.old' On='uninstall' Directory='INSTALLFOLDER' />
+					<RemoveFile Id='PurgeDllOld' Name='shell.dll.old*' On='both' Directory='INSTALLFOLDER' />
+					<RemoveFile Id='PurgeExeRotated' Name='shell.exe.old*' On='both' Directory='INSTALLFOLDER' />
+					<RemoveFile Id='PurgeExeOld' Name='shell.old' On='both' Directory='INSTALLFOLDER' />
 					<RemoveFolder Id='PurgeAppFolder' On='uninstall' Directory='INSTALLFOLDER' />
 				</Component>
 				<Component Id='DisplayIcon' Guid='$(var.DisplayIconComponentGuid)'>
@@ -203,6 +277,7 @@
 -->
 		<Feature Id='APPLICATION' Title='$(var.FullName)' Level='1'>
 			<ComponentRef Id='APPLICATION' />
+			<ComponentRef Id='REGISTRATION' />
 			<ComponentRef Id='CONFIG' />
 			<ComponentRef Id='IMPORTS' />
 			<ComponentRef Id='LANG' />
@@ -216,6 +291,7 @@
 		<!-- Upgrade -->
 		<Property Id='NEWPRODUCTFOUND' Secure='yes' />
 		<Property Id='UPGRADEFOUND' Secure='yes' />
+		<Property Id='LEGACYCONFIGUPGRADE' Secure='yes' />
 		
 		<!--
 			NEWPRODUCTFOUND is VersionMinInclusive + OnlyDetect at $(var.Version),
@@ -229,6 +305,9 @@
 		<Upgrade Id='$(var.UpgradeCode)'>
 			<UpgradeVersion Property='NEWPRODUCTFOUND' Minimum='$(var.Version)' OnlyDetect='yes' />
 			<UpgradeVersion Property='UPGRADEFOUND' Minimum='1.0.0' Maximum='$(var.Version)' IncludeMinimum='yes' />
+			<!-- The config bridge is only for packages before CONFIG became permanent. -->
+			<UpgradeVersion Property='LEGACYCONFIGUPGRADE' Minimum='1.0.0' Maximum='1.9.20'
+				IncludeMinimum='yes' IncludeMaximum='no' OnlyDetect='yes' />
 		</Upgrade>
 		
 		<InstallUISequence>
@@ -237,120 +316,74 @@
 		<!-- End Upgrade -->
 		
 		<!--
-			shell.dll is mapped into every process that has ever raised a shell
-			context menu and cannot be overwritten, so it is renamed aside before
-			the new one is written. This runs twice on purpose.
+			Only a pre-1.9.20 upgrade needs config rescue: CONFIG has been permanent
+			since 1.9.20. The checked immediate action snapshots the outgoing file to
+			a CREATE_NEW random path and binds it to a SHA-256 digest. The deferred
+			SYSTEM action accepts bytes only from the same non-reparse handle after
+			recomputing that digest. Rollback restores the new stock file; commit
+			removes the transaction-unique staging files.
 
-			The immediate one runs before RemoveExistingProducts, which is what
-			matters most: with the file already rotated away, removing the old
-			product finds nothing at that path and so never schedules a
-			delete-on-reboot that would later take the newly installed binary with
-			it. But an immediate action runs in the client process, which is not
-			elevated when the package was started that way, and renaming inside
-			Program Files needs elevation.
-
-			The deferred one runs in the installer's own elevated process, before
-			InstallFiles, and catches the case where the first could not. Rotation
-			is a no-op when the path is already free, so running both is harmless.
+			  .bin/wix-docs/schema/wxs/upgradeversion.mdx
+			  .bin/wix-docs/schema/wxs/customaction.mdx
+			  https://learn.microsoft.com/windows/win32/msi/installing-permanent-components-files-fonts-registry-keys
+			  https://learn.microsoft.com/windows/win32/msi/rollback-custom-actions
+			  https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-createfilew
+			  https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex
 		-->
-		<CustomAction Id='OnUpdate' Return='ignore' BinaryRef='CA' DllEntry='Update' />
-		<CustomAction Id='OnUpdateElevatedData' Property='OnUpdateElevated' Value='[INSTALLFOLDER]' />
-		<CustomAction Id='OnUpdateElevated' Execute='deferred' Impersonate='no' Return='ignore'
-					  BinaryRef='CA' DllEntry='Update' />
+		<CustomAction Id='BackupLegacyConfig' Return='check' BinaryRef='CA' DllEntry='BackupLegacyConfig' />
+		<CustomAction Id='RestoreLegacyConfigRollback' Execute='rollback' Impersonate='no'
+			Return='check' HideTarget='yes' BinaryRef='CA' DllEntry='RestoreLegacyConfigRollback' />
+		<CustomAction Id='RestoreLegacyConfig' Execute='deferred' Impersonate='no'
+			Return='check' HideTarget='yes' BinaryRef='CA' DllEntry='RestoreLegacyConfig' />
+		<CustomAction Id='CleanupLegacyConfig' Execute='commit' Impersonate='no'
+			Return='ignore' HideTarget='yes' BinaryRef='CA' DllEntry='CleanupLegacyConfig' />
 		<!--
-			The other half of the config rescue. OnUpdate saved shell.nss before the
-			removal could reach it; this puts it back once the package's own files are
-			on disk. Deferred and non-impersonating, because writing into Program Files
-			needs the installer's elevated context, and a deferred action can read only
-			CustomActionData - hence the type 51 action that hands it the path.
+			The Windows 11 primary-menu redirect is the sole protected registry
+			exception. Preparation is read-only; the checked deferred action and its
+			preceding rollback action receive only the absent/ours/foreign plan via
+			CustomActionData. Both use explicit HKLM and the 64-bit registry view.
 
-			  https://learn.microsoft.com/en-us/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
+			  .bin/wix-docs/schema/wxs/customaction.mdx
+			  https://learn.microsoft.com/windows/win32/com/treatas
+			  https://learn.microsoft.com/windows/win32/sysinfo/merged-view-of-hkey-classes-root
+			  https://learn.microsoft.com/windows/win32/msi/rollback-custom-actions
 		-->
-		<CustomAction Id='OnRestoreConfigData' Property='OnRestoreConfig' Value='[INSTALLFOLDER]' />
-		<CustomAction Id='OnRestoreConfig' Execute='deferred' Impersonate='no' Return='ignore'
-					  BinaryRef='CA' DllEntry='RestoreConfig' />
+		<CustomAction Id='PrepareTreatAs' Return='check' BinaryRef='CA' DllEntry='PrepareTreatAs' />
+		<CustomAction Id='TreatAsRollback' Execute='rollback' Impersonate='no' Return='check'
+					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsRollback' />
+		<CustomAction Id='TreatAsApply' Execute='deferred' Impersonate='no' Return='check'
+					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsApply' />
 		<!--
-			Machine registration.
+			Registration is declarative above. Notify the Shell after the MSI
+			transaction commits; SHCNE_ASSOCCHANGED requires SHCNF_IDLIST and null
+			items. The notification is advisory, so it cannot invalidate a completed
+			install if a recipient misbehaves.
 
-			This was an immediate action with Return='ignore', scheduled after
-			InstallFinalize - which is to say outside the transaction altogether.
-			Nothing it did could be rolled back and whatever it reported was
-			thrown away, so an install whose registration failed outright still
-			finished green. Windows Installer's requirement is that a custom
-			action changing machine state be deferred, and that every such action
-			have a rollback action scheduled before it.
-
-			  https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions
-			  https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions
-
-			Deferred actions can read only CustomActionData, hence the type 51
-			property actions - one per deferred action, since they do not share.
+			  https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shchangenotify
 		-->
-		<CustomAction Id='OnInstallData' Property='OnInstall' Value='[INSTALLFOLDER]' />
-		<CustomAction Id='OnInstall' Execute='deferred' Impersonate='no' Return='check'
-					  BinaryRef='CA' DllEntry='Install' />
-		<CustomAction Id='OnInstallRollbackData' Property='OnInstallRollback' Value='[INSTALLFOLDER]' />
-		<CustomAction Id='OnInstallRollback' Execute='rollback' Impersonate='no' Return='check'
-					  BinaryRef='CA' DllEntry='InstallRollback' />
-		<!--
-			Explorer restart is a session action, not machine state. It stays
-			immediate and impersonated so it runs as the user who started the
-			install: Windows::Explorer::Restart terminates every explorer.exe it
-			can open, and from the deferred action's SYSTEM context that reaches
-			other users' sessions.
-		-->
-		<CustomAction Id='OnRestartExplorer' Return='ignore' BinaryRef='CA' DllEntry='RestartExplorer' />
-		<CustomAction Id='OnUninstallData' Property='OnUninstall' Value='[INSTALLFOLDER]' />
-		<CustomAction Id='OnUninstall' Execute='deferred' Impersonate='no' Return='check'
-					  BinaryRef='CA' DllEntry='Uninstall' />
+		<CustomAction Id='NotifyShellChanged' Return='ignore' BinaryRef='CA' DllEntry='NotifyShellChanged' />
 		
 		<InstallExecuteSequence>
 			<Custom Action='OnDowngrading' After='FindRelatedProducts' Condition='NEWPRODUCTFOUND' />
+			<Custom Action='BackupLegacyConfig' After='CostFinalize'
+				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
+			<Custom Action='PrepareTreatAs' After='InstallValidate'
+					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+			<Custom Action='RestoreLegacyConfigRollback' After='InstallFiles'
+				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
+			<Custom Action='RestoreLegacyConfig' After='RestoreLegacyConfigRollback'
+				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
+			<Custom Action='CleanupLegacyConfig' After='RestoreLegacyConfig'
+				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
+			<Custom Action='TreatAsRollback' After='WriteRegistryValues'
+					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+			<Custom Action='TreatAsApply' After='TreatAsRollback'
+					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+			<Custom Action='NotifyShellChanged' After='InstallFinalize' />
 			<!--
-				REMOVE="ALL" cannot be tested here. The property "may not equal ALL
-				until after the InstallValidate action. This means that any custom
-				action that depends upon REMOVE=ALL must be sequenced after the
-				InstallValidate" - and removing a product by setting its top
-				feature to absent, which is what Programs and Features does, is
-				exactly the case where it is not set this early.
-
-				  https://learn.microsoft.com/en-us/windows/win32/msi/remove
-
-				Moved to Before='RemoveFiles': after InstallValidate (1400) and
-				after InstallInitialize (1500), which a deferred action requires,
-				and still ahead of the removal of the binary it runs.
-			-->
-			<!--
-				After CostFinalize, not after FindRelatedProducts. Directory properties
-				are not resolved until CostFinalize, so an action scheduled earlier reads
-				INSTALLFOLDER as empty whenever no UI sequence set it - a silent install,
-				for one - and the custom action then falls back to locating Shell by its
-				registered CLSID. Observed rotating the shell.dll of an entirely
-				different installation than the one being serviced. CostFinalize is 1000
-				and RemoveExistingProducts is 1401, so this is still ahead of the removal.
-			-->
-			<Custom Action='OnUpdate' After='CostFinalize' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnUpdateElevatedData' Before='OnUpdateElevated' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnUpdateElevated' Before='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnRestoreConfigData' Before='OnRestoreConfig' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnRestoreConfig' After='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<!--
-				Rollback first, then the forward action: a rollback action has to be
-				written into the script before the action it undoes, or there is a
-				window in which the forward action has run and nothing can reverse
-				it. Both are after InstallFiles, because registration needs the
-				binaries on disk, and both are before InstallFinalize, because that
-				is where the script ends.
-			-->
-			<Custom Action='OnInstallRollbackData' Before='OnInstallRollback' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnInstallRollback' After='InstallFiles' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnInstallData' Before='OnInstall' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnInstall' After='OnInstallRollback' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<Custom Action='OnUninstallData' Before='OnUninstall' Condition='(REMOVE="ALL") AND (NOT UPGRADINGPRODUCTCODE)' />
-			<Custom Action='OnUninstall' Before='RemoveFiles' Condition='(REMOVE="ALL") AND (NOT UPGRADINGPRODUCTCODE)' />
-			<Custom Action='OnRestartExplorer' After='InstallFinalize' Condition='(NOT Installed) AND (NOT REMOVE)' />
-			<!--
-				The old product is removed entirely before the new one is installed.
+				The old product is removed entirely before the new one is installed. It
+				now runs immediately after InstallInitialize, before any script-generating
+				action, so failure of the new install rolls the old product removal back.
 
 				This has to move together with the architecture-specific component
 				codes above: with a different code, the old APPLICATION component is
@@ -359,13 +392,10 @@
 				would therefore delete shell.exe and shell.dll from the directory the
 				new product had just written them to.
 
-				Documented as "the installer removes the old applications entirely
-				before installing the new applications"; the note that reused files
-				have to be recopied costs nothing for a package this size.
-
-				  https://learn.microsoft.com/en-us/windows/win32/msi/removeexistingproducts-action
+				  .bin/wix-docs/schema/wxs/majorupgrade.mdx
+				  https://learn.microsoft.com/windows/win32/msi/removeexistingproducts-action
 			-->
-			<RemoveExistingProducts After='InstallValidate' />
+			<RemoveExistingProducts After='InstallInitialize' />
 		</InstallExecuteSequence>
 
 		<?include ui.wxi ?>

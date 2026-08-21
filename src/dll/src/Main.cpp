@@ -1544,7 +1544,7 @@ HRESULT Register(bool reg)
 		if(reg)
 		{
 			//_log.create();
-			REGOP regop;
+			REGOP regop{};
 			regop.REGISTER = regop.CONTEXTMENU = regop.ICONOVERLAY = true;
 
 			if(!RegistryConfig::Register(path, regop))
