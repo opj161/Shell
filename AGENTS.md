@@ -17,6 +17,56 @@ a claim about a contract exactly as much as "this is a bug" is. Not from memory,
 and not from what the surrounding code appears to assume — the surrounding code
 is frequently the thing that is wrong.
 
+### Query Microsoft documentation through Microsoft Learn MCP
+
+For every narrowly defined question about a Microsoft technology in this tree —
+especially Win32, COM, Windows Shell, UI Automation, Windows Installer and MSVC —
+use the Microsoft Learn MCP tools when the client exposes them:
+
+1. Use `microsoft_docs_search` with the exact API, interface, message, property or
+   error name plus the edge condition being investigated. Search results are for
+   discovery; their snippets are not evidence.
+2. Use `microsoft_docs_fetch` on the canonical Learn URL before changing code or
+   reaching a conclusion. Read the full applicable section, including parameter,
+   return-value, remarks, threading, lifetime and version requirements. Fetch each
+   distinct contract on which the conclusion depends.
+3. Use `microsoft_code_sample_search` when an official example would help with
+   usage or integration. A sample illustrates a pattern; it does not override the
+   normative API or conceptual reference.
+
+Tool names can be namespaced by the client, and the server's advertised tools can
+change. Discover the available tools and use the current equivalents rather than
+assuming a tool is absent because its displayed name differs. If Microsoft Learn
+MCP is genuinely unavailable, retrieve the same canonical pages directly from
+`learn.microsoft.com`; say that the MCP route was unavailable, but do not fall
+back to model memory or third-party summaries. For WiX, Detours or any contract
+not covered by Microsoft Learn, use the maintainer's official reference instead.
+
+Microsoft documents the endpoint, tool set and dynamic-discovery requirement here:
+
+- https://learn.microsoft.com/en-us/training/support/mcp-developer-reference
+- https://learn.microsoft.com/en-us/training/support/mcp-best-practices
+
+### Query WiX documentation from the local official mirror
+
+For every WiX-specific question or edit, use the downloaded official WiX
+documentation in `.bin/wix-docs` as the primary WiX reference. Search the mirror
+with `rg` for the exact element, attribute, extension, command, warning or edge
+condition, then read the complete applicable page before changing authoring or
+reaching a conclusion. The schema reference is under `.bin/wix-docs/schema`;
+prefer its exact element page over tutorials or generated API pages when the
+question concerns `.wxs` authoring.
+
+Treat the local mirror as maintainer documentation, not as the Windows Installer
+specification. A WiX page establishes what WiX authoring means and emits; use the
+Microsoft Learn MCP workflow above for the underlying MSI, registry, COM or Win32
+contract. If both layers matter, read and cite both. Use repository-relative deep
+links such as `.bin/wix-docs/schema/wxs/component.mdx` in working notes and reports,
+plus the canonical Microsoft Learn link for the MSI contract. If the mirror lacks
+the needed WiX page, use the WiX maintainer's current official documentation and
+record that the local mirror did not cover it; do not substitute third-party
+summaries or model memory.
+
 This is not ceremony. Every substantive fix in the 1.9.20 latency and hardening
 work came from a documentation page contradicting an assumption in the tree:
 
@@ -26,21 +76,29 @@ work came from a documentation page contradicting an assumption in the tree:
 | The whole native menu tree had to be initialised up front | It is sent "when a drop-down menu or submenu is **about to become active**", i.e. one popup at a time |
 | UI Automation could be called from the taskbar's message handler | A client that inspects its own UI from the UI thread can see "very slow performance, or even cause the application to stop responding"; use a separate MTA thread that owns no windows |
 | An interface pointer could be stored process-wide and used from any thread | "Interface pointers must be marshaled when passed between apartments" |
-| The Global Interface Table was the way to do that | For new code Microsoft recommends `RoGetAgileReference` instead — refcounted, eager-marshaling, no cookie to revoke |
+| The Global Interface Table was required for any cross-apartment handoff | Microsoft recommends `CoMarshalInterThreadInterfaceInStream` when an interface is unmarshaled once; use GIT only when it must be unmarshaled repeatedly |
 | Only the binary component needed an architecture-specific code | A new code is required for *any* change of a resource's target location, and `ProgramFiles6432Folder` resolves differently per architecture — so every component under `INSTALLFOLDER` needed one |
 
-Cite the URL in the commit message and, where the reasoning is not obvious from
-the code, in a comment next to it. A future reader needs to be able to check the
-claim, not take it on faith.
+Cite a canonical deep link to the specific API or topic page and quote the short
+passage on which the conclusion depends. A landing page, search result, MCP search
+snippet, AI summary, code sample or paraphrase from memory is not a contract
+citation. For a conclusion that crosses several APIs, cite every material
+contract, not just the most convenient page.
 
-A citation is a deep link to the specific API or topic page, plus the sentence you
-are relying on, quoted. A landing page, a search result, or a paraphrase from
-memory is not a citation. Every finding you report — including every "reviewed
-clean" — carries a doc URL, a probe, or the explicit word *unverified*. If nothing
-documents the behaviour, say so and cite the probe instead: `NtUserTrackPopupMenu`
-has no page, and what `TrackPopupMenu` puts in `WM_INITMENUPOPUP`'s `lParam` was
-established by measurement, not by reading. If the page and the machine disagree,
-the machine decides what the code does and the divergence goes in a comment.
+Put those citations in every finding you report — including every "reviewed
+clean" — and in the commit message when making a commit. Where the reasoning is
+not obvious from the code, leave the deep link and the relevant invariant in a
+nearby comment. If nothing documents the behaviour, label the conclusion
+*unverified* and cite a reproducible probe instead: `NtUserTrackPopupMenu` has no
+page, and what `TrackPopupMenu` puts in `WM_INITMENUPOPUP`'s `lParam` was
+established by measurement, not by reading.
+
+If documentation and a probe disagree, record the Windows build, architecture,
+toolchain, exact probe and observed result. The probe establishes what that
+machine did; the documentation establishes what the code may portably rely on.
+Do not silently replace a documented contract with an implementation accident.
+If compatibility requires undocumented behaviour, isolate it, explain the
+divergence in a comment and pin the observation with a focused test.
 
 Check both directions. *Code → documentation*: take the API call in front of you
 and read what it promises. *Documentation → code*: take a documented edge
@@ -52,13 +110,14 @@ until you know what the API returns in the empty case.
 
 ### The plan is not the specification either
 
-Implementation plans in this repo are starting points. Two of their proposals
-were superseded by the documentation once it was actually read — the GIT (use an
-agile reference) and the scope of the MSI component change (wider than proposed).
-One proposal — never blocking the taskbar thread on the UIA worker — would have
-broken the first right-click of every sequence; the documentation supplied the
-correct primitive (`CoWaitForMultipleHandles`, which enters the COM modal loop on
-a single-threaded apartment) instead.
+Implementation plans in this repo are starting points. Proposals have repeatedly
+been superseded once the documentation and runtime ownership were checked: a GIT
+or agile reference became one-shot stream marshaling after the single-consumer
+invariant was proved, and the MSI component-identity change was wider than first
+proposed. One proposal — never blocking the taskbar thread on the UIA worker —
+would have broken the first right-click of every sequence; the documentation
+supplied the correct primitive (`CoWaitForMultipleHandles`, which enters the COM
+modal loop on a single-threaded apartment) instead.
 
 Assess each item on its merits. Implementing something because a document listed
 it, when measurement says it does not matter, is as much a mistake as skipping
@@ -72,7 +131,7 @@ happens. Both, in that order.
 Small throwaway probes are cheap and have repeatedly changed the design. Build
 them in the scratchpad, not the tree:
 
-```bash
+```powershell
 cl /nologo /std:c++20 /EHsc /O2 /I <repo>\src\dll\src /Fe:probe.exe probe.cpp <libs>
 ```
 
@@ -95,9 +154,9 @@ mock: `test_native_menu_lazy` drives a real owner window whose child popups slee
 60 ms each, and asserts that opening the root pays none of it.
 
 For anything the tests cannot reach — installers especially — inspect the
-artifact instead of assuming. `scripts/` has no MSI tooling; use the
-`WindowsInstaller.Installer` COM object from PowerShell to read the `Component`,
-`RemoveFile` and `InstallExecuteSequence` tables out of a built package.
+artifact instead of assuming. Use the read-only `scripts/msi-query.ps1` wrapper
+around `WindowsInstaller.Installer` to inspect the `Component`, `RemoveFile` and
+`InstallExecuteSequence` tables in a built package.
 
 ## Measure before optimising
 
@@ -196,7 +255,7 @@ and hands back a **15-character string of NULs**: `length()` is 15, `c_str()[0]`
 is `'\0'`, and `empty()` is false. Every length-driven caller downstream is then
 wrong, and nothing crashes to tell you. Guard the zero case before subtracting.
 This shape was in four places at once (`Registry.cpp` ×3, `Environment.h`,
-`Windows.h`, `FuncExpression.cpp`); `grep -rn "release(.*- *1)"` finds them.
+`Windows.h`, `FuncExpression.cpp`); `rg 'release\(.*-\s*1\)'` finds them.
 
 **Windows string APIs that will not terminate for you.** Two separate traps,
 both of which had been live in the tree for years:
@@ -223,10 +282,11 @@ zero-byte file. Neither the compiler nor `/analyze` says a word.
 a statement compiles, does the work, and throws the result away. Two call sites
 read `REG_EXPAND_SZ` values this way and handed the caller the raw `%VARIABLES%`.
 
-**Line endings.** Some committed blobs are CRLF while `.gitattributes` asks for LF
-in the index, so the first edit to such a file shows as a whole-file diff. Say so
-in the commit message and compare with `--ignore-space-at-eol`. Never normalise
-files you are not otherwise changing.
+**Line endings.** `.gitattributes` explicitly checks text files out as CRLF,
+including source, project and Markdown files. Preserve that policy and never
+normalise files you are not otherwise changing. If a historical blob still
+produces a whole-file line-ending diff, compare with `--ignore-space-at-eol` and
+keep the functional diff scoped.
 
 **Namespaces.** `Nilesoft::Diagnostics` and `Nilesoft::Shell::Diagnostics` both
 exist. At global scope in `Main.cpp` an unqualified `Diagnostics` is ambiguous;
