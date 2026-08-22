@@ -49,26 +49,14 @@ namespace Nilesoft
 			{
 			}
 
-			File(const File& file) :
-				Path { file.Path },
-				Handle { file.Handle },
-				m_write { file.m_write }
-			{
-			}
-
 			~File()
 			{
 				this->Close();
 			}
 
-			File &operator =(const File &file)
-			{
-				this->Handle = file.Handle;
-				this->Path = file.Path;
-				this->m_write = file.m_write;
-				this->m_encoding = file.m_encoding;
-				return *this;
-			}
+			// Non-copyable: Handle is an owned FILE*; a copy would close it twice.
+			File(const File&) = delete;
+			File &operator =(const File&) = delete;
 
 			bool Open(const string &path, bool write, Encoding encoding)
 			{

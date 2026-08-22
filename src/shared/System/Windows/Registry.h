@@ -193,7 +193,6 @@ namespace Nilesoft
 		bool m_writable = false;
 		bool m_systemkey = false;
 		bool m_autoclose = false;
-		int m_ref = 0;
 
 		RegistryKey(HKEY hkeybase, bool writable, uint32_t view, bool systemkey, bool autoclose);
 

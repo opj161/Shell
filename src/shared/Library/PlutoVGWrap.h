@@ -206,8 +206,9 @@ namespace Nilesoft
 
 				//return ((uint32_t *)surface->data)[x + (y * w)];
 				
-				// by bytes
-				return *(uint32_t *)((surface->data + (y * surface->stride)) + x);
+				// by pixel: surface->data is byte-addressed; index 32-bit pixels exactly
+				// like set_pixel/luminance do (adding x to data would advance x bytes).
+				return *(reinterpret_cast<const uint32_t*>(surface->data + y * surface->stride) + x);
 			}
 			PlutoVG &shadow(double x, double y, double w, double h, double r = 0,
 							double border = 0, double offset = 8.0, uint32_t color = 0xff000000, uint8_t opacity = 10)
@@ -436,6 +437,7 @@ namespace Nilesoft
 				plutovg_set_opacity(ctx, 1.0);
 				plutovg_set_operator(ctx, plutovg_operator_src);
 				plutovg_paint(ctx);
+				return *this;
 			}
 
 			static plutovg_path_t *path_create() { return plutovg_path_create(); }
@@ -472,25 +474,21 @@ namespace Nilesoft
 
 			Gradient &create_linear(double x1, double y1, double x2, double y2)
 			{
-				this->~Gradient();
+				destroy();
 				_gradient = plutovg_gradient_create_linear(x1, y1, x2, y2);
 				return *this;
 			}
 
 			Gradient &create_radial(double cx, double cy, double cr, double fx, double fy, double fr)
 			{
-				this->~Gradient();
+				destroy();
 				_gradient = plutovg_gradient_create_radial(cx, cy, cr, fx, fy, fr);
 				return *this;
 			}
 
 			~Gradient()
 			{
-				if(_gradient)
-				{
-					plutovg_gradient_destroy(_gradient);
-					_gradient = {};
-				}
+				destroy();
 			}
 
 			operator plutovg_gradient_t *() { return _gradient; }
@@ -508,6 +506,15 @@ namespace Nilesoft
 			}
 
 		private:
+			void destroy()
+			{
+				if(_gradient)
+				{
+					plutovg_gradient_destroy(_gradient);
+					_gradient = {};
+				}
+			}
+
 			plutovg_gradient_t *_gradient{};
 		};
 

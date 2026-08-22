@@ -123,7 +123,9 @@ namespace Nilesoft
 
 			void copy(const WINDOW &src)
 			{
-				::memcpy(this, &src, sizeof(src));
+				// Trivially copyable today; compiler-generated copy keeps this
+				// safe if the type ever grows non-trivial members.
+				*this = src;
 			}
 
 			bool isTaskbar() const
