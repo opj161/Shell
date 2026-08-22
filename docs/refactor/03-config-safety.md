@@ -27,6 +27,49 @@ The only escape is the Shift+Ctrl+right-click reload combo, whose `query(2)` byp
 the gate at `:154-156`. Any poll-based recovery in this plan is therefore **new
 wiring** (§3), not an existing property being preserved.
 
+## 1a. The in-memory snapshot does not cover the failure above (§07 A3)
+
+`Initializer` is **per-process** and `_snapshot` lives only in that process's memory.
+Tracing the two cases separately changes the design:
+
+| Case | What happens today | Does "serve the stale `_snapshot`" help? |
+|---|---|---|
+| Config saved with a typo while Explorer is **already running** | Nothing re-parses. `config_has_changed()` is dead code (§1), so `init()` is not called, `Status.Error` is never set, and menus keep working from the loaded snapshot. | Nothing to fix here |
+| A **new process** raises a context menu, or Explorer restarts | `init()` runs, `parser.Load()` fails, `Status.Error = true`; `query()` refuses (`Initializer.cpp:154-155`) and `DllGetClassObject` returns `CLASS_E_CLASSNOTAVAILABLE` (`Main.cpp:1455`). **This is the failure.** | **No** — a fresh process has no previous snapshot in memory |
+
+So the fix as originally written applies to the case that is not broken, and misses
+the case that is. §2 below is still worth having, but it is the second half.
+
+## 1b. Persisted last-known-good (the actual fix)
+
+1. **Shadow the config set on every successful parse.** After `init()` publishes a
+   new generation, write the resolved input set — `shell.nss` plus every file in the
+   parser's `_imports` stack, each carrying its real path (`imp->path`, the same
+   field cycle detection uses at `Parser.cpp:1165-1172`) — to
+   `%LocalAppData%\Nilesoft\Shell\lkg\`, content-addressed, with a manifest recording
+   the root path and each import's original location. Write via temp file +
+   `MoveFileEx(MOVEFILE_REPLACE_EXISTING)` so a torn write is never observable
+   (<https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw>).
+2. **Fall back to it on a failed parse at startup.** `init()` failure re-runs the
+   parse against the shadow manifest and publishes *that* as the active generation,
+   with `Status.Stale = true` and `LastError` carrying the real file's parser
+   message and location.
+3. **Integrity, same rule as §02.1.** The shadow is data this product wrote, read
+   back by processes at potentially higher integrity. It is `.nss` source that gets
+   *parsed*, not code that gets executed, and the parser is the same one that reads
+   user files — so the exposure is the parser's own robustness, not a new class of
+   trust. Still: never fall back to a shadow whose manifest does not verify, and
+   never write the shadow from a process that did not itself parse the real file
+   successfully.
+4. **`shell.exe -check [file]`** — parse and report, publish nothing, exit non-zero
+   on error. The cheapest possible prevention and the thing a user editing `.nss`
+   will actually run. Scope: XS; it is `Parser` plus the new path-taking constructor
+   that already exists for tests (`Parser::Parser(const string&)`).
+
+Acceptance (replaces the old §5 first bullet, which passed for the wrong reason):
+save an invalid config, **restart Explorer**, and menus still work from the shadow
+with a single notification; fix the file and the next parse takes over.
+
 ## 2. Design: three-state model
 
 ```text
@@ -101,6 +144,14 @@ property of the snapshot design.
 ## 5. Acceptance criteria
 
 - [ ] Save invalid config while menus working → menus continue; single notification.
+      (Note: this passes today for the wrong reason — nothing re-parses. The test
+      that matters is the next line.)
+- [ ] Save invalid config, **restart Explorer**, right-click → menus still work, served
+      from the persisted shadow (§1b), `Status.Stale` set, one notification.
+- [ ] `shell.exe -check` on a good file exits 0 and on a bad one prints file, line,
+      column and message, and exits non-zero.
+- [ ] A shadow whose manifest fails verification is refused, and the process falls
+      back to the never-loaded refusal rather than parsing it.
 - [ ] Fix config → new generation active without Explorer restart (watcher); before the
       watcher lands, recovery is the manual Shift+Ctrl+right-click reload — no poll
       fallback is assumed (none exists today, §1).

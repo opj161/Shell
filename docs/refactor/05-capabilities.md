@@ -29,9 +29,19 @@ ProviderHealth g_providers;              // process-lifetime, published atomical
 ```
 
 Degradation ladder (never kill threads — A1§23/A2§28): Healthy → Slow (skip optional
-icon work, reuse cached metadata) → Quarantined (activation refused via existing
-E_NOINTERFACE path; visible, reversible). Thresholds from ring p95s after §06.4
-baseline; defaults conservative (Slow ≥ 50 ms metadata, Quarantine manual-first).
+icon work, reuse cached metadata) → **Deferred** (missed its first-paint deadline;
+omitted from this menu, resolved in the background, present next time — §02.2a) →
+Quarantined (activation refused via existing E_NOINTERFACE path; visible, reversible).
+Thresholds from ring p95s after §06.4 baseline; defaults conservative
+(Slow ≥ 50 ms metadata, Quarantine manual-first).
+
+**Deferred is what makes this feature actionable (§07).** Without §02.2a the
+Reliability Center can only report that an extension is slow, while the user still
+waits for it on every right-click. With it, the report describes something the
+product already did on the user's behalf — "Acrobat 2 ms · ExampleExt 186 ms,
+deferred 4× today" — and quarantine becomes the user confirming a decision rather
+than discovering a problem. Sequence accordingly: telemetry with §02, the deferral
+tier with §02.2a, the UI last.
 
 **UI:** `shell.exe -reliability` window (manager EXE already owns UX; MSI already ships it):
 
@@ -78,7 +88,27 @@ Integration points:
   measure/draw paths, `MenuItem.h` helpers);
 - precedent for reading foreign MSAA layouts already exists (`MenuItem.h:918-924`),
   so the reverse-direction parsing is proven safe under SEH.
-Constraint honored: no virtual functions in the wrapper struct (documented requirement).
+Constraint honored: no virtual functions in the wrapper struct (documented requirement:
+"The MSAAMENUINFO structure cannot be a member in a class that contains virtual
+functions … create an item data structure that contains MSAAMENUINFO as the first
+member", <https://learn.microsoft.com/windows/win32/winauto/exposing-owner-drawn-menu-items>).
+
+Two additions from the §07 audit:
+
+- **Mirrored native items must not be rewrapped.** Shell already *reads* foreign
+  `dwItemData` as `AASHELLMENUITEM` (`MenuItem.h:918-924`), and a mirrored native item
+  may still carry the host's own layout. Only items Shell owns get the
+  `OwnerDrawItemData` wrapper; anything whose `dwItemData` came from the host is
+  passed through untouched. Getting this backwards would corrupt Explorer's own
+  accessibility data, which is worse than the gap being fixed.
+- **Record the documented fallback.** The same guidance offers a second sanctioned
+  route: "Provide an option to replace graphic menus with standard text menus when an
+  accessibility aid is active … If SystemParametersInfo returns TRUE with its uiAction
+  parameter set to SPI_GETSCREENREADER, use standard menus"
+  (<https://learn.microsoft.com/windows/win32/tablet/using-owner-drawn-menus>).
+  That is the escape hatch if MSAAMENUINFO proves insufficient in the Narrator/NVDA
+  pass (§06.5) — not a replacement for it, but the thing to reach for rather than
+  inventing an `IAccessible` tree.
 Tests: hosted test inserting items into a real popup and reading names back via
 `IAccessible`/`AccExplorer`-style lookup is out of scope for CI; instead assert layout
 invariants + `MSAA_MENU_SIG` presence at offset 0. Manual Narrator pass listed in §06

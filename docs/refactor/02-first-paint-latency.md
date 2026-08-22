@@ -41,7 +41,26 @@ Behavior:
 2. **Stale-while-revalidate.** `snapshot()` always returns the last good snapshot;
    expiry queues a refresh (coalesced); results publish atomically. A stale catalog is
    benign: activation failures are skipped and recorded (A2§14).
-3. **Persist across restarts.** `%LocalAppData%\Nilesoft\Shell\cache\catalog.v2`
+3. **Persist across restarts — deferred behind measurement (§07 A7).** Ship steps 1
+   and 2 (in-memory, async warm, atomic `shared_ptr<const>` publish) first, then
+   measure cold start. Warm-on-start already removes the stall; persistence buys only
+   the first second or so after Explorer launch, in exchange for a new on-disk
+   format, multi-writer swap logic, fail-closed parsing, and a new trust boundary.
+   Deciding that trade without a measurement is exactly what this repo's
+   "measure before optimising" rule exists to prevent.
+
+   **Integrity boundary, stated as an invariant rather than a hardening note.**
+   The cache is written under `%LocalAppData%` by a medium-integrity process and
+   would be read by *every* host process that raises a context menu — including any
+   that runs elevated. A file a medium-IL process can write must never steer
+   high-IL COM activation. Invariant: **no field read from the cache may reach an
+   activation path without first being corroborated against the live package
+   repository**; the cache may only ever make lookup *faster*, never make an
+   activation *possible* that a live query would not have authorised. Checksums are
+   integrity, not authenticity. This needs a test that feeds a tampered cache naming
+   an unregistered CLSID and asserts it is never activated.
+
+   Design if and when it ships: `%LocalAppData%\Nilesoft\Shell\cache\catalog.v2`
    containing per-package: full name, version, manifest filetime+size hash, verb
    registrations, CLSIDs. Fresh Explorer starts warm immediately after a header check;
    background refresh corrects drift. Hardening (QA-08): written atomically via
@@ -96,6 +115,56 @@ Never call `GetState(TRUE)` before first paint. Optional later phase: a dedicate
 STA warmer that refreshes pending providers between menus — explicitly *not* in wave 1
 (A1§5 warning about apartment teeth).
 
+## 2a. Provider deadline and deferral (added by the §07 audit — R1a)
+
+Removing the `GetState(TRUE)` retry bounds one call out of five. The rest of
+`fill_menuitem_from_explorer_command` is unbounded and runs on the menu thread for
+every packaged command:
+
+| Call | Site | Why it is unbounded |
+|---|---|---|
+| `CoCreateInstance(…, CLSCTX_INPROC_SERVER \| CLSCTX_LOCAL_SERVER, IID_IExplorerCommand)` | `ExplorerCommand.cpp:186-189` | `CLSCTX_LOCAL_SERVER` may **launch a surrogate process**; third-party in-proc servers do arbitrary work in `DllGetClassObject` |
+| `GetState(selection, FALSE, …)` | `:204` | `FALSE` asks the handler to be quick; it is guidance, not enforcement |
+| `GetTitle`, `GetFlags` | `:206-230` | may hit disk, resources, or the network |
+| `GetIcon` + `icon_from_resource` | `:242-247` | resource extraction and rasterisation |
+
+Windows 11's own menu solves this by populating asynchronously. Shell tracks a real
+`HMENU`, so it has the same option — but the bounded-and-cached form is far smaller
+and lands first:
+
+```text
+for each candidate command:
+    presentation = catalog.presentation(clsid, selection_shape)   // O(1), no COM
+    if(presentation.known)      use it                            // 2nd..Nth menu
+    else if(budget_remaining)   resolve on the worker under a deadline
+                                  hit  → publish into catalog, use it
+                                  miss → omit from THIS menu, keep resolving,
+                                         record ProviderHealth.deferred++
+    else                        omit; queue for background resolution
+```
+
+- **Deadline primitive.** The same one the taskbar path uses and that `AGENTS.md`
+  records as the documented answer: a worker thread that owns no windows, and
+  `CoWaitForMultipleHandles` on the calling STA so the COM modal loop keeps running
+  ("enters the COM modal loop on a single-threaded apartment"). Per-provider budget,
+  plus a whole-menu budget so N slow providers cannot sum past the first-paint target.
+- **Key** `(clsid, selection_shape)` — never the `IExplorerCommand*`, because a
+  catalog refresh rebuilds registrations (`ExplorerCommand.cpp:106-125`) and would
+  dangle a pointer key. Same rule as §2.
+- **Deferral is visible, not silent.** A command omitted for missing its deadline is
+  a `ProviderHealth` event (§05.1) and appears in the Reliability Center as
+  "deferred — appeared late", which is the honest description and the feature's most
+  useful line.
+- **Ordering stays stable.** Cache the resolved presentation against the catalog's
+  registration order, so an item that was deferred once does not jump position when
+  it appears next time.
+
+Acceptance: with a deliberately slow fake provider (sleep 2 s in `GetState`), the
+menu paints within the normal budget, the slow item is absent from the first menu and
+present in the second, and no UI thread ever blocks longer than the per-menu budget.
+Test: extend `test_explorer_command.cpp`'s fake-command pattern with an injected clock
+and a blocking fake.
+
 ## 3. Selection array reuse
 
 Keep current preference order but add an assertion/log when the
@@ -109,28 +178,65 @@ diagnostics event, not silence.
 |---|---|---|
 | All-drive Recycle Bin query | `ContextMenu.cpp:4579` (`SHQueryRecycleBinW(nullptr)` during native enumeration) | trust native item disabled state (as fork-assessment §5.4 already argued); if verification needed, cached async refresh |
 | `fix_ugly_flicker` vblank Sleep | `ContextMenu.cpp:6052`, called `:6211` in WM_NCCALCSIZE | registry-gated diagnostic flag (default ON initially); benchmark ON/OFF on Win10 22H2 + Win11 current; delete or capability-gate per build. Rationale: UI-thread sleep + timer-resolution side effects (A2§11, canonical link in master plan) |
-| `SPI_SETMENUSHOWDELAY` set/restore around menus | set `ContextMenu.cpp:3925`, restore `:4982` with `SPIF_SENDCHANGE` | stop mutating; obey user setting by default; expose explicit opt-in that changes the real user setting transparently (documented), never transient toggling |
+| `SPI_SETMENUSHOWDELAY` set/restore around menus | set `ContextMenu.cpp:3925`, restore `:4977` with `SPIF_SENDCHANGE` | **Amended (§07 A5).** Keep the feature, drop the broadcast: pass `fWinIni = 0`. See below |
 | `SPI_SETSELECTIONFADE` off/on | `ContextMenu.cpp:6556/6558` (fWinIni=0, no broadcast) | lowest risk of the three; still remove with the flicker experiment — same A/B gate |
 | Per-activation expression evaluation | `Main.cpp:685-805` | replaced by compiled policy (§01.9) |
 | Manifest scan on menu thread | §02.1 | replaced by service |
 
+### 4a. `SPI_SETMENUSHOWDELAY`: the defect is the fourth argument, not the feature
+
+The original entry above proposed removing the `showdelay` mutation and offering
+instead an opt-in that changes the user's real system setting permanently. That is
+*more* invasive than what it replaces, and it misreads the code: the mutation is
+already opt-in (it runs only when the config sets `showdelay`,
+`ContextMenu.cpp:3915-3927`) and is already restored on close (`:4975-4980`).
+
+The real cost is `SPIF_SENDCHANGE`. It is defined as `SPIF_SENDWININICHANGE`
+(SDK `WinUser.h:12778-12780`), and `SystemParametersInfo`'s `fWinIni` parameter
+"specifies whether the user profile is to be updated, and if so, whether the
+[WM_SETTINGCHANGE] message is to be broadcast to all top-level windows to notify
+them of the change"
+(<https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow>).
+So every menu open and close broadcasts `WM_SETTINGCHANGE` to **every top-level
+window on the desktop**, running each one's window procedure — twice per
+right-click, from the menu thread.
+
+Fix: pass `fWinIni = 0`, which is transient-only and is exactly what the adjacent
+`SPI_SETSELECTIONFADE` calls already do (`:6551/6553`; those correctly pass the
+BOOL in `pvParam`, per the UI-effects table on the same page). Guarded by a
+deferred rule in `scripts/check-invariants.ps1`.
+
 ## 5. Taskbar: zero-wait, then snapshots
 
-Stage 1 (small diff, immediate): in `TaskbarUiaWorker::query`
-(`Main.cpp:306-357`) replace the bounded wait:
+> **Stage 1 was withdrawn by the §07 audit. Do not reinstate it.**
+>
+> The withdrawn proposal was: on a cache miss, enqueue the request and
+> `return false` immediately rather than waiting. It was described here as a
+> "pure improvement" that "lands behind nothing". It is neither. `return false`
+> means *Windows handles this click* — Shell's menu does not appear — so the
+> acceptance criterion ("added latency ≤ native baseline ±2 ms") is met by not
+> showing the menu at all.
+>
+> This repository has already made and recorded this decision. `AGENTS.md`,
+> under "The plan is not the specification either":
+>
+> > One proposal — never blocking the taskbar thread on the UIA worker — **would
+> > have broken the first right-click of every sequence**; the documentation
+> > supplied the correct primitive (`CoWaitForMultipleHandles`, which enters the
+> > COM modal loop on a single-threaded apartment) instead.
+>
+> That primitive is what `TaskbarUiaWorker::query` uses today
+> (`Main.cpp:333`, 250 ms budget). The proposed prewarm does not rescue it: the
+> suggested trigger, right-button-down on the taskbar (`Main.cpp:1247`), is *the
+> same click*, giving a few milliseconds of head start against a first UIA query
+> the code itself measures at ~28 ms (`Main.cpp:277-282`). Hover prewarm misses
+> keyboard invocation entirely.
+>
+> Keep the bounded wait. Stage 2 below is the actual fix, and it makes Stage 1
+> unnecessary rather than complementary.
 
-```text
-cache hit            → answer now (unchanged)
-miss                 → enqueue request, return false immediately
-                       (Windows handles this click; answer lands in cache)
-```
-
-Prewarm triggers (worker-side): pointer hover over taskbar rects (throttled),
-right-button-down on taskbar (existing WH_MOUSE path already sees it, `Main.cpp:1247`),
-taskbar recreation/WM_DISPLAYCHANGE (invalidation sites exist `:1152-1166`).
-
-Stage 2: replace three `get_Current*` calls (`Main.cpp:486-488`) with a UIA **cached**
-request building plain-data rectangles:
+Stage 2 (the whole of this item): replace three `get_Current*` calls
+(`Main.cpp:486-488`) with a UIA **cached** request building plain-data rectangles:
 
 ```cpp
 struct TaskbarTarget { RECT bounds; enum Kind { Background, Start, Tray, Clock, Button } kind; };
@@ -144,8 +250,12 @@ guidance linked in master plan §2). Merge duplicated taskbar message policy
 XAML bridge child, WndProc swap for legacy tray windows) until coverage proves one
 sufficient.
 
-Acceptance: zero synchronous UIA waits on any UI thread; p99 taskbar right-click added
-latency ≤ native Windows baseline ±2 ms (measured via §02.6 records).
+Acceptance (restated after the §07 audit — the old wording could be satisfied by
+dropping the menu): **the first right-click of a sequence still shows Shell's menu**,
+and with a published layout snapshot the UI thread performs rectangle hit-testing
+only — no COM call, no wait. The bounded `CoWaitForMultipleHandles` path remains as
+the fallback for a cold layout, and the ring records how often it is taken; that
+frequency, not the wait itself, is the number to drive to zero.
 
 ## 6. Diagnostics ring (always-on, zero-cost)
 

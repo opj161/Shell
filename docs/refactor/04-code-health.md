@@ -40,9 +40,33 @@ with the trace harness green.
   `Unicode::From/ToUTF8`; delete four duplicate validators
   (`:760-801,:803-856,:858-880,:882-962`) and defective hand-rolled `Utf16ToUtf8`
   (`:625-649`, sign-broken surrogates).
+
+  **`UTF8::From(const std::string&)` is deleted, not rewritten (§07 §2.2).** It has
+  no callers anywhere in the tree and two defects that make it unusable if it ever
+  gained one: it returns an *empty* string for input that is already UTF-8 (the
+  result is only assigned inside the conversion branch), and its validity test
+  cannot distinguish BOM-prefixed UTF-8 from ANSI — `Encoding::GetType` returns
+  `UTF8BOM`, not `UTF8`, for a BOM, so a BOM'd UTF-8 string would be re-decoded
+  through `CP_ACP`. Rewriting a dead function to use the strict validator preserves
+  the second defect and adds nothing; `Encoding::GetType` is the validator and
+  `Unicode::From`/`UTF8::FromUnicode` are the conversions.
 - String class arm-disarming: fix shallow-copy `assign(const string&)`
   (`string.h:651-653`), bounds-check `operator[]` (`:1931-1935`), constrain template
-  conversion operator (`:1963-1964`) — semantics already pinned by existing suites.
+  conversion operator (`:1963-1964`).
+
+  **"Bounds-check `operator[]`" needs saying precisely (§07 §2.1).** The obvious
+  reading — clamp an out-of-range index to the last character, `m_length - 1` — is
+  wrong, and was implemented that way once. `at()` has always returned `L'\0'` out
+  of range, and the class invites the `while(s[i])` idiom; clamping to the last
+  character turns every such loop into an endless one, and makes `at()` and
+  `operator[]` disagree about the same input. The contract is: **every read at or
+  beyond `m_length` is `L'\0'`, by all three routes.** The non-const overload
+  returns `m_data[i <= m_length ? i : m_length]` — index `m_length` is the
+  terminator `terminate()` always writes — and the const overload simply delegates
+  to `at()`. Pinned by `test_string_index.cpp`, which fails if the clamp comes back.
+
+  Note also that "semantics already pinned by existing suites" was not true: nothing
+  covered indexing or copy assignment before that suite was added.
 - PlutoVGWrap fixes: missing return in `clear()` (:428), byte-vs-pixel indexing (:210),
   explicit-dtor-reuse (:475/482). CommandLine explicit-dtor-reuse (`CommandLine.h:187-188`).
   Make `auto_handle`/`File` non-copyable; remove fake `RegistryKey` refcount
@@ -125,6 +149,40 @@ TargetedDiscovery.
   freed on close. Ship behind perf-flag measurement first (AGENTS.md rule).
 - Lazy large-selection metadata (A2§21): defer until `selection.preparing` shows up in
   ring-buffer p95s; verbs guidance (first item + count) supports the eventual design.
+
+## 9. `CoCreateInstanceHook`: diagnostics and policy share a branch (§07 A8)
+
+Verified defect, not previously in this plan. `CoCreateInstanceHook`
+(`Main.cpp:761-770`):
+
+```cpp
+bool test = Keyboard::IsKeyDown(VK_MENU);
+if(test)
+{
+    Timer t; t.start();
+    hr = _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+    t.stop();
+    _log.write(...);
+    return hr;                    // <-- returns before the statics loop
+}
+
+for(auto si : cache->statics)     // CLSID suppression lives here
+    ...
+```
+
+Holding **Alt** while a context menu opens therefore bypasses the entire CLSID
+blocklist for every activation in that window. The unreachable `if(test && *ppv)`
+inside the suppression loop shows the coupling was never intended. Nothing tells
+the user; a suppressed extension simply reappears.
+
+Fix, folded into the §01.9 policy compile: evaluate the policy first and return
+`E_NOINTERFACE` for a blocked CLSID regardless of modifier state; make the Alt-timing
+path *wrap* the activation it decided to allow rather than replacing the decision.
+The timing probe is a diagnostic and belongs behind the same
+`ComActivationPolicy::may_affect` fast path as everything else.
+
+Test: policy-level unit test (blocked CLSID stays blocked with every modifier
+combination) — the policy object is pure data, so this needs no COM.
 
 ## 8. Acceptance criteria
 

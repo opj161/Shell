@@ -72,8 +72,33 @@ owner receives command notification. Consequences in tree:
 - `selectid` captured during `MN_BUTTONUP` (`ContextMenu.cpp:6538-6539`) is unused
   (call commented out at `:2821`); keyboard activation bypasses that path entirely.
 
-**Design.** Internally always track Shell's composed menu with
-`TPM_RETURNCMD | TPM_NONOTIFY` so exactly one component observes the selection:
+**Design (amended by §07 A4).** Internally track Shell's composed menu with
+**`TPM_RETURNCMD` alone**. `TPM_NONOTIFY` is *not* added by default.
+
+Rationale, from the TrackPopupMenuEx page
+(<https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex>):
+
+- The requirement is only that exactly one component observes the selection.
+  `TPM_RETURNCMD` alone satisfies it: "the return value is the menu-item identifier
+  of the item that the user selected".
+- The page groups both flags as "flags to control discovery of the user selection
+  **without having to set up a parent window** for the menu". Shell always has a
+  parent window — it is the host's. Nothing documents NONOTIFY as *required*
+  alongside RETURNCMD, and nothing enumerates which messages NONOTIFY suppresses
+  ("does not send notification messages", unenumerated) — which is precisely why
+  the original rule needed a probe to discover its own consequences (QA-02).
+- Forcing NONOTIFY destroys the `WM_MENUSELECT` stream that third-party hosts use
+  for status-bar hints, and the original design then proposed *synthesising*
+  `WM_MENUSELECT` to repair that. That is scope created by the default, not by the
+  requirement.
+
+So: add `TPM_RETURNCMD`; leave the host's other notification behaviour alone; and
+let the §06.2 probe answer the one open question — whether a duplicate `WM_COMMAND`
+still reaches the owner when `TPM_RETURNCMD` is set. Only if it does is
+`TPM_NONOTIFY` added, and then per `HostProfile` (§8) rather than globally. This
+makes the probe a confirmation rather than a prerequisite, and shrinks the diff.
+
+The replay table below is unchanged; only the flags Shell adds have changed:
 
 ```text
 track(composed_menu, RETURNCMD|NONOTIFY|alignment-preserving-subset)
@@ -107,8 +132,10 @@ Rules:
 - Preserve alignment/animation/layout flags the host passed (`SM_MENUDROPALIGNMENT`
   handling per TrackPopupMenu remarks); stop force-stripping `TPM_HORIZONTAL`
   unconditionally — make it a `HostProfile` decision (§8).
-- Forcing internal `TPM_NONOTIFY` is a **behavior change to be probed, not a free win**
-  (QA-02). Today's code *strips* NONOTIFY (`Main.cpp:905`), so hosts currently receive
+- ~~Forcing internal `TPM_NONOTIFY`~~ — **superseded by the amendment above (§07 A4):
+  NONOTIFY is no longer added by default.** The analysis below stands as the reason
+  it must not be, and as the specification for the probe that decides whether any
+  host class needs it. Today's code *strips* NONOTIFY (`Main.cpp:905`), so hosts currently receive
   notification traffic during tracking — including `WM_MENUSELECT` highlight updates
   ("Sent to a menu's owner window when the user selects a menu item") carrying original
   wIDs for mirrored natives. The TrackPopupMenuEx page documents only "does not send

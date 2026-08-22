@@ -28,6 +28,18 @@ Two governing rules, quoted because every plan decision derives from them:
   evaluate local NSS expressions, consume existing captures, read immutable service
   snapshots. Never: package enumeration, manifest disk I/O, UIA calls, unbounded
   registry traversal, `GetState(TRUE)` (Audit 1 §16; adopted here as R1).
+
+  **R1a — no unbounded third-party call, of any kind, before first paint**
+  (added by the §07 audit). The original list enumerated Shell's own expensive
+  work and missed the largest cost on the path: *activating* a third-party verb
+  handler. `create_explorer_command` calls
+  `CoCreateInstance(clsid, …, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER, IID_IExplorerCommand)`
+  (`ExplorerCommand.cpp:186-189`) and then `GetState`/`GetTitle`/`GetFlags`/`GetIcon`
+  synchronously, per packaged command. `CLSCTX_LOCAL_SERVER` means a **surrogate
+  process launch** can sit between the right-click and the first pixel, and no
+  budget exists anywhere on that path. Every such call must run under a deadline
+  (§02.2a); a provider that misses it is omitted from *this* menu and its answer
+  cached for the next one.
 - **R2 — One unsupported boundary, made explicit.** Takeover requires exactly one
   private compatibility surface (popup interception). Everything else moves behind
   documented APIs or named, health-checked adapters (Audit 1 §6).
@@ -134,3 +146,17 @@ Invariants enforced by review checklist + trace harness (§06):
 | `04-code-health.md` | P0 defect/dead-code fixes, encoding/string cleanup, seam extraction, targeted moveto, caches/memoization |
 | `05-capabilities.md` | Provider health/Reliability Center, bypass, accessibility, keyboard, columns, favorites, inspector |
 | `06-phases-and-tests.md` | Phase sequencing with acceptance criteria, trace harness spec, regression gates, measurement protocol |
+| `07-plan-audit.md` | Critical audit of this plan and of Phase 0 as implemented. **Amendments from it are folded into 00–06 in place**; 07 is kept as the reasoning and evidence record, including the probes run against this machine |
+
+## 6. Amendments applied from the §07 audit
+
+| # | Change | Where |
+|---|---|---|
+| A1 | R1a: no unbounded third-party call before first paint; provider deadline + deferral | §1 above, §02.2a |
+| A2 | Taskbar "Stage 1 zero-wait" **withdrawn** — it re-proposed a decision `AGENTS.md` records as rejected, and gives the first right-click of every sequence to Windows | §02.5 |
+| A3 | Last-known-good config must be **persisted**; the in-memory version does not cover the failure it was written for (a *new* process parsing a broken file) | §03 |
+| A4 | `TPM_RETURNCMD` alone becomes the default internal tracking flag; `TPM_NONOTIFY` demoted to a probe-driven per-host-class opt-in | §01.3 |
+| A5 | SPI mutation: keep the feature, drop `SPIF_SENDCHANGE` (a desktop-wide `WM_SETTINGCHANGE` broadcast twice per menu) — pass `fWinIni = 0` | §02.4 |
+| A6 | Trace harness becomes **Phase 0 item 1**; it was the linchpin of six other items and was scheduled in no phase | §06 |
+| A7 | Persistent catalog cache deferred behind measurement, and its integrity boundary for elevated hosts stated as an invariant | §02.1 |
+| A8 | `CoCreateInstanceHook`: the CLSID blocklist is bypassed whenever Alt is held; diagnostics and policy must not share a branch | §04.9 |
