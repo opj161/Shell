@@ -80,7 +80,9 @@ namespace Nilesoft
 
 			Expression *Copy() override
 			{
-				return new NumberExpression(Value);
+				// Preserve the node type: this used to return a NumberExpression,
+				// silently converting array literals on copy.
+				return new Array2Expression(Value);
 			}
 
 			Object Eval(Context *context) override;

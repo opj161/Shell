@@ -140,10 +140,10 @@ namespace Nilesoft
 			Expression *Copy() override
 			{
 				auto ternary = new TernaryExpression(Condition->Copy());
-				if(ternary->True)
-					ternary->True = True->Copy();
-				if(ternary->False)
-					ternary->False = False->Copy();
+				// Copy THIS node's branches; testing the fresh object's members
+				// (always null here) silently dropped both branches.
+				ternary->True = True ? True->Copy() : nullptr;
+				ternary->False = False ? False->Copy() : nullptr;
 				return ternary;
 			}
 

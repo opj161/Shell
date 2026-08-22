@@ -18,7 +18,9 @@ namespace Nilesoft
 			{ IDENT_MSG_IDOK, IDOK},
 			{ IDENT_MSG_IDYES, IDYES},
 			{ IDENT_MSG_IDNO, IDNO},
-			{ IDENT_MSG_RIGHT, IDNO},
+			// msg.right is documented as right-justified text (docs/functions/msg.html),
+			// i.e. MB_RIGHT — not the No button's result code.
+			{ IDENT_MSG_RIGHT, MB_RIGHT},
 			{ IDENT_MSG_RTLREADING, MB_RTLREADING},
 			{ IDENT_MSG_SETFOREGROUND, MB_SETFOREGROUND},
 			{ IDENT_MSG_TOPMOST, MB_TOPMOST},

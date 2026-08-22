@@ -176,13 +176,18 @@ namespace Nilesoft
 				auto func = new FuncExpression(Id, Parent);
 				for(auto e : Arguments)
 					func->Arguments.push_back(e->Copy());
-				
+
+				// Array travels with the node itself (same rule as
+				// VariableExpression::Copy), independent of whether a Child exists;
+				// the old code dropped it for childless nodes and dereferenced it
+				// unguarded inside the Child branch.
+				func->Array = Array ? Array->Copy() : nullptr;
+
 				if(Child)
 				{
 					func->Child = (FuncExpression *)Child->Copy();
 					func->Child->ischild = true;
 					func->Child->Parent = func;
-					func->Array = Array->Copy();
 				}
 
 				return func;
