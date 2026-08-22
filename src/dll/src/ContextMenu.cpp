@@ -4570,17 +4570,12 @@ namespace Nilesoft
 
 							item->ui = _cache ? const_cast<MUID*>(_cache->find_muid(item->hash)) : nullptr;
 
-							if(!item->is_menu() && is_root && item->disabled)
-							{
-								if(item->uid() == IDENT_ID_EMPTY_RECYCLE_BIN)
-								{
-									item->disabled = false;
-									SHQUERYRBINFO sqrbi = { sizeof(SHQUERYRBINFO) };
-									DLL::Invoke<HRESULT>(L"shell32.dll", "SHQueryRecycleBinW", nullptr, &sqrbi);
-									if((sqrbi.i64Size + sqrbi.i64NumItems) == 0)
-										item->disabled = true;
-								}
-							}
+							// Trust the native item's own MFS_DISABLED for "Empty Recycle Bin":
+							// Explorer disables the command exactly when the bin is empty. The
+							// removed SHQueryRecycleBinW(nullptr, ...) recomputation enumerated
+							// all drives' bins synchronously on this thread before first paint
+							// (docs/refactor/02-first-paint-latency.md section 4;
+							// learn.microsoft.com/windows/win32/api/shellapi/nf-shellapi-shqueryrecyclebinw).
 
 							if(_settings.modify_items.remove.duplicate)
 							{
