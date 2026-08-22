@@ -62,9 +62,36 @@ namespace Nilesoft
 
 			context.Application->Config = m_path;
 
+			open_root();
+		}
+
+		Parser::Parser(const string &config_path)
+		{
+			context.Application = Initializer::instance ? &Initializer::instance->application : nullptr;
+			context.Cache = nullptr;
+			context.Selections = nullptr;
+
+			m_path = config_path;
+
+			if(m_path.empty() || !Path::IsFileExists(m_path))
+			{
+				_log.warning(L"config file not found.");
+				return;
+			}
+
+			if(context.Application)
+				context.Application->Config = m_path;
+
+			open_root();
+		}
+
+		// Opens m_path as the root lexer. Shared by both constructors so the two
+		// paths cannot drift; only the way m_path is chosen differs.
+		void Parser::open_root()
+		{
 			_imports.emplace_back(new Lexer);
 			l = _imports.front().get();
-			
+
 			if(!l->load_File(m_path.c_str()) || l->length < 5)
 			{
 				if(HasError())
@@ -1146,7 +1173,7 @@ namespace Nilesoft
 			path = Path::Full(path).move();
 
 			auto hash = path.hash();
-			
+
 			if(hash)
 			{
 				for(auto &h : m_imports)
@@ -1158,6 +1185,7 @@ namespace Nilesoft
 						break;
 					}
 				}
+
 				m_imports.push_back(hash);
 			}
 

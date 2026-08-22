@@ -186,7 +186,19 @@ namespace Nilesoft
 
 		public:
 			Parser();
+
+			// Parse a named file instead of resolving the configuration path from
+			// the registry and the portable fallback. The DLL always uses the
+			// default constructor; this exists so tests can drive a real parse of
+			// real files without depending on, or disturbing, machine state.
+			explicit Parser(const string &config_path);
+
 			~Parser();
+
+		private:
+			void			open_root();
+
+		public:
 
 
 			bool			Load();

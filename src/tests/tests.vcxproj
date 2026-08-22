@@ -55,6 +55,13 @@
       <Optimization>MaxSpeed</Optimization>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <!-- Match Shell.vcxproj (line 69) and exe.vcxproj: x86 builds default to
+           __stdcall. It is invisible on x64/ARM64, which have one convention, but
+           on x86 the prebuilt plutosvg-x86.lib is stdcall-decorated
+           (_plutovg_surface_destroy@4) and the DLL translation units linked in
+           below must be compiled the same way the DLL compiles them. Leaving this
+           at the cdecl default links on x64 and fails only on x86. -->
+      <CallingConvention Condition="'$(Platform)'=='Win32'">StdCall</CallingConvention>
 	  <PreprocessorDefinitions>SHELLEXT_CAPTURE_TESTING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- The test sources carry non-ASCII literals on purpose. -->
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -62,7 +69,12 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>shlwapi.lib;ole32.lib;oleaut32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- plutosvg is pulled in by Context.cpp's image path; the rest are the
+           system libraries the expression engine's own translation units use.
+           The prebuilt libraries are named by architecture, not by MSBuild
+           platform, so this uses $(Arch) - $(Platform) is "Win32" where the
+           library is "x86", exactly as Main.cpp's own arch-guarded pragmas have it. -->
+      <AdditionalDependencies>shlwapi.lib;ole32.lib;oleaut32.lib;bcrypt.lib;comctl32.lib;windowscodecs.lib;dwmapi.lib;uxtheme.lib;version.lib;propsys.lib;$(SolutionDir)shared\Library\plutosvg-$(Arch).lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -112,6 +124,36 @@
     <ClCompile Include="test_loadstring.cpp" />
     <ClCompile Include="..\dll\src\Packages.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />
+  </ItemGroup>
+  <!-- The shipping expression engine, linked into the test binary so expression
+       tests exercise the real evaluator instead of a copy of it. The closure is
+       small and was established by linking it standalone: Scope/Context/Expression/
+       Array/Operator/Func plus Selections and MenuPerf, on top of Packages.cpp,
+       Log.cpp and Registry.cpp which the suite already builds.
+       These translation units keep the DLL project's own compile policy (its
+       macros, and Level4 warnings that are not errors there); the test sources
+       themselves stay on /WX. -->
+  <ItemGroup>
+    <ClCompile Include="..\dll\src\Expression\Scope.cpp" />
+    <ClCompile Include="..\dll\src\Expression\Context.cpp" />
+    <ClCompile Include="..\dll\src\Expression\Expression.cpp" />
+    <ClCompile Include="..\dll\src\Expression\ArrayExpression.cpp" />
+    <ClCompile Include="..\dll\src\Expression\OperatorExpression.cpp" />
+    <ClCompile Include="..\dll\src\Expression\FuncExpression.cpp" />
+    <ClCompile Include="..\dll\src\Selections.cpp" />
+    <ClCompile Include="..\dll\src\MenuPerf.cpp" />
+    <ClCompile Include="..\dll\src\Parser\Lexer.cpp" />
+    <ClCompile Include="..\dll\src\Parser\Parser.cpp" />
+    <ClCompile Include="..\dll\src\Parser\Properties.cpp" />
+    <ClCompile Include="..\dll\src\Parser\Verification.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Update="..\dll\src\Expression\*.cpp;..\dll\src\Parser\*.cpp;..\dll\src\Selections.cpp;..\dll\src\MenuPerf.cpp">
+      <!-- IDD_INPUTBOX and friends in shared\Resource.h sit behind _WINDLL, and
+           FuncExpression.cpp's input() implementation needs them. -->
+      <PreprocessorDefinitions>_WINDOWS;_WINDLL;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="tests.rc" />
