@@ -529,7 +529,7 @@ namespace Nilesoft
 					Object arg0 = eval_arg(0).move();
 					Object arg1 = eval_arg(1).move();
 					if(arg0.is_number() && arg1.is_number())
-						_result = (double)arg0 > (double)arg1;
+						_result = (double)arg0 < (double)arg1;
 					else
 						_result = arg0.length() < arg1.length();
 					break;
