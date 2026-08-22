@@ -648,18 +648,7 @@ Note that:
 				}
 			}
 
-			static void Utf16ToUtf8(std::string &dest, const std::wstring &src)
-			{
-				Utf16ToUtf8(dest, src.c_str(), src.length());
-			}
-
-			static std::string Utf16ToUtf8(const std::wstring &src)
-			{
-				std::string dest;
-				Utf16ToUtf8(dest, src.c_str(), src.length());
-				return std::move(dest);
-			}
-
+			// Convert a wide Unicode string to an UTF8 string
 			static std::string Utf16ToUtf8(const wchar_t * const src, const size_t length)
 			{
 				std::string dest;
@@ -726,26 +715,13 @@ Note that:
 				return Unicode::From(utf8, CP_UTF8);
 			}
 
-			static std::string From(const std::string& str)
-			{
-				std::string text;
-				if(!is_utf8((byte*)str.c_str()))
-				{
-					int size = ::MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.length(), nullptr, 0);
-					std::wstring utf16_str(size, '\0');
-
-					::MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.length(), &utf16_str[0], size);
-
-					int utf8_size = ::WideCharToMultiByte(CP_UTF8, 0, utf16_str.c_str(),
-						(int)utf16_str.length(), nullptr, 0, nullptr, nullptr);
-
-					std::string utf8_str(utf8_size, '\0');
-					::WideCharToMultiByte(CP_UTF8, 0, utf16_str.c_str(),
-						(int)utf16_str.length(), &utf8_str[0], utf8_size, 0, 0);
-					text = utf8_str;
-				}
-				return text;
-			}
+			// Deleted: `static std::string From(const std::string&)`. It had no callers
+			// anywhere in the tree and two defects that made it unusable if it ever
+			// gained one: it returned an *empty* string for input that was already
+			// UTF-8 (the result was only assigned inside the conversion branch), and
+			// its validity test could not distinguish BOM-prefixed UTF-8 from ANSI.
+			// Encoding::GetType is the strict validator; Unicode::From/UTF8::FromUnicode
+			// are the conversions.
 
 			static std::string From(std::wstring const& str)
 			{
@@ -757,209 +733,6 @@ Note that:
 				return text;
 			}
 
-			static bool is_utf8(const unsigned char *buf)
-			{
-				if(!buf) return true;
-
-				int num = 0;
-
-				while(*buf != 0x00)
-				{
-					if((*buf & 0x80) == 0x00)
-					{
-						// U+0000 to U+007F 
-						num = 1;
-					}
-					else if((*buf & 0xE0) == 0xC0)
-					{
-						// U+0080 to U+07FF 
-						num = 2;
-					}
-					else if((*buf & 0xF0) == 0xE0)
-					{
-						// U+0800 to U+FFFF 
-						num = 3;
-					}
-					else if((*buf & 0xF8) == 0xF0)
-					{
-						// U+10000 to U+10FFFF 
-						num = 4;
-					}
-					else
-						return false;
-
-					buf += 1;
-					for(int i = 1; i < num; ++i)
-					{
-						if((*buf & 0xC0) != 0x80)
-							return false;
-						buf += 1;
-					}
-				}
-
-				return true;
-			}
-
-			static bool IsValid(const unsigned char *buf)
-			{
-				if(!buf) return true;
-
-				unsigned int cp;
-				int num;
-
-				while(*buf != 0x00)
-				{
-					if((*buf & 0x80) == 0x00)
-					{
-						// U+0000 to U+007F 
-						cp = (*buf & 0x7F);
-						num = 1;
-					}
-					else if((*buf & 0xE0) == 0xC0)
-					{
-						// U+0080 to U+07FF 
-						cp = (*buf & 0x1F);
-						num = 2;
-					}
-					else if((*buf & 0xF0) == 0xE0)
-					{
-						// U+0800 to U+FFFF 
-						cp = (*buf & 0x0F);
-						num = 3;
-					}
-					else if((*buf & 0xF8) == 0xF0)
-					{
-						// U+10000 to U+10FFFF 
-						cp = (*buf & 0x07);
-						num = 4;
-					}
-					else
-						return false;
-
-					buf += 1;
-					for(int i = 1; i < num; ++i)
-					{
-						if((*buf & 0xC0) != 0x80)
-							return false;
-						cp = (cp << 6) | (*buf & 0x3F);
-						buf += 1;
-					}
-
-					if((cp > 0x10FFFF) || ((cp >= 0xD800) && (cp <= 0xDFFF)) ||
-						((cp <= 0x007F) && (num != 1)) ||
-					   ((cp >= 0x0080) && (cp <= 0x07FF) && (num != 2)) ||
-					   ((cp >= 0x0800) && (cp <= 0xFFFF) && (num != 3)) ||
-					   ((cp >= 0x10000) && (cp <= 0x1FFFFF) && (num != 4)))
-						return false;
-				}
-				return true;
-			}
-
-			static bool utf8_check_is_valid(const unsigned char* buf, int length)
-			{
-				int c, i, ix, n, j;
-				for(i = 0, ix = length; i < ix; i++)
-				{
-					c = buf[i];
-					//if (c==0x09 || c==0x0a || c==0x0d || (0x20 <= c && c <= 0x7e) ) n = 0; // is_printable_ascii
-					if(0x00 <= c && c <= 0x7f) n = 0; // 0bbbbbbb
-					else if((c & 0xE0) == 0xC0) n = 1; // 110bbbbb
-					else if(c == 0xed && i < (ix - 1) && (buf[i + 1] & 0xa0) == 0xa0) return false; //U+d800 to U+dfff
-					else if((c & 0xF0) == 0xE0) n = 2; // 1110bbbb
-					else if((c & 0xF8) == 0xF0) n = 3; // 11110bbb
-					//else if (($c & 0xFC) == 0xF8) n=4; // 111110bb //byte 5, unnecessary in 4 byte UTF-8
-					//else if (($c & 0xFE) == 0xFC) n=5; // 1111110b //byte 6, unnecessary in 4 byte UTF-8
-					else return false;
-					for(j = 0; j < n && i < ix; j++)
-					{ // n bytes matching 10bbbbbb follow ?
-						if((++i == ix) || (((unsigned char)buf[i] & 0xC0) != 0x80))
-							return false;
-					}
-				}
-				return true;
-			}
-
-			static bool is__utf8(const char *string)
-			{
-				if(!string)
-					return false;
-
-				const unsigned char * bytes = (const unsigned char *)string;
-				while(*bytes)
-				{
-					if((// ASCII
-					  // use bytes[0] <= 0x7F to allow ASCII control characters
-					   bytes[0] == 0x09 ||
-					   bytes[0] == 0x0A ||
-					   bytes[0] == 0x0D ||
-					   (0x20 <= bytes[0] && bytes[0] <= 0x7E)
-					   )
-					   )
-					{
-						bytes += 1;
-						continue;
-					}
-
-					if((// non-overlong 2-byte
-						(0xC2 <= bytes[0] && bytes[0] <= 0xDF) &&
-					   (0x80 <= bytes[1] && bytes[1] <= 0xBF)
-					   )
-					   )
-					{
-						bytes += 2;
-						continue;
-					}
-
-					if((// excluding overlongs
-					   bytes[0] == 0xE0 &&
-					   (0xA0 <= bytes[1] && bytes[1] <= 0xBF) &&
-					   (0x80 <= bytes[2] && bytes[2] <= 0xBF)
-					   ) ||
-					   (// straight 3-byte
-					   ((0xE1 <= bytes[0] && bytes[0] <= 0xEC) ||
-					   bytes[0] == 0xEE ||
-					   bytes[0] == 0xEF) &&
-					   (0x80 <= bytes[1] && bytes[1] <= 0xBF) &&
-					   (0x80 <= bytes[2] && bytes[2] <= 0xBF)
-					   ) ||
-					   (// excluding surrogates
-					   bytes[0] == 0xED &&
-					   (0x80 <= bytes[1] && bytes[1] <= 0x9F) &&
-					   (0x80 <= bytes[2] && bytes[2] <= 0xBF)
-					   )
-					   )
-					{
-						bytes += 3;
-						continue;
-					}
-
-					if((// planes 1-3
-					   bytes[0] == 0xF0 &&
-					   (0x90 <= bytes[1] && bytes[1] <= 0xBF) &&
-					   (0x80 <= bytes[2] && bytes[2] <= 0xBF) &&
-					   (0x80 <= bytes[3] && bytes[3] <= 0xBF)
-					   ) ||
-					   (// planes 4-15
-					   (0xF1 <= bytes[0] && bytes[0] <= 0xF3) &&
-					   (0x80 <= bytes[1] && bytes[1] <= 0xBF) &&
-					   (0x80 <= bytes[2] && bytes[2] <= 0xBF) &&
-					   (0x80 <= bytes[3] && bytes[3] <= 0xBF)
-					   ) ||
-					   (// plane 16
-					   bytes[0] == 0xF4 &&
-					   (0x80 <= bytes[1] && bytes[1] <= 0x8F) &&
-					   (0x80 <= bytes[2] && bytes[2] <= 0xBF) &&
-					   (0x80 <= bytes[3] && bytes[3] <= 0xBF)
-					   )
-					   )
-					{
-						bytes += 4;
-						continue;
-					}
-					return false;
-				}
-				return true;
-			}
 		};
 
 		class ANSI
