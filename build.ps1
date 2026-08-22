@@ -72,4 +72,16 @@ foreach ($p in $platforms) {
     }
 }
 
+# Source-level invariants: patterns the refactor removed and that must not come
+# back. Cheap, host-independent, and unlike the unit suite it runs on every
+# platform - so a cross-compiled-only build still gets checked.
+$invariants = Join-Path $PSScriptRoot "scripts\check-invariants.ps1"
+if (Test-Path $invariants) {
+    Write-Host "`nChecking source invariants..." -ForegroundColor Green
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $invariants
+    if ($LASTEXITCODE -ne 0) {
+        throw "Source invariant check failed."
+    }
+}
+
 Write-Host "`nAll requested builds and tests completed successfully!" -ForegroundColor Green
