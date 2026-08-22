@@ -295,7 +295,7 @@ namespace Nilesoft
 					{
 						if(item->is_separator())
 						{
-							auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1));
+							auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1)).get();
 							mii->owner = owner;
 							mii->dynamic = true;
 							mii->type = NativeMenuType::Separator;
@@ -339,7 +339,7 @@ namespace Nilesoft
 						{
 							if(_context.Eval(item->moveto, value, true) && !value.trim(L'/').empty())
 							{
-								auto mii = _gc.push();
+								auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>()).get();
 								mii->dynamic = true;
 								mii->owner_dynamic = item;
 								if(mii->parse_parent(value))
@@ -429,7 +429,7 @@ namespace Nilesoft
 
 					if(item->is_separator())
 					{
-						auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1));
+						auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1)).get();
 						mii->type = NativeMenuType::Separator;
 						mii->indexof.val = indexof.move();
 						mii->indexof.pos = indexof_pos;
@@ -477,7 +477,7 @@ namespace Nilesoft
 							}
 						}
 
-						auto mii = _gc.push(new MenuItemInfo(MIIM_STRING | MIIM_ID | MIIM_DATA | MIIM_STATE, 0, ident.get_id()));
+						auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_STRING | MIIM_ID | MIIM_DATA | MIIM_STATE, 0, ident.get_id())).get();
 
 						mii->owner = owner;
 						mii->indexof.val = indexof.move();
@@ -1040,7 +1040,7 @@ namespace Nilesoft
 			for(auto item : *menu->std_items)
 			{
 				_context._this = nullptr;
-				auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0));
+				auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0)).get();
 				prepare_system_item(item, mii, menu);
 				list.push(mii);
 			}
@@ -1057,7 +1057,7 @@ namespace Nilesoft
 			{		
 				if(item->path.equals(menu->path))
 				{
-					auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0));
+					auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0)).get();
 					prepare_system_item(item, mii, menu);
 					list.push(mii);
 				}

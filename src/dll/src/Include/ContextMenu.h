@@ -19,6 +19,7 @@ struct IExplorerCommand;
 struct IShellItemArray;
 #include <Library/PlutoVGWrap.h>
 #include "Include/Tip.h"
+#include <memory>
 #include <stack>
 
 #define MF_ALLSTATE         0x00FF
@@ -723,7 +724,8 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			std::vector<WND *> _level;
 			std::unordered_map<HWND, WND> _map;
-			GC<MenuItemInfo> _gc;
+			// Owns every MenuItemInfo; the vector stores unique_ptr, so pointee addresses stay stable across growth.
+			std::vector<std::unique_ptr<MenuItemInfo>> _gc;
 			bool _uninitialized = false;
 
 			NativeTreePolicy _native_policy = NativeTreePolicy::Lazy;
@@ -758,8 +760,6 @@ plutovg_move_to(pluto, start.x, start.y);
 			LRESULT OnMenuSelect(HMENU hMenu, uint32_t id, uint32_t flags);
 			LRESULT OnDrawItem(DRAWITEMSTRUCT *di);
 			LRESULT OnMeasureItem(MEASUREITEMSTRUCT *mi);
-
-			LRESULT OnDrawItem_D2D(DRAWITEMSTRUCT *di);
 
 			uint32_t invoke(CommandProperty *cmd_prop);
 			bool is_excluded();

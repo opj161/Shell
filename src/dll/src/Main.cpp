@@ -47,8 +47,6 @@ Version Build
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "WindowsCodecs.lib")
-#pragma comment(lib, "d2d1")
-#pragma comment(lib, "dwrite")
 #pragma comment(lib, "Winmm.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -200,7 +198,6 @@ struct RuntimeState
 	WindowsHook taskbar_mouse;
 	IATHook ntuser_popup_hook;
 	std::vector<IATHook> popup_hooks;
-	Detours<decltype(::DllGetClassObject)> dll_get_class_object_hook;
 	Detours<decltype(::CoCreateInstance)> co_create_instance_hook;
 
 	std::unordered_map<HWND, Window> taskbar_windows;
@@ -225,7 +222,6 @@ inline const Windows::Version* Ver() { return &Windows::Version::Instance(); }
 #define _taskbar_mouse (Runtime().taskbar_mouse)
 #define iathook_NtUserTrackPopupMenuEx (Runtime().ntuser_popup_hook)
 #define iathook_TrackPopupMenu (Runtime().popup_hooks)
-#define _DllGetClassObject (Runtime().dll_get_class_object_hook)
 #define _CoCreateInstance (Runtime().co_create_instance_hook)
 
 void BootstrapOnce();
@@ -802,15 +798,6 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 	}
 
 	return _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
-}
-
-STDAPI WINAPI DllGetClassObjectHook(REFCLSID rclsid, _In_ REFIID riid, LPVOID *ppv)
-{
-	auto hr = CLASS_E_CLASSNOTAVAILABLE;
-	if(IID_FileExplorerContextMenu == rclsid/* || rclsid == IID_FileExplorerCommandBar*/)
-		return hr;
-	hr = _DllGetClassObject.invoke(rclsid, riid, ppv);
-	return hr;
 }
 
 #define TPM_SYSMENU	0x0200L

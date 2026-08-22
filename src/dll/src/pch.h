@@ -74,7 +74,6 @@ using Dictionary = std::unordered_map<TKey, TValue>;
 #include <System.h>
 
 using namespace ::Nilesoft;
-using namespace ::Nilesoft::Collections;
 using namespace ::Nilesoft::Text;
 using namespace ::Nilesoft::IO;
 using namespace ::Nilesoft::Drawing;
