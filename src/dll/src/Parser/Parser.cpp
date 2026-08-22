@@ -1176,15 +1176,23 @@ namespace Nilesoft
 
 			if(hash)
 			{
+				// A file already imported anywhere in this parse is skipped, not
+				// re-loaded: diamond imports previously logged "already imported"
+				// here and then fell through to load_File anyway, because `break`
+				// only exits this scan loop.
+				bool already_imported = false;
 				for(auto &h : m_imports)
 				{
 					if(h == hash)
 					{
 						__trace(L"line[%d] column[%d] already imported '%s'",
 										line, col, path.c_str());
+						already_imported = true;
 						break;
 					}
 				}
+				if(already_imported)
+					return 0;
 
 				m_imports.push_back(hash);
 			}

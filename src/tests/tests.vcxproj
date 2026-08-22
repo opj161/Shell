@@ -125,6 +125,7 @@
     <ClCompile Include="..\dll\src\Packages.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />
     <ClCompile Include="test_expression.cpp" />
+    <ClCompile Include="test_parser_imports.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression
        tests exercise the real evaluator instead of a copy of it. The closure is
