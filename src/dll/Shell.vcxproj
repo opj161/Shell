@@ -189,6 +189,7 @@
     <ClInclude Include="src\Include\BitmapCache.h" />
     <ClInclude Include="src\Include\ComActivationPolicy.h" />
     <ClInclude Include="src\Include\ConfigLifecycle.h" />
+    <ClInclude Include="src\Include\PackageCatalogService.h" />
     <ClInclude Include="src\Include\ShellExt.h" />
     <ClInclude Include="src\Include\RegistryConfig.h" />
     <ClInclude Include="src\Include\Theme.h" />
@@ -227,6 +228,7 @@
     <ClCompile Include="src\ShellExt.cpp" />
     <ClCompile Include="src\ContextMenu.cpp" />
     <ClCompile Include="src\ExplorerCommand.cpp" />
+    <ClCompile Include="src\PackageCatalogService.cpp" />
     <ClCompile Include="src\MenuPerf.cpp" />
     <ClCompile Include="src\Packages.cpp" />
     <ClCompile Include="src\Main.cpp" />

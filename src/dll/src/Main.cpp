@@ -3,6 +3,7 @@
 #include "Include/ContextMenu.h"
 #include "Include/ShellExt.h"
 #include "Include/ComActivationPolicy.h"
+#include "Include/PackageCatalogService.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/TaskbarHitCache.h"
 #include "Include/TaskbarOrigin.h"
@@ -1394,6 +1395,15 @@ void BootstrapOnce()
 				{
 					hook();
 				}
+
+				// Start the packaged-verb scan now, on its own thread. It is
+				// registry and manifest I/O - 244 files and ~111 ms cold on the
+				// machine this was measured on - and it used to run on the menu
+				// thread, for whichever right-click happened to find the 30 s
+				// TTL expired. Starting it here overlaps it with the rest of
+				// bootstrap, so by the first menu the answer is usually already
+				// published. See Include/PackageCatalogService.h.
+				PackageCatalogService::instance().warm_async();
 
 				success = true;
 				rt.hooks_installed.store(true, std::memory_order_release);

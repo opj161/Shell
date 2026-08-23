@@ -1,10 +1,9 @@
 #include <pch.h>
 #include "Include/ExplorerCommandCatalog.h"
-#include "Include/Packages.h"
+#include "Include/PackageCatalogService.h"
 #include "Include/ContextMenu.h"
 
 #include <shobjidl.h>
-#include <mutex>
 #include <memory>
 #include <cstdint>
 
@@ -14,115 +13,11 @@ namespace Nilesoft
 	{
 		namespace
 		{
-			constexpr uint64_t CATALOG_TTL_MS = 30000;
-
-			std::wstring read_text_file(const std::wstring &path)
-			{
-				HANDLE file = ::CreateFileW(path.c_str(), GENERIC_READ,
-					FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-					FILE_ATTRIBUTE_NORMAL, nullptr);
-				if(file == INVALID_HANDLE_VALUE)
-					return {};
-
-				LARGE_INTEGER size{};
-				if(!::GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 4 * 1024 * 1024)
-				{
-					::CloseHandle(file);
-					return {};
-				}
-
-				std::vector<char> raw(static_cast<size_t>(size.QuadPart));
-				DWORD read = 0;
-				auto ok = ::ReadFile(file, raw.data(), static_cast<DWORD>(raw.size()), &read, nullptr);
-				::CloseHandle(file);
-				if(!ok || read == 0)
-					return {};
-
-				auto data = reinterpret_cast<const unsigned char *>(raw.data());
-				if(read >= 2 && data[0] == 0xFF && data[1] == 0xFE)
-				{
-					auto chars = (read - 2) / sizeof(wchar_t);
-					return std::wstring(reinterpret_cast<const wchar_t *>(data + 2), chars);
-				}
-
-				int skip = 0;
-				if(read >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF)
-					skip = 3;
-
-				int n = ::MultiByteToWideChar(CP_UTF8, 0, raw.data() + skip,
-					static_cast<int>(read) - skip, nullptr, 0);
-				if(n <= 0)
-					return {};
-				std::wstring wide(static_cast<size_t>(n), L'\0');
-				::MultiByteToWideChar(CP_UTF8, 0, raw.data() + skip,
-					static_cast<int>(read) - skip, wide.data(), n);
-				return wide;
-			}
-
-			void merge_catalog(std::vector<ExplorerCommandRegistration> &dst,
-				const std::vector<ExplorerCommandRegistration> &src)
-			{
-				for(const auto &reg : src)
-				{
-					for(const auto &type : reg.types)
-						explorer_command_xml::merge(dst, reg.clsid, type);
-				}
-			}
-
-			std::vector<ExplorerCommandRegistration> scan_catalog()
-			{
-				std::vector<ExplorerCommandRegistration> out;
-				RegistryPackageSource source;
-				std::vector<std::wstring> names;
-				if(!source.enumerate_full_names(names))
-					return out;
-
-				for(const auto &full : names)
-				{
-					// Documented two-call GetPackagePathByFullName, already wrapped:
-					// https://learn.microsoft.com/en-us/windows/win32/api/appmodel/nf-appmodel-getpackagepathbyfullname
-					auto root = GetInstalledPackagePath(full);
-					if(root.empty())
-						continue;
-					auto manifest = root;
-					if(!manifest.empty() && manifest.back() != L'\\' && manifest.back() != L'/')
-						manifest += L'\\';
-					manifest += L"AppxManifest.xml";
-					auto xml = read_text_file(manifest);
-					if(xml.empty())
-						continue;
-					std::vector<ExplorerCommandRegistration> local;
-					parse_file_explorer_context_menus(xml, local);
-					merge_catalog(out, local);
-				}
-				return out;
-			}
-
-			std::mutex g_catalog_lock;
-			std::vector<ExplorerCommandRegistration> g_catalog;
-			uint64_t g_catalog_tick = 0;
-			bool g_catalog_ready = false;
-
-			std::vector<ExplorerCommandRegistration> catalog_snapshot()
-			{
-				auto now = ::GetTickCount64();
-				{
-					std::lock_guard<std::mutex> lock(g_catalog_lock);
-					if(g_catalog_ready && (now - g_catalog_tick) < CATALOG_TTL_MS)
-						return g_catalog;
-				}
-
-				auto scanned = scan_catalog();
-				std::vector<ExplorerCommandRegistration> copy;
-				{
-					std::lock_guard<std::mutex> lock(g_catalog_lock);
-					g_catalog = scanned;
-					g_catalog_tick = ::GetTickCount64();
-					g_catalog_ready = true;
-					copy = g_catalog;
-				}
-				return copy;
-			}
+			// The scan, its TTL and its cache moved to PackageCatalogService.
+			// It used to live here behind a 30 s TTL that whichever caller found
+			// expired paid for itself, on the menu thread: 244 manifests read
+			// and parsed, measured at 111 ms cold on this machine. See
+			// Include/PackageCatalogService.h.
 
 			string take_cotask_string(LPWSTR p)
 			{
@@ -403,7 +298,14 @@ namespace Nilesoft
 				return;
 
 			auto selection = ensure_selection_array();
-			auto regs = catalog_snapshot();
+
+			// O(1). Queues a refresh if the catalog is past its TTL and serves
+			// the previous one meanwhile; only the very first menu in a process
+			// can wait here, and only for a bounded budget.
+			auto catalog = PackageCatalogService::instance().snapshot_for_menu();
+			if(!catalog)
+				return;
+			const auto &regs = catalog->commands;
 
 			// One composition: skip a packaged verb that the classic HMENU (or
 			// an earlier catalog row) already contributed. GUID_NULL is not an
