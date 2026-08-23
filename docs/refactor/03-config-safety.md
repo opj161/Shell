@@ -63,8 +63,44 @@ the case that is. §2 below is still worth having, but it is the second half.
    successfully.
 4. **`shell.exe -check [file]`** — parse and report, publish nothing, exit non-zero
    on error. The cheapest possible prevention and the thing a user editing `.nss`
-   will actually run. Scope: XS; it is `Parser` plus the new path-taking constructor
-   that already exists for tests (`Parser::Parser(const string&)`).
+   will actually run. ~~Scope: XS; it is `Parser` plus the new path-taking
+   constructor that already exists for tests.~~ **Not XS, and not yet landed:**
+   `shell.exe` is a single `main.cpp` that does not link the parser, and it is a
+   Windows-subsystem binary with no console. It needs an export from `shell.dll`
+   plus `AttachConsole(ATTACH_PARENT_PROCESS)` in the manager. Both are small,
+   but the original estimate was wrong about what stood in the way.
+
+**As implemented (2026-08-24).** Steps 1–3 landed as `src/shared/ConfigShadow.h`
+plus `Parser::LoadedFiles()`, with two departures from the sketch above:
+
+- **A directory mirror, not a content-addressed store.** Relative imports are
+  rooted against the importing file's own directory (`Parser.cpp`, the
+  `if(!rooted) path = Path::Combine(l->location, path)` branch), so preserving
+  the layout makes the shadow parse exactly as the original did — no redirect
+  table, and no parser change beyond recording which files were read. Content
+  addressing would have required the parser to consult a mapping on every
+  import.
+- **FNV-1a, not a cryptographic hash.** The manifest sits in the same directory
+  as the files it names, so anyone able to rewrite a copy can rewrite its digest:
+  a cryptographic hash buys nothing against tampering here, and would mean
+  linking bcrypt into the DLL — a system DLL added to the import table of every
+  process that raises a context menu, which is the cost §04.2 has just removed
+  for d2d1 and dwrite. What is caught is truncation, corruption and a
+  half-replaced set, which is what the guarantee actually needs to be.
+
+One thing the sketch did not anticipate: skipping the write when the manifest is
+unchanged is not sufficient on its own. A matching manifest says the *input* has
+not changed, not that the store is intact — so a shadow whose copies were deleted
+would be skipped over for exactly as long as the user left their configuration
+alone, which is exactly as long as there would be nothing to recover from. The
+skip re-verifies the store before taking it.
+
+Also: `init()` now returns whether it *served*, not whether the real file
+parsed. Returning false after recovering from the shadow cost one menu —
+`query()` passes the result straight back, so only the next attempt would have
+found the snapshot — and the parse error is restored afterwards, because a
+successful shadow parse otherwise reports itself as a healthy load and erases
+the error the user needs to see.
 
 Acceptance (replaces the old §5 first bullet, which passed for the wrong reason):
 save an invalid config, **restart Explorer**, and menus still work from the shadow

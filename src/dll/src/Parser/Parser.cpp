@@ -98,7 +98,10 @@ namespace Nilesoft
 				{
 					error(l->length < 5 ? TokenError::InvalidConfigFile : l->error, m_path.c_str());
 				}
+				return;
 			}
+
+			m_loaded.emplace_back(Path::Full(m_path).c_str());
 		}
 
 		Parser::~Parser() { }
@@ -1220,6 +1223,10 @@ namespace Nilesoft
 			if(hash && lex->load_File(path, ignore_failed))
 			{
 				__trace(L"import '%s'", path.c_str());
+
+				// `path` is already canonicalised by Path::Full above, and the
+				// duplicate-import scan means this runs once per file.
+				m_loaded.emplace_back(path.c_str());
 
 				l = lex;
 				skip();

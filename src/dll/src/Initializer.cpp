@@ -2,6 +2,7 @@
 #include <pch.h>
 #include "Include\Hooker.h"
 #include "Include/ContextMenu.h"
+#include "ConfigShadow.h"
 
 namespace Nilesoft
 {
@@ -61,37 +62,93 @@ namespace Nilesoft
 
 		bool Initializer::init()
 		{
+			std::unique_lock<std::mutex> reload_lock(_reload_mutex);
+
+			if(load_generation(nullptr))
+				return true;
+
+			// Where and why the file the user edits failed. Captured before
+			// anything else runs, because a successful shadow parse clears it.
+			auto failure = LastError;
+
+			Status.Error.store(true, std::memory_order_relaxed);
+
+			// The publish never ran, so whatever generation was already live is
+			// untouched and still correct. That is the difference between
+			// StaleWithError, which keeps serving menus, and a process that has
+			// genuinely never loaded a configuration.
+			auto served = has_snapshot();
+
+			// A process that starts while the file is broken has nothing in
+			// memory to fall back on, and that is the case the in-memory half of
+			// last-known-good cannot cover. Try the shadow of the last set that
+			// parsed cleanly. If that fails too, there is nothing to serve and
+			// query() refuses, which is the old behaviour and the right one.
+			// docs/refactor/03-config-safety.md section 1b
+			if(!served)
+			{
+				auto shadow = ConfigShadow::resolve(ConfigShadow::default_directory());
+				if(!shadow.empty())
+				{
+					string path = shadow.c_str();
+					if(load_generation(&path))
+					{
+						served = true;
+						Logger::Warning(L"configuration failed to parse; serving the last known good copy from '%s'",
+										shadow.c_str());
+					}
+				}
+			}
+
+			// A successful parse - of the shadow - reports itself as a healthy
+			// load, and that is the wrong story to tell here: the file the user
+			// edits is still broken, and the error is what a UI reports and what
+			// `shell.exe` has to be able to show. Put it back.
+			if(served)
+			{
+				LastError = failure;
+				Status.Error.store(true, std::memory_order_relaxed);
+			}
+
+			Status.Stale.store(served, std::memory_order_relaxed);
+
+			// A reload was requested and has now been attempted. Leaving the flag
+			// set would re-parse the broken file for every menu.
+			Status.Refresh.store(false, std::memory_order_relaxed);
+
+			// Served, from an older generation or from the shadow. Returning
+			// false here would cost exactly one menu: query() passes this result
+			// straight back to its caller, and only the *next* attempt would see
+			// the snapshot and serve it.
+			return served;
+		}
+
+		/*
+			One parse into one new generation, published only if it succeeds.
+
+			`config_path` is null for the real configuration and set when
+			re-parsing the last-known-good shadow, which is the one case where
+			the file being read is not the one the user edits - so it is also
+			the one case that must not overwrite the shadow with itself.
+		*/
+		bool Initializer::load_generation(const string *config_path)
+		{
 			try
 			{
-				std::unique_lock<std::mutex> reload_lock(_reload_mutex);
-
 				auto new_cache = std::make_shared<CACHE>();
 				new_cache->generation = ++_generation;
 				new_cache->glyph.name = FontCache::Default;
 
 				load_mui(new_cache.get());
 
-				Parser parser;
-				parser.context.Cache = new_cache.get();
-				parser.context.variables.global = &new_cache->variables.global;
-				parser.context.variables.runtime = &new_cache->variables.runtime;
+				auto parser = config_path ? std::make_unique<Parser>(*config_path)
+										  : std::make_unique<Parser>();
+				parser->context.Cache = new_cache.get();
+				parser->context.variables.global = &new_cache->variables.global;
+				parser->context.variables.runtime = &new_cache->variables.runtime;
 
-				if(!parser.Load())
-				{
-					Status.Error.store(true, std::memory_order_relaxed);
-
-					// The publish above never ran, so whatever generation was
-					// already live is untouched and still correct. Record
-					// whether there is one: that is the difference between
-					// StaleWithError, which keeps serving menus, and a process
-					// that has genuinely never loaded a configuration.
-					Status.Stale.store(has_snapshot(), std::memory_order_relaxed);
-
-					// A reload was requested and has now been attempted. Leaving
-					// the flag set would re-parse the broken file for every menu.
-					Status.Refresh.store(false, std::memory_order_relaxed);
+				if(!parser->Load())
 					return false;
-				}
 
 				for(auto &id : new_cache->muid)
 				{
@@ -120,6 +177,19 @@ namespace Nilesoft
 				Status.Stale.store(false, std::memory_order_relaxed);
 				Status.Refresh.store(false, std::memory_order_relaxed);
 				Status.Disabled.store(false, std::memory_order_relaxed);
+
+				// Shadow the set that just parsed, so a process that starts
+				// after this file is broken still has something to serve. Not
+				// when re-parsing the shadow itself: that would be copying it
+				// over itself, and the paths would be the shadow's own.
+				// save() is a no-op when the manifest would not change, which
+				// is what stops every process on the machine rewriting it.
+				if(!config_path)
+				{
+					const auto &loaded = parser->LoadedFiles();
+					if(!loaded.empty())
+						ConfigShadow::save(ConfigShadow::default_directory(), loaded.front(), loaded);
+				}
 
 				return true;
 			}

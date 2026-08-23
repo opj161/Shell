@@ -39,6 +39,14 @@ namespace Nilesoft
 			bool init();
 			bool uninit();
 
+		private:
+			// One parse into one new generation, published only on success.
+			// Null path means the real configuration; non-null is the
+			// last-known-good shadow. See Initializer.cpp.
+			bool load_generation(const string *config_path);
+
+		public:
+
 			bool config_has_changed();
 
 			// "There is no configuration this process can serve." A failed parse

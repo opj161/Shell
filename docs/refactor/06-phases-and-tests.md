@@ -60,6 +60,46 @@ removal. Gates: full suite x64 (+x86 compile), rg gates green, trace harness (§
 green *before* any behavior-affecting fix lands so every later diff is measured against
 a recorded baseline.
 
+## Status, 2026-08-24
+
+Phase 0 is complete apart from item 0.0. Phases 1–3 have been entered out of
+order, taking the items that are verifiable on this machine first; what is left
+in each is stated below rather than in a separate tracker.
+
+| Landed | Item | Phase |
+|---|---|---|
+| ✅ | `GetState(TRUE)` retry deleted; E_PENDING resolves to a provisional item | 1.2 |
+| ✅ | `PackageCatalogService` in memory — async warm, coalesced stale-while-revalidate, atomic publish | 1.1 |
+| ✅ | `NativeMenuBridge` INIT/UNINIT pairing | 2.2 |
+| ✅ | `CoCreateInstanceHook` policy-before-diagnostics (Alt-held blocklist bypass) | 3 |
+| ✅ | `SPI_SETMENUSHOWDELAY` `fWinIni = 0` | 3 |
+| ✅ | Config StaleWithError — a failed parse serves the live generation | 3 |
+| ✅ | Persisted last-known-good shadow + recovery on a fresh process | 3 |
+| ⬜ | **0.0 trace harness** — still not built; Phase 2.3 and four other items stay blocked on it | 0 |
+| ⬜ | Provider deadline and deferral (§02.2a) — the remaining unbounded work on the menu thread | 1.3 |
+| ⬜ | Diagnostics ring (§02.6) | 1.4 |
+| ⬜ | Cold-start measurement, then the persistence decision for §02.1 step 3 | 1.5 |
+| ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B, TPM normalization | 2 |
+| ⬜ | `shell.exe -check`, circuit breaker, bypass gesture, taskbar Stage 2 | 3 |
+
+Two measurements were taken rather than assumed, and both are recorded where
+the code that depends on them lives:
+
+- The packaged-verb scan, on this machine: 289 packages, 244 manifests read,
+  23 registrations; **111.6 ms cold, 63–68 ms warm**, of which the registry
+  enumeration is 2 ms. That is what one right-click in every thirty seconds
+  used to pay before anything was drawn (`Include/PackageCatalogService.h`).
+- The Recycle Bin premise behind item 0.9, probed rather than assumed (§0.9
+  below).
+
+Every fix above was verified to be *caught* by its test: the defect was
+reintroduced in a copy of the header, the suite rebuilt, and the specific test
+observed to fail while the others kept passing. That pass found two tests that
+passed for the wrong reason (a timestamp comparison that `CopyFileW` makes
+vacuous, and a manifest check that refused for a different reason than the one
+under test) and one that crashed the suite instead of reporting — all three
+fixed rather than left green.
+
 ## Phase 1 — first paint (1–2 weeks)
 
 Re-ordered by §07: the unbounded cost is provider *activation*, not catalog scanning,

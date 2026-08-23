@@ -94,6 +94,7 @@
     <ClInclude Include="..\dll\src\Include\TaskbarOrigin.h" />
 	<ClInclude Include="..\dll\src\Expression\SelectionPathResolver.h" />
 	<ClInclude Include="..\shared\LegacyConfigTransfer.h" />
+	<ClInclude Include="..\shared\ConfigShadow.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
@@ -133,6 +134,7 @@
     <ClCompile Include="test_com_activation_policy.cpp" />
     <ClCompile Include="test_config_lifecycle.cpp" />
     <ClCompile Include="test_package_catalog.cpp" />
+    <ClCompile Include="test_config_shadow.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression
        tests exercise the real evaluator instead of a copy of it. The closure is

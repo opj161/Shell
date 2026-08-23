@@ -27,6 +27,13 @@ namespace Nilesoft
 			std::vector<uint32_t> m_imports;
 			std::vector<std::unique_ptr<Lexer>> _imports;
 
+			// Every file this parse actually opened, root first, in load order.
+			// m_imports holds only hashes and _imports is the live lexer stack,
+			// which is unwound as the parse leaves each file - neither survives
+			// as a list of what was read. The last-known-good shadow needs that
+			// list to mirror the configuration it is shadowing.
+			std::vector<std::wstring> m_loaded;
+
 		private:
 
 			bool peek_char(wchar_t c, bool singleLineComment);
@@ -202,6 +209,11 @@ namespace Nilesoft
 
 
 			bool			Load();
+
+			// Full paths of every file this parse opened, root first. Valid
+			// after Load(); see m_loaded.
+			const std::vector<std::wstring> &LoadedFiles() const { return m_loaded; }
+
 			bool			HasError() const;
 			TokenError		Error() const;
 
