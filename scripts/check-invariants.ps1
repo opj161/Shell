@@ -1,6 +1,10 @@
 # Fails the build when a defect or pattern the refactor removed comes back.
 #
-#   powershell -File scripts\check-invariants.ps1
+#   powershell -NoProfile -File scripts\check-invariants.ps1
+#
+# Keep -NoProfile. build.ps1 passes it; running without it costs whatever the
+# machine's PowerShell profile costs, which on the development box here is
+# about forty seconds and looks exactly like this script being slow.
 #
 # Paths are resolved relative to this script, so it runs from anywhere. It is
 # invoked by build.ps1 after a successful build; run it directly when iterating.
@@ -30,27 +34,39 @@ function Get-Sources
     Get-ChildItem -LiteralPath $full -Recurse -File -Include $Include -ErrorAction SilentlyContinue
 }
 
-# Strips // line comments, /* */ block comments and string literals, so a rule
-# matches code rather than prose about code. Crude but sufficient: it only has
-# to stop a mention inside a comment from reading as a call.
-function Get-CodeLines
+# Returns the file with /* */ and // comments blanked out, so a rule matches
+# code rather than prose about code. Crude but sufficient: it only has to stop
+# a mention inside a comment from reading as a call. String literals are left
+# alone - no rule so far needs that, and doing it properly means tracking
+# escapes and raw strings.
+#
+# Newlines are preserved exactly, so an offset into the result still maps to
+# the right line of the original file.
+#
+# Returned whole rather than split into lines, because a rule has to be able to
+# match a call that is written across several lines. The [^;]* rules are bounded
+# by the statement terminator either way, so matching whole-file does not let
+# them run past the call they are looking at - it only stops them missing one
+# whose arguments were wrapped. Memoized because the rules overlap: four of them
+# scan all of src for *.h and *.cpp.
+$codeCache = @{}
+
+function Get-CodeText
 {
     param([string]$Path)
 
+    if($codeCache.ContainsKey($Path)) { return $codeCache[$Path] }
+
     $text = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
-    if(-not $text) { return @() }
+    if(-not $text) { $codeCache[$Path] = ''; return '' }
 
-    # Block comments first, replaced by newlines so line numbers survive.
     $text = [regex]::Replace($text, '(?s)/\*.*?\*/', {
-        param($m) ($m.Value -replace '[^\r\n]', '')
+        param($m) ($m.Value -replace '[^\r\n]', ' ')
     })
+    $text = [regex]::Replace($text, '//[^\r\n]*', '')
 
-    $lines = $text -split "`n"
-    for($i = 0; $i -lt $lines.Count; $i++)
-    {
-        $line = $lines[$i] -replace '//.*$', ''
-        if($line.Trim()) { [pscustomobject]@{ Number = $i + 1; Text = $line } }
-    }
+    $codeCache[$Path] = $text
+    return $text
 }
 
 $rules = @(
@@ -107,9 +123,26 @@ function Test-Rules
     {
         foreach($file in (Get-Sources -Dir $rule.Dir -Include $rule.Include))
         {
-            foreach($line in (Get-CodeLines -Path $file.FullName))
+            $text = Get-CodeText -Path $file.FullName
+            if(-not $text) { continue }
+
+            # IgnoreCase to match what PowerShell's -match did before this
+            # scanned whole files instead of single lines. Note that matching
+            # the whole text also lets a [^;]* rule span lines, so a call
+            # broken across several lines is caught rather than missed.
+            foreach($match in [regex]::Matches($text, $rule.Regex, 'IgnoreCase'))
             {
-                if($line.Text -notmatch $rule.Regex) { continue }
+                # Line number from the match offset: comment blanking preserves
+                # every newline, so this is the line in the real file.
+                $before = $text.Substring(0, $match.Index)
+                $number = ([regex]::Matches($before, "`n")).Count + 1
+                $lineStart = $before.LastIndexOf("`n") + 1
+                $lineEnd = $text.IndexOf("`n", $match.Index)
+                if($lineEnd -lt 0) { $lineEnd = $text.Length }
+                $line = [pscustomobject]@{
+                    Number = $number
+                    Text = $text.Substring($lineStart, $lineEnd - $lineStart)
+                }
 
                 $count++
                 $relative = $file.FullName.Substring($root.Length + 1)
