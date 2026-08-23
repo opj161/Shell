@@ -79,6 +79,17 @@ namespace Nilesoft
 				if(!parser.Load())
 				{
 					Status.Error.store(true, std::memory_order_relaxed);
+
+					// The publish above never ran, so whatever generation was
+					// already live is untouched and still correct. Record
+					// whether there is one: that is the difference between
+					// StaleWithError, which keeps serving menus, and a process
+					// that has genuinely never loaded a configuration.
+					Status.Stale.store(has_snapshot(), std::memory_order_relaxed);
+
+					// A reload was requested and has now been attempted. Leaving
+					// the flag set would re-parse the broken file for every menu.
+					Status.Refresh.store(false, std::memory_order_relaxed);
 					return false;
 				}
 
@@ -106,6 +117,7 @@ namespace Nilesoft
 				LastError = {};
 				Status.Loaded.store(true, std::memory_order_relaxed);
 				Status.Error.store(false, std::memory_order_relaxed);
+				Status.Stale.store(false, std::memory_order_relaxed);
 				Status.Refresh.store(false, std::memory_order_relaxed);
 				Status.Disabled.store(false, std::memory_order_relaxed);
 
@@ -141,30 +153,28 @@ namespace Nilesoft
 			return true;
 		}
 
-		bool Initializer::query(int ch)
+		bool Initializer::query()
 		{
 			try
 			{
-				if(Status.Disabled.load(std::memory_order_relaxed))
+				switch(decide_config_serve(Status.Disabled.load(std::memory_order_relaxed),
+										   Status.Refresh.load(std::memory_order_relaxed),
+										   Status.Error.load(std::memory_order_relaxed),
+										   has_snapshot()))
 				{
-					uninit();
-					return false;
-				}
+					case ConfigVerdict::Refuse:
+						if(Status.Disabled.load(std::memory_order_relaxed))
+							uninit();
+						return false;
 
-				if(Status.Error.load(std::memory_order_relaxed) && ch < 2)
-					return false;
+					case ConfigVerdict::Reparse:
+						return init();
 
-				if(Status.Refresh.load(std::memory_order_relaxed))
-					return init();
-
-				{
-					std::lock_guard<std::mutex> lock(_snapshot_mutex);
-					if(_snapshot)
+					case ConfigVerdict::Serve:
 						return true;
 				}
 
-				return init();
-
+				return false;
 			}
 			catch(...)
 			{
@@ -210,6 +220,15 @@ namespace Nilesoft
 		{
 			if(Status.Error.load(std::memory_order_relaxed))
 			{
+				// StaleWithError. The newest parse failed, but a generation
+				// published by an earlier one is still in memory, so there is
+				// something to serve and the callers that use this to decide
+				// whether to take the menu over should keep taking it. Refusing
+				// here is what made one typo in shell.nss remove the context
+				// menu from every process on the desktop.
+				if(has_snapshot())
+					return false;
+
 				return detect_changes ? !config_has_changed() : true;
 			}
 			return false;
@@ -851,7 +870,12 @@ namespace Nilesoft
 					Initializer::instance->uninit();
 				else if(Status.Refresh)
 				{
-					Initializer::instance->query(changed);
+					// Status.Refresh is already set, and that is what makes
+					// query() re-parse. It used to also need `changed` to be 2
+					// to get past the error gate, so Ctrl+right-click could not
+					// recover a configuration that had failed to parse and
+					// Shift+Ctrl+right-click was the only way back.
+					Initializer::instance->query();
 					reloaded = true;
 				}
 			}

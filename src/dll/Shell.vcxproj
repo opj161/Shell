@@ -188,6 +188,7 @@
     <ClInclude Include="src\Include\Diagnostics\MenuPerf.h" />
     <ClInclude Include="src\Include\BitmapCache.h" />
     <ClInclude Include="src\Include\ComActivationPolicy.h" />
+    <ClInclude Include="src\Include\ConfigLifecycle.h" />
     <ClInclude Include="src\Include\ShellExt.h" />
     <ClInclude Include="src\Include\RegistryConfig.h" />
     <ClInclude Include="src\Include\Theme.h" />

@@ -1,4 +1,5 @@
 #pragma once
+#include "Include/ConfigLifecycle.h"
 #include "Include/Theme.h"
 #include <mutex>
 #include <memory>
@@ -33,13 +34,24 @@ namespace Nilesoft
 			Initializer() { instance = this; }
 			~Initializer();
 
-			bool query(int ch = 0);
+			bool query();
 			bool init(HINSTANCE hInstance);
 			bool init();
 			bool uninit();
 
 			bool config_has_changed();
+
+			// "There is no configuration this process can serve." A failed parse
+			// alone is not that: init() builds into a fresh CACHE and publishes
+			// only on success, so the previous generation is still live and still
+			// correct. See Include/ConfigLifecycle.h.
 			bool has_error(bool detect_changes = false);
+
+			bool has_snapshot() const
+			{
+				std::lock_guard<std::mutex> lock(_snapshot_mutex);
+				return _snapshot != nullptr;
+			}
 			void load_mui(CACHE *new_cache);
 
 			std::shared_ptr<const CACHE> acquire_snapshot() const
@@ -64,9 +76,16 @@ namespace Nilesoft
 				std::atomic<bool> Refresh{ false };
 				std::atomic<bool> Error{ false };
 
+				// The published generation is older than the file on disk,
+				// because the newest parse of that file failed. Menus keep
+				// working; this is what a UI would report and what tells the
+				// error surface to speak once rather than on every menu.
+				std::atomic<bool> Stale{ false };
+
 				STATUS() = default;
 				STATUS(const STATUS &other)
-					: Loaded(other.Loaded.load()), Disabled(other.Disabled.load()), Refresh(other.Refresh.load()), Error(other.Error.load()) {}
+					: Loaded(other.Loaded.load()), Disabled(other.Disabled.load()), Refresh(other.Refresh.load()),
+					  Error(other.Error.load()), Stale(other.Stale.load()) {}
 				STATUS &operator=(const STATUS &other)
 				{
 					if(this != &other)
@@ -75,6 +94,7 @@ namespace Nilesoft
 						Disabled.store(other.Disabled.load());
 						Refresh.store(other.Refresh.load());
 						Error.store(other.Error.load());
+						Stale.store(other.Stale.load());
 					}
 					return *this;
 				}
