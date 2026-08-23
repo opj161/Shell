@@ -730,6 +730,11 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			NativeTreePolicy _native_policy = NativeTreePolicy::Lazy;
 			HMENU _native_notify = nullptr;
+			HMENU _native_uninit_notify = nullptr;
+
+			// Borrowed popups that have been sent WM_INITMENUPOPUP and are owed
+			// the matching WM_UNINITMENUPOPUP.
+			NativePopupNotifications _native_popups;
 
 			menuitem_t *__system_menu_tree = nullptr;
 			std::unordered_map<uint32_t, menuitem_t *> __map_system_menu;
@@ -787,6 +792,19 @@ plutovg_move_to(pluto, start.x, start.y);
 			{
 				return hMenu && (hMenu == _native_notify || hMenu == _hMenu_original);
 			}
+
+			// The same pass-through, for the outgoing WM_UNINITMENUPOPUP that
+			// pairs with one of those notifications. It needs its own token
+			// rather than sharing the one above: OnUninitMenuPopup destroys the
+			// menu it is handed, and this one belongs to the host.
+			bool is_native_uninit_inflight(HMENU hMenu) const
+			{
+				return hMenu && hMenu == _native_uninit_notify;
+			}
+
+			// Sends the WM_UNINITMENUPOPUP owed to every borrowed popup Shell
+			// told to populate itself. Called once, from Uninitialize().
+			void uninitialize_native_popups();
 
 
 			void backup_native_items(HMENU hMenu, uint32_t id, bool check = false);

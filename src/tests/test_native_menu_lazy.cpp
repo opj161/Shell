@@ -477,3 +477,200 @@ TEST(native_menu_lazy, opening_the_root_does_not_pay_for_unopened_submenus)
 	::DestroyWindow(owner);
 	::UnregisterClassW(L"NssLazyMenuOwner", wc.hInstance);
 }
+
+// ---------------------------------------------------------------------------
+// The other half of the notification: WM_UNINITMENUPOPUP.
+//
+// "If an application receives a WM_INITMENUPOPUP message, it will receive a
+// WM_UNINITMENUPOPUP message."
+// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-uninitmenupopup
+//
+// Shell sent the first and never the second to any borrowed host popup: the
+// close path destroys Shell's own synthetic menu and stops there. A host that
+// allocated state when it was told to populate a popup was never told it could
+// let go of it.
+// ---------------------------------------------------------------------------
+
+TEST(native_menu_uninit, a_popup_is_recorded_once_however_often_it_is_offered)
+{
+	NativePopupNotifications sent;
+
+	CHECK(sent.record_init(fake(0x10)));
+	CHECK_MSG(!sent.record_init(fake(0x10)), "one INIT earns one UNINIT, not two");
+	CHECK_EQ(sent.pending(), size_t(1));
+}
+
+TEST(native_menu_uninit, a_popup_that_was_never_notified_is_owed_nothing)
+{
+	NativePopupNotifications sent;
+
+	CHECK(!sent.record_init(nullptr));
+	CHECK_EQ(sent.pending(), size_t(0));
+	CHECK(!sent.init_sent(fake(0x10)));
+
+	sent.record_init(fake(0x10));
+	CHECK(sent.init_sent(fake(0x10)));
+	CHECK(!sent.init_sent(fake(0x11)));
+}
+
+TEST(native_menu_uninit, popups_are_closed_deepest_first)
+{
+	// The reverse of the order they were opened in, which is the order Windows
+	// closes them in: a parent outlives its child.
+	NativePopupNotifications sent;
+	sent.record_init(fake(0xA));	// root
+	sent.record_init(fake(0xB));	// its submenu
+	sent.record_init(fake(0xC));	// and that one's submenu
+
+	auto owed = sent.take_for_uninit();
+	CHECK_EQ(owed.size(), size_t(3));
+	// CHECK does not abort, so the size has to gate the indexing below or a
+	// regression here takes the whole suite down with an access violation
+	// instead of reporting itself.
+	if(owed.size() != 3)
+		return;
+
+	CHECK(owed[0] == fake(0xC));
+	CHECK(owed[1] == fake(0xB));
+	CHECK(owed[2] == fake(0xA));
+}
+
+TEST(native_menu_uninit, taking_the_list_empties_it)
+{
+	// Uninitialize() can be reached twice - InvokeCommand calls it and so does
+	// the destructor - and the host must not be told twice.
+	NativePopupNotifications sent;
+	sent.record_init(fake(0xA));
+
+	CHECK_EQ(sent.take_for_uninit().size(), size_t(1));
+	CHECK_EQ(sent.pending(), size_t(0));
+	CHECK_EQ(sent.take_for_uninit().size(), size_t(0));
+}
+
+// Real owner window, real message dispatch: every popup the owner was told to
+// populate is told exactly once that it is finished with.
+
+namespace
+{
+	struct PopupTraffic
+	{
+		HMENU menu{};
+		int inits{};
+		int uninits{};
+	};
+
+	std::vector<PopupTraffic> &traffic()
+	{
+		static std::vector<PopupTraffic> v;
+		return v;
+	}
+
+	int bad_hiword = 0;
+
+	PopupTraffic *find_traffic(HMENU h)
+	{
+		for(auto &t : traffic())
+		{
+			if(t.menu == h)
+				return &t;
+		}
+		return nullptr;
+	}
+
+	LRESULT CALLBACK PairingOwnerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+	{
+		if(msg == WM_INITMENUPOPUP)
+		{
+			if(auto t = find_traffic(reinterpret_cast<HMENU>(wp)); t)
+				t->inits++;
+			return 0;
+		}
+		if(msg == WM_UNINITMENUPOPUP)
+		{
+			if(auto t = find_traffic(reinterpret_cast<HMENU>(wp)); t)
+				t->uninits++;
+			// The high word "can only be MF_SYSMENU (the window menu)"; none of
+			// these is one, so it must arrive as zero. Counted rather than
+			// pushed into traffic(), which the test holds pointers into.
+			if(HIWORD(lp) != 0)
+				bad_hiword++;
+			return 0;
+		}
+		return ::DefWindowProcW(hwnd, msg, wp, lp);
+	}
+}
+
+TEST(native_menu_uninit, every_notified_popup_is_uninitialised_exactly_once)
+{
+	WNDCLASSW wc{};
+	wc.lpfnWndProc = PairingOwnerProc;
+	wc.hInstance = ::GetModuleHandleW(nullptr);
+	wc.lpszClassName = L"NssUninitPairingOwner";
+	::RegisterClassW(&wc);
+
+	HWND owner = ::CreateWindowExW(0, L"NssUninitPairingOwner", L"", WS_OVERLAPPED,
+								   0, 0, 0, 0, HWND_MESSAGE, nullptr,
+								   wc.hInstance, nullptr);
+	CHECK(owner != nullptr);
+	if(!owner)
+		return;
+
+	HMENU root = ::CreatePopupMenu();
+	HMENU opened = ::CreatePopupMenu();
+	HMENU never_opened = ::CreatePopupMenu();
+	::AppendMenuW(root, MF_POPUP, reinterpret_cast<UINT_PTR>(opened), L"opened");
+	::AppendMenuW(root, MF_POPUP, reinterpret_cast<UINT_PTR>(never_opened), L"not opened");
+
+	traffic().clear();
+	bad_hiword = 0;
+	traffic().push_back({ root, 0, 0 });
+	traffic().push_back({ opened, 0, 0 });
+	traffic().push_back({ never_opened, 0, 0 });
+
+	auto notify = [owner](HMENU h, LPARAM lp)
+	{
+		::SendMessageW(owner, WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(h), lp);
+	};
+
+	NativePopupNotifications sent;
+
+	// Shell builds the root, then the user opens one submenu.
+	NativePopupState root_state; root_state.handle = root;
+	if(initialize_native_popup(root_state, notify))
+		sent.record_init(root_state.handle);
+
+	NativePopupState opened_state; opened_state.handle = opened; opened_state.parent_position = 0;
+	if(initialize_native_popup(opened_state, notify))
+		sent.record_init(opened_state.handle);
+
+	auto root_traffic = find_traffic(root);
+	auto opened_traffic = find_traffic(opened);
+	auto unopened_traffic = find_traffic(never_opened);
+	CHECK(root_traffic && opened_traffic && unopened_traffic);
+	if(!root_traffic || !opened_traffic || !unopened_traffic)
+		return;
+
+	CHECK_EQ(root_traffic->inits, 1);
+	CHECK_EQ(opened_traffic->inits, 1);
+	CHECK_EQ(unopened_traffic->inits, 0);
+
+	// Menu closes. This is the loop ContextMenu::uninitialize_native_popups
+	// runs, over the same list.
+	for(auto hMenu : sent.take_for_uninit())
+		::SendMessageW(owner, WM_UNINITMENUPOPUP, reinterpret_cast<WPARAM>(hMenu), 0);
+
+	CHECK_MSG(root_traffic->uninits == 1, "the root was initialised, so it is owed one");
+	CHECK_MSG(opened_traffic->uninits == 1, "and so is the submenu the user opened");
+	CHECK_MSG(unopened_traffic->uninits == 0,
+			  "a popup the host was never asked to populate must not be un-populated");
+	CHECK_MSG(bad_hiword == 0, "lParam high word must be zero, not MF_SYSMENU");
+
+	// Every notified popup still exists: they are the host's, and Shell only
+	// ever drops the handles.
+	CHECK(::GetMenuItemCount(root) == 2);
+	CHECK(::IsMenu(opened));
+
+	::DestroyMenu(root);
+	::DestroyWindow(owner);
+	::UnregisterClassW(L"NssUninitPairingOwner", wc.hInstance);
+}

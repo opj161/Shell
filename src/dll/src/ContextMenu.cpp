@@ -4511,7 +4511,46 @@ namespace Nilesoft
 				});
 
 			_native_notify = previous;
+
+			// Only a popup that was actually notified is owed the other half.
+			if(sent)
+				_native_popups.record_init(state.handle);
+
 			return sent;
+		}
+
+		/*
+			"If an application receives a WM_INITMENUPOPUP message, it will
+			receive a WM_UNINITMENUPOPUP message."
+			https://learn.microsoft.com/en-us/windows/win32/menurc/wm-uninitmenupopup
+
+			Shell was sending the first and never the second: OnUninitMenuPopup
+			destroys Shell's own synthetic menu and stops there, so a host that
+			allocated state when told to populate a borrowed popup was never told
+			it could release it.
+
+			lParam is zero because the high-order word "identifies the menu that
+			was destroyed. Currently, this parameter can only be MF_SYSMENU (the
+			window menu)" - and none of these is a window menu. That is also what
+			the subclass hook's own WM_UNINITMENUPOPUP case tests, so a nonzero
+			high word here would route Shell's message back into Shell.
+
+			Like the notification it pairs with, this runs arbitrary host and
+			third-party code synchronously, so no lock may be held across it and
+			the target is published in _native_uninit_notify first.
+		*/
+		void ContextMenu::uninitialize_native_popups()
+		{
+			for(auto hMenu : _native_popups.take_for_uninit())
+			{
+				if(!hMenu || !hwnd.owner)
+					continue;
+
+				_native_uninit_notify = hMenu;
+				::SendMessageW(hwnd.owner, WM_UNINITMENUPOPUP,
+							   reinterpret_cast<WPARAM>(hMenu), 0);
+				_native_uninit_notify = nullptr;
+			}
 		}
 
 		// Materialises the children of one already-initialised host popup. Records
@@ -4956,6 +4995,20 @@ namespace Nilesoft
 				}
 
 				_windowSubclass.unhook();
+
+				// Synthetic teardown first, then the borrowed popups are told
+				// they are finished with - and their handles are only dropped,
+				// never destroyed, because the host owns them.
+				//
+				// After the unhook rather than before it. WM_UNINITMENUPOPUP
+				// runs arbitrary host and third-party code synchronously, and
+				// with the subclass gone none of it can re-enter Shell through
+				// this window - which matters most for the message being sent
+				// here, because OnUninitMenuPopup destroys the menu it is handed
+				// and adjusts the popup level counters. The pass-through token
+				// in WindowSubclassProc stays as the second line of defence if
+				// this ever moves back up.
+				uninitialize_native_popups();
 
 				if(_hTheme)
 				{
@@ -6832,6 +6885,13 @@ namespace Nilesoft
 					//	The high - order word identifies the menu that was destroyed.Currently, this parameter can only be MF_SYSMENU(the window menu).
 					case WM_UNINITMENUPOPUP:
 					{
+						// Shell's own outgoing half of the INIT/UNINIT pair for a
+						// borrowed host popup. It has to reach the host window
+						// procedure: OnUninitMenuPopup destroys the menu it is
+						// handed, and this one belongs to the host.
+						if(ctx->is_native_uninit_inflight(reinterpret_cast<HMENU>(wParam)))
+							break;
+
 						if(HIWORD(lParam) == FALSE)
 						{
 							if(auto hMenu = reinterpret_cast<HMENU>(wParam); hMenu)

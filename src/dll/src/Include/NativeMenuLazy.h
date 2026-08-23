@@ -22,6 +22,7 @@
 */
 
 #include <windows.h>
+#include <vector>
 
 namespace Nilesoft
 {
@@ -130,5 +131,69 @@ namespace Nilesoft
 			state.initialized = true;
 			return true;
 		}
+
+		/*
+			The other half of that notification.
+
+			"If an application receives a WM_INITMENUPOPUP message, it will
+			receive a WM_UNINITMENUPOPUP message."
+			https://learn.microsoft.com/en-us/windows/win32/menurc/wm-uninitmenupopup
+
+			Shell sends borrowed host popups a just-in-time WM_INITMENUPOPUP so
+			the host fills them in, and then never sent the matching
+			WM_UNINITMENUPOPUP to any of them - the close path destroys Shell's
+			own synthetic menu and stops there. A host that allocated state when
+			it was told to populate a popup was never told it could let go of it,
+			for every submenu of every menu, for the life of the process.
+
+			This tracks which borrowed popups were notified so each can be
+			un-notified exactly once. Kept free of any Shell dependency, and of
+			any Windows call, so the pairing invariant is testable on its own.
+		*/
+		class NativePopupNotifications
+		{
+		public:
+			// Records that this popup has been sent WM_INITMENUPOPUP. Returns
+			// false if it was already recorded, which is what keeps the pairing
+			// one-to-one rather than one-to-many.
+			bool record_init(HMENU hMenu)
+			{
+				if(!hMenu)
+					return false;
+				for(auto have : _initialized)
+				{
+					if(have == hMenu)
+						return false;
+				}
+				_initialized.push_back(hMenu);
+				return true;
+			}
+
+			bool init_sent(HMENU hMenu) const noexcept
+			{
+				for(auto have : _initialized)
+				{
+					if(have == hMenu)
+						return true;
+				}
+				return false;
+			}
+
+			size_t pending() const noexcept { return _initialized.size(); }
+
+			// Hands back the popups owed a WM_UNINITMENUPOPUP, deepest first -
+			// the reverse of the order they were initialised in, which is the
+			// order Windows closes them in - and empties the list, so a second
+			// teardown cannot send a second notification.
+			std::vector<HMENU> take_for_uninit()
+			{
+				std::vector<HMENU> out(_initialized.rbegin(), _initialized.rend());
+				_initialized.clear();
+				return out;
+			}
+
+		private:
+			std::vector<HMENU> _initialized;
+		};
 	}
 }
