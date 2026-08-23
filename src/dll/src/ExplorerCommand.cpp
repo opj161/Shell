@@ -198,12 +198,27 @@ namespace Nilesoft
 					return false;
 
 				EXPCMDSTATE state = ECS_ENABLED;
-				// fOkToBeSlow FALSE first: return E_PENDING rather than stall the UI
-				// thread. TRUE allows the expensive work on retry.
+				// fOkToBeSlow is FALSE and stays FALSE on this path. It means the
+				// verb object "should not perform any memory intensive computations
+				// that could cause the UI thread to stop responding. The verb object
+				// should return E_PENDING in that case"; TRUE says "those
+				// computations can be completed" - on the thread that is between the
+				// user's right-click and the first menu pixel, with no bound on how
+				// long a third-party handler takes.
 				// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getstate
+				//
+				// E_PENDING therefore is the answer, not a reason to ask again:
+				// present the item provisionally enabled and let Invoke find out.
+				// A handler that reports pending has told us only that it cannot
+				// answer cheaply, not that the verb is unavailable, and hiding a
+				// working command is worse than offering one that turns out to be a
+				// no-op. docs/refactor/02-first-paint-latency.md section 2.
 				auto hr_state = cmd->GetState(selection, FALSE, &state);
 				if(hr_state == E_PENDING)
-					hr_state = cmd->GetState(selection, TRUE, &state);
+				{
+					state = ECS_ENABLED;
+					hr_state = S_OK;
+				}
 				if(SUCCEEDED(hr_state) && (state & ECS_HIDDEN))
 					return false;
 

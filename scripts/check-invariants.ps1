@@ -87,16 +87,16 @@ $rules = @(
     @{ Name  = 'SystemParametersInfo on the menu path must not broadcast (docs/refactor/02 section 4a)'
        Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
        Regex = 'SystemParametersInfoW?\s*\([^;]*SPIF_(SENDCHANGE|SENDWININICHANGE|UPDATEINIFILE)'
-       Why   = 'broadcasts WM_SETTINGCHANGE to every top-level window twice per menu; pass fWinIni 0' }
-)
+       Why   = 'broadcasts WM_SETTINGCHANGE to every top-level window twice per menu; pass fWinIni 0' },
 
-# Enable each of these as its phase lands; see docs/refactor/06 and 07.
-$deferredRules = @(
-    @{ Name  = '[DEFERRED Phase 1] GetState(TRUE) before first paint is forbidden (docs/refactor/02 section 2)'
-       Dir   = 'src\dll\src'; Include = @('ExplorerCommand.cpp')
+    @{ Name  = 'GetState(TRUE) before first paint is forbidden (docs/refactor/02 section 2)'
+       Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
        Regex = 'GetState\s*\([^)]*,\s*TRUE\s*,'
        Why   = 'fOkToBeSlow TRUE lets a verb handler stall the menu thread without bound' }
 )
+
+# Enable each of these as its phase lands; see docs/refactor/06 and 07.
+$deferredRules = @()
 
 function Test-Rules
 {
