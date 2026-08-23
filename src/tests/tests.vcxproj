@@ -82,6 +82,7 @@
     <ClInclude Include="test.h" />
     <ClInclude Include="..\shared\System\Text\StringCompare.h" />
     <ClInclude Include="..\dll\src\Include\BitmapCache.h" />
+    <ClInclude Include="..\dll\src\Include\ComActivationPolicy.h" />
     <ClInclude Include="..\dll\src\Include\MenuText.h" />
     <ClInclude Include="..\dll\src\Include\NativeMenuLazy.h" />
     <ClInclude Include="..\dll\src\Include\ExplorerCommandCatalog.h" />
@@ -127,6 +128,7 @@
     <ClCompile Include="test_expression.cpp" />
     <ClCompile Include="test_parser_imports.cpp" />
     <ClCompile Include="test_string_index.cpp" />
+    <ClCompile Include="test_com_activation_policy.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression
        tests exercise the real evaluator instead of a copy of it. The closure is

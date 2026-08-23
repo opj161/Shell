@@ -2,6 +2,7 @@
 #include <unordered_set>
 #include "Include/ContextMenu.h"
 #include "Include/ShellExt.h"
+#include "Include/ComActivationPolicy.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/TaskbarHitCache.h"
 #include "Include/TaskbarOrigin.h"
@@ -757,18 +758,10 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 				_this.is_uwp = is_UWP;
 				_this.clsid = Guid(rclsid).to_string(2);
 
-				bool test = Keyboard::IsKeyDown(VK_MENU);
-				if(test)
-				{
-					Timer t;
-					t.start();
-					hr = _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
-					t.stop();
-					auto elapsed = (int)t.elapsed_milliseconds();
-					_log.write(L"%d%s\t%s\t%s\r\n", elapsed, elapsed > 0 ? L"ms" : L"" , _this.clsid.c_str(), is_UWP ? L"UWP":L"");
-					return hr;
-				}
-
+				// Policy first, diagnostics second - see ComActivationPolicy.h.
+				// The Alt-held timing probe used to sit in front of this loop and
+				// return from it, so the blocklist did nothing while Alt was down.
+				auto blocked = false;
 				for(auto si : cache->statics)
 				{
 					if(si->clsid.empty() || (si->where && !context.eval_bool(si->where)))
@@ -780,19 +773,43 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 						{
 							if(id.equals(rclsid))
 							{
-								if(test && *ppv)
-								{
-									((IUnknown *)*ppv)->Release();
-									*ppv = nullptr;
-								}
-								return E_NOINTERFACE;
+								blocked = true;
+								break;
 							}
 						}
 					}
+
+					if(blocked)
+						break;
 				}
 
-				if(test)
-					return hr;
+				switch(decide_com_activation(true, blocked, Keyboard::IsKeyDown(VK_MENU)))
+				{
+					case ComActivationVerdict::Block:
+						// Nothing was activated, so there is nothing to release.
+						// Set the out parameter the way a failing CoCreateInstance
+						// would rather than leaving the caller's uninitialised
+						// pointer in place - the old code read *ppv here, which it
+						// had no right to do on a path that never called through.
+						// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstance
+						if(ppv)
+							*ppv = nullptr;
+						return E_NOINTERFACE;
+
+					case ComActivationVerdict::TimeAndReturn:
+					{
+						Timer t;
+						t.start();
+						hr = _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+						t.stop();
+						auto elapsed = (int)t.elapsed_milliseconds();
+						_log.write(L"%d%s\t%s\t%s\r\n", elapsed, elapsed > 0 ? L"ms" : L"" , _this.clsid.c_str(), is_UWP ? L"UWP":L"");
+						return hr;
+					}
+
+					case ComActivationVerdict::PassThrough:
+						break;
+				}
 			}
 		}
 	}
