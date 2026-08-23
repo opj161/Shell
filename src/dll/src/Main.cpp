@@ -4,6 +4,7 @@
 #include "Include/ShellExt.h"
 #include "Include/ComActivationPolicy.h"
 #include "Include/HostContract.h"
+#include "Include/Diagnostics/DiagnosticsRing.h"
 #include "Include/PackageCatalogService.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/TaskbarHitCache.h"
@@ -821,6 +822,37 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 
 #define TPM_SYSMENU	0x0200L
 
+// Identifies the host process in a diagnostics record without keeping its name.
+// Computed once - the module never moves - because this runs on the path
+// between a right-click and the first pixel.
+static uint32_t host_identity_hash()
+{
+	static const uint32_t hash = []
+	{
+		wchar_t path[MAX_PATH]{};
+		auto length = ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+		if(length == 0 || length >= MAX_PATH)
+			return 0u;
+
+		// FNV-1a over the lowercased path. Not a security boundary - it exists
+		// so a report can say "these forty menus were all the same host"
+		// without carrying the path around.
+		uint32_t h = 2166136261u;
+		for(DWORD i = 0; i < length; i++)
+		{
+			auto c = path[i];
+			if(c >= L'A' && c <= L'Z')
+				c = static_cast<wchar_t>(c - L'A' + L'a');
+			h ^= static_cast<uint32_t>(c & 0xFF);
+			h *= 16777619u;
+			h ^= static_cast<uint32_t>((c >> 8) & 0xFF);
+			h *= 16777619u;
+		}
+		return h;
+	}();
+	return hash;
+}
+
 
 BOOL WINAPI TrackPopupMenuProc(HMENU hMenu, uint32_t uFlags, int x, int y, int nReserved, HWND hWnd, const RECT *prcRect);
 BOOL WINAPI TrackPopupMenuExProc(HMENU hMenu, uint32_t uFlags, int x, int y, HWND hWnd, LPTPMPARAMS lptpm);
@@ -841,6 +873,12 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 
 	auto result = FALSE;
 	auto invoked = false;
+
+	// One diagnostics session per intercepted popup, always on. Phases recorded
+	// anywhere below this land in it; session_end() in the __finally publishes
+	// it into the process ring. Both are plain functions on plain data, which is
+	// what an SEH function can hold.
+	perf::session_begin(host_identity_hash());
 
 	// SEH function: cannot hold an object that requires unwinding.
 	auto perf_pre_display = perf::menu_perf_begin();
@@ -1008,6 +1046,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					// Everything above this line is latency the user pays before the
 					// first pixel of the menu appears.
 					perf::menu_perf_end(perf_pre_display, L"popup.total_pre_display");
+					perf::session_decision(perf::TakeoverDecision::TakeOver);
 
 					invoke(ctx->MenuHandle(), flag, { x, y });
 
@@ -1052,6 +1091,16 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		// Only this menu. Another window's popup may still be open and holding a
 		// capture of its own.
 		ShellExtCapture::clear(hMenu);
+
+		// Reaching here with the menu not yet tracked means every path above
+		// declined or threw, and what happens next is the fail-open fallback:
+		// the host's own menu, with the host's own flags, untouched. That is the
+		// single most valuable safety property in this file and it is now
+		// recorded rather than merely relied upon.
+		// docs/refactor/01-takeover-contract.md section 2.
+		if(!invoked)
+			perf::session_decision(perf::TakeoverDecision::FailOpen);
+
 		invoke(hMenu, uFlags, { x, y });
 		// The flag used to be cleared here, which was the only place it was
 		// cleared and not a place every taskbar menu passes through.
@@ -1059,6 +1108,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		// The WIC factory is apartment-local and must not survive the
 		// CoUninitialize that can close this thread's apartment.
 		WIC::release();
+		perf::session_end();
 		if(need_uninit_com)
 			::CoUninitialize();
 		return result;

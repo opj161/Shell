@@ -186,6 +186,7 @@
     <ClInclude Include="src\Include\Packages.h" />
     <ClInclude Include="src\Include\ExplorerCommandCatalog.h" />
     <ClInclude Include="src\Include\Diagnostics\MenuPerf.h" />
+    <ClInclude Include="src\Include\Diagnostics\DiagnosticsRing.h" />
     <ClInclude Include="src\Include\BitmapCache.h" />
     <ClInclude Include="src\Include\ComActivationPolicy.h" />
     <ClInclude Include="src\Include\HostContract.h" />
@@ -231,6 +232,7 @@
     <ClCompile Include="src\ExplorerCommand.cpp" />
     <ClCompile Include="src\PackageCatalogService.cpp" />
     <ClCompile Include="src\MenuPerf.cpp" />
+    <ClCompile Include="src\DiagnosticsRing.cpp" />
     <ClCompile Include="src\Packages.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="src\Initializer.cpp" />

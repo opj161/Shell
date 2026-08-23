@@ -1,22 +1,30 @@
 #pragma once
 
 /*
-	Opt-in, high-resolution phase timing for the context-menu path.
+	High-resolution phase timing for the context-menu path.
 
 	Every optimization in the menu-opening path has to be justified by a number,
-	not by feel, so this gives the QA process an answer to "which phase cost the
-	milliseconds?" without adding measurable cost when nobody is measuring.
+	not by feel, so this answers "which phase cost the milliseconds?".
 
-	It is OFF unless the user opts in:
+	**Timing is always on. The log file is not.** That distinction is the whole
+	design, and it was not always drawn: the registry value below used to gate
+	the measurement itself, so the numbers only existed on a machine where
+	somebody had already reproduced the problem and gone looking. Everything that
+	wants to build on them - provider health, a regression budget, telling a user
+	why their menu is slow - needs them present the first time.
+
+	So every phase is recorded into the in-memory ring
+	(Include/Diagnostics/DiagnosticsRing.h), which costs two
+	QueryPerformanceCounter calls and a store into thread-local storage: no lock,
+	no allocation, no formatting. The log line is what stays opt-in, because
+	Logger opens, appends and closes the file for every line and that really
+	would be I/O on the path being measured:
 
 		HKCU\SOFTWARE\Nilesoft\Shell
 			perf	REG_DWORD	1
 
 	The value doubles as the floor in milliseconds - 1 keeps the documented
-	5/20/100 ms policy, a larger value only reports phases at least that slow.
-	That matters because Logger opens, writes and closes the log file on every
-	line; leaving it always-on would put file I/O on the very path being
-	measured.
+	5/20/100 ms policy, a larger value only writes phases at least that slow.
 
 	Microsoft's high-resolution interval timer is QueryPerformanceCounter, not
 	GetTickCount:
@@ -75,9 +83,18 @@ namespace Nilesoft
 					return v;
 				}
 
-				static bool enabled() noexcept
+				// Whether a phase that breaches the floor gets written to the
+				// log. Not whether it gets measured - see the note at the top.
+				static bool logging() noexcept
 				{
 					return floor_ms() > 0 && ticks_per_ms() > 0.0;
+				}
+
+				// Whether timing can run at all. Only a machine with no
+				// performance counter says no.
+				static bool enabled() noexcept
+				{
+					return ticks_per_ms() > 0.0;
 				}
 
 			private:

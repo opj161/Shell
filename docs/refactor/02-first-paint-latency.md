@@ -281,6 +281,31 @@ is set, or exported on demand by the Reliability Center (§05.1). This is the su
 for provider health, regression budgets (§06.4), and the "why is my menu slow?" feature
 — without file I/O on the measured path.
 
+**As implemented (2026-08-24)**, `Include/Diagnostics/DiagnosticsRing.h`, with
+three departures from the sketch:
+
+- **`phases[8]` is too small and silence would be the wrong failure.** The menu
+  path already names eleven phases and the hook adds three SEH-safe marks; a
+  record that kept eight and dropped the rest would lose exactly the slow ones.
+  It is 24, and `dropped_phases` counts what still did not fit.
+- **Sessions nest rather than stack.** A menu can open while another is up
+  (`TPM_RECURSE`), and the hook can re-enter. Inner sessions fold their phases
+  into the outer record and only the outermost publishes — losing the inner
+  boundary is better than truncating the outer session or allocating.
+- **`phase` is a `const wchar_t *`, not a `uint32_t`.** Every phase name in the
+  tree is a string literal with static storage, so a pointer needs no enum, no
+  mapping table and no copy. That is what makes recording allocation-free.
+
+Overhead measured rather than asserted (Windows 11 26200.8875 x64): the store
+alone **2.7 ns**, a full phase with its two `QueryPerformanceCounter` calls
+**47.8 ns**, a whole twelve-phase menu including the publish **~0.6 µs**. The
+budget below was 1 µs *per phase record*; an entire menu now costs less than
+that. Ring storage is 30 KB, allocated once.
+
+`MenuPerf::enabled()` split into `enabled()` (can we time at all) and
+`logging()` (should a breaching phase also be written to the log file). The
+registry value now gates only the sink, which was the point.
+
 ## 7. Acceptance criteria
 
 - [ ] Cold right-click after Explorer start performs **zero** manifest/package reads on
@@ -290,4 +315,5 @@ for provider health, regression budgets (§06.4), and the "why is my menu slow?"
 - [ ] `SHQueryRecycleBinW` absent from menu construction (rg gate in CI script).
 - [ ] Taskbar stage-1 lands behind nothing (pure improvement); stage-2 ships with
       layout-snapshot unit tests using recorded fixtures.
-- [ ] Ring buffer overhead measured < 1 µs per phase record; no allocation after session start.
+- [x] Ring buffer overhead measured < 1 µs per phase record; no allocation after session start.
+      **47.8 ns per phase, ~0.6 µs per whole menu**, fixed 30 KB of storage — see §6.

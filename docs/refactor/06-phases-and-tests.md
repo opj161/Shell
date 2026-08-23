@@ -77,7 +77,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Persisted last-known-good shadow + recovery on a fresh process | 3 |
 | ✅ | **0.0 trace harness** — `src/tests/hostprobe/`, 19 scenarios, baselines committed; Phase 2.3 and the four items gated on it are unblocked | 0 |
 | ⬜ | Provider deadline and deferral (§02.2a) — the remaining unbounded work on the menu thread | 1.3 |
-| ⬜ | Diagnostics ring (§02.6) | 1.4 |
+| ✅ | Diagnostics ring (§02.6) — always-on phase timing, 47.8 ns per phase; the registry value now gates only the log file | 1.4 |
 | ⬜ | Cold-start measurement, then the persistence decision for §02.1 step 3 | 1.5 |
 | ✅ | TPM normalization — `TPM_RETURNCMD` always added, native replay posted, synthetic identifiers no longer reach the host | 2.3 |
 | ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B | 2 |

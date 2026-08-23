@@ -1,6 +1,7 @@
 #include <pch.h>
 #include "RegistryConfig.h"
 #include "Include/Diagnostics/MenuPerf.h"
+#include "Include/Diagnostics/DiagnosticsRing.h"
 
 #define _log Logger::Instance()
 
@@ -33,6 +34,15 @@ namespace Nilesoft
 			static void emit(const wchar_t *name, double ms, double warn_ms,
 							 uint64_t menu_id, long count, long depth) noexcept
 			{
+				// The ring first, and unconditionally. Every phase lands here
+				// whatever the registry says; the floor below decides only
+				// whether a line is also written to the log file.
+				auto microseconds = ms > 0.0 ? static_cast<uint32_t>(ms * 1000.0) : 0u;
+				session_phase(name, microseconds, count >= 0 ? static_cast<int32_t>(count) : -1);
+
+				if(!MenuPerf::logging())
+					return;
+
 				auto floor = static_cast<double>(MenuPerf::floor_ms());
 				if(floor < warn_ms)
 					floor = warn_ms;
