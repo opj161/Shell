@@ -87,73 +87,140 @@ Rationale, from the TrackPopupMenuEx page
   alongside RETURNCMD, and nothing enumerates which messages NONOTIFY suppresses
   ("does not send notification messages", unenumerated) — which is precisely why
   the original rule needed a probe to discover its own consequences (QA-02).
-- Forcing NONOTIFY destroys the `WM_MENUSELECT` stream that third-party hosts use
-  for status-bar hints, and the original design then proposed *synthesising*
-  `WM_MENUSELECT` to repair that. That is scope created by the default, not by the
-  requirement.
 
-So: add `TPM_RETURNCMD`; leave the host's other notification behaviour alone; and
-let the §06.2 probe answer the one open question — whether a duplicate `WM_COMMAND`
-still reaches the owner when `TPM_RETURNCMD` is set. Only if it does is
-`TPM_NONOTIFY` added, and then per `HostProfile` (§8) rather than globally. This
-makes the probe a confirmation rather than a prerequisite, and shrinks the diff.
+### 3a. What the harness measured — the flags do the opposite of the guess
 
-The replay table below is unchanged; only the flags Shell adds have changed:
+The reasoning above reached the right rule from the wrong premise. The trace
+harness (§06.2, `src/tests/hostprobe/`) was run against untouched Windows on
+2026-08-24, Windows 11 26200.8875 x64, and the fixtures are committed under
+`src/tests/hostprobe/fixtures/`:
+
+| Flags | Owner gets `WM_COMMAND`? | Owner gets `ENTERMENULOOP`/`INITMENU`/`INITMENUPOPUP`/`UNINITMENUPOPUP`/`EXITMENULOOP`? |
+| --- | --- | --- |
+| neither | yes | yes |
+| `TPM_RETURNCMD` | **no** | yes |
+| `TPM_NONOTIFY` | **yes** | **no** |
+| both | no | no |
+
+`WM_MENUSELECT`, `WM_MEASUREITEM` and `WM_DRAWITEM` all survive `TPM_NONOTIFY`.
+
+Three corrections follow, and each shrinks the work:
+
+1. **It is `TPM_RETURNCMD`, not `TPM_NONOTIFY`, that stops the duplicate
+   `WM_COMMAND`.** The open question this section left for the probe is
+   answered: no duplicate. `TPM_NONOTIFY` is not needed by any host class, so
+   the `HostProfile` opt-in for it can be dropped rather than built.
+2. **`TPM_NONOTIFY` must never be added, and for a stronger reason than
+   tidiness.** What it actually suppresses is the menu *lifecycle* — including
+   `WM_INITMENUPOPUP`, the notification `NativeMenuBridge` (§5) exists to
+   deliver to the host on time. Adding it would break the borrowed-menu
+   contract this document is otherwise trying to repair.
+3. **The claim that NONOTIFY "destroys the `WM_MENUSELECT` stream" was wrong.**
+   `WM_MENUSELECT` survives it. So the proposal to *synthesise* `WM_MENUSELECT`
+   was scope invented to solve a problem that does not exist, in either
+   direction. It is dropped.
+
+There is a fourth, about today's code rather than the plan. `Main.cpp:910`
+**removes** `TPM_NONOTIFY` from the host's flags. Given the table above that
+means a host which asked for a quiet menu is given the full lifecycle stream
+anyway — a divergence in the opposite direction from the one this document
+assumed. It is currently load-bearing (the bridge needs those notifications to
+reach the host), so it stays, but it belongs in `HostProfile` (§8) as a stated
+decision rather than an unexplained line.
+
+And a fifth, which is a hard constraint on the replay design:
+**`MNS_NOTIFYBYPOS` and `TPM_RETURNCMD` do not compose.** With both set the call
+returns 1 rather than an identifier *and* no `WM_MENUCOMMAND` is sent — the
+selection is simply lost (`question.notifybypos_with_returncmd.trace`). Shell's
+own composed menu must therefore never carry `MNS_NOTIFYBYPOS`; it does not
+today, and an invariant rule keeps it that way. Replay for a by-position host is
+Shell sending `WM_MENUCOMMAND` itself, per the table below.
+
+The replay table, rewritten against what the harness recorded:
 
 ```text
-track(composed_menu, RETURNCMD|NONOTIFY|alignment-preserving-subset)
+track(composed_menu, contract.flags_in | RETURNCMD, minus NONOTIFY)
+  // RETURNCMD is added so the selection comes back as an identifier and no
+  // WM_COMMAND carrying a synthetic ID is posted to the host (measured).
+  // NONOTIFY is removed so the host still receives the menu lifecycle, which
+  // is what NativeMenuBridge depends on (measured; today's behaviour).
+  // The composed menu never carries MNS_NOTIFYBYPOS - with RETURNCMD the
+  // selection would be lost entirely (measured).
+
 selected = returned ID
-origin = origins.lookup(selected)        // Native | Custom | ExplorerCommand
-complete_host_contract(origin):          // runs BEFORE the hook returns
-    Native          → RETURNCMD host: return original_wID
-                      else if !contract.no_notify: deliver SYNCHRONOUSLY —
-                        SendMessage(owner, WM_COMMAND, MAKEWPARAM(original_wID, 0), 0),
-                        or WM_MENUCOMMAND (wParam = position, lParam = borrowed HMENU)
-                        when MNS_NOTIFYBYPOS was set.
-                      else (NONOTIFY host): deliver nothing; return FALSE/0 as the real API would.
+origin   = origins.lookup(selected)      // Native | Custom | ExplorerCommand
+
+complete_host_contract(origin):          // AFTER Shell's own tracking returns,
+                                         // BEFORE the hook returns to the host
+    Native          → RETURNCMD host: return original_wID, notify nothing.
+                      NONOTIFY host:  return TRUE, notify nothing.
+                      otherwise:      return TRUE and POST one notification -
+                        PostMessage(owner, WM_COMMAND, MAKEWPARAM(original_wID, 0), 0),
+                        or PostMessage(owner, WM_MENUCOMMAND, position, borrowed_HMENU)
+                        when the borrowed root had MNS_NOTIFYBYPOS.
+                      Posted, not sent: Windows posts it, and the host must not
+                      see it before its own tracking call returns.
     Custom          → run CommandDispatcher now; RETURNCMD hosts get the synthetic ID
-                      back (they asked for IDs), non-RETURNCMD hosts get TRUE/FALSE only;
+                      back (they asked for IDs), non-RETURNCMD hosts get TRUE only;
                       never notify — synthetic IDs must not reach a host under any flag
                       combination.
     ExplorerCommand → invoke (already in-place); return semantics as Custom
     Cancelled(0)    → propagate 0 / FALSE exactly as the real API would
 ```
 
-Delivery-ordering rule (QA-03): native replay is **synchronous, inside the hook**, for
-two documented reasons. First, TrackPopupMenuEx's contract places command delivery
-"until the function returns" — posting would reorder the observable sequence. Second,
-`WM_MENUCOMMAND` carries `lParam = HMENU`; a posted copy is processed after the host's
-call site has typically run `DestroyMenu`, handing it a dangling handle. Posting either
-message is forbidden unless the §06.2 harness proves delivery-before-destroy for that
-host class.
+**The defect this fixes is now measured, not inferred.** Because Shell adds no
+`TPM_RETURNCMD` today, a non-`RETURNCMD` host's tracking of Shell's composed
+menu behaves exactly like `select.plain.classic.trace`: the call returns 1 and
+Windows posts `WM_COMMAND` to the host window carrying **whatever wID the chosen
+item had** — for a custom item, a synthetic ID at or above `0x0fffffff`. Shell
+then calls `InvokeCommand(1)`, which matches nothing. So the user's command does
+not run *and* a meaningless command reaches the host. Adding `TPM_RETURNCMD`
+closes both halves at once.
+
+Delivery-ordering rule (QA-03) — **reversed by measurement.** This section
+originally required native replay to be *synchronous, inside the hook*, reading
+TrackPopupMenuEx's "The window does not receive a `WM_COMMAND` message from the
+menu until the function returns" as placing delivery before the return. It says
+the opposite: the owner does not receive it *until* the call returns.
+
+The harness confirms the reading. In `select.plain.classic.trace` and
+`question.notifybypos_reports_a_position.trace` the `WM_COMMAND` and
+`WM_MENUCOMMAND` are both caught by a `PeekMessage` drain that runs *after*
+`TrackPopupMenu` returned — so Windows **posts** them — and both appear after
+`WM_EXITMENULOOP`.
+
+So the rule is inverted: **replay is posted, not sent.** A synchronous
+`SendMessage` from inside the hook would deliver the notification before the
+host's own tracking call returned, which is a sequence untouched Windows never
+produces. The dangling-`HMENU` concern behind the old rule is real but is
+Windows' own behaviour, not something Shell introduces by matching it; a host
+that destroys a by-position menu before pumping is already broken against the
+real API.
 
 Rules:
 
 - Preserve alignment/animation/layout flags the host passed (`SM_MENUDROPALIGNMENT`
   handling per TrackPopupMenu remarks); stop force-stripping `TPM_HORIZONTAL`
   unconditionally — make it a `HostProfile` decision (§8).
-- ~~Forcing internal `TPM_NONOTIFY`~~ — **superseded by the amendment above (§07 A4):
-  NONOTIFY is no longer added by default.** The analysis below stands as the reason
-  it must not be, and as the specification for the probe that decides whether any
-  host class needs it. Today's code *strips* NONOTIFY (`Main.cpp:905`), so hosts currently receive
-  notification traffic during tracking — including `WM_MENUSELECT` highlight updates
-  ("Sent to a menu's owner window when the user selects a menu item") carrying original
-  wIDs for mirrored natives. The TrackPopupMenuEx page documents only "does not send
-  notification messages" without enumerating survivors; whether `WM_MEASUREITEM`/
-  `WM_DRAWITEM` are exempt is **undocumented** and must be established by the §06.2
-  probe before this rule freezes. Where a suppressed stream is needed, the bridge
-  synthesizes it from tracked selection state (forwarded `WM_MENUSELECT` with original
-  wIDs for natives; nothing for custom items); otherwise the equivalence criterion in
-  §01.10 holds modulo that synthesis.
+- **`TPM_NONOTIFY` is never added, and the removal of it stays.** The whole
+  question is settled by §3a's table; no synthesised `WM_MENUSELECT` is needed,
+  because `WM_MENUSELECT` was never the thing NONOTIFY suppressed. Which
+  messages it *does* suppress, and that `WM_MEASUREITEM`/`WM_DRAWITEM` are
+  exempt, is recorded in `src/tests/hostprobe/fixtures/README.md` and pinned by
+  `select.nonotify.*` and `question.nonotify_still_measures_ownerdraw`.
 - `MNS_NOTIFYBYPOS` is a header style (MENUINFO page: "no effect when applied to
   individual sub menus") — detect via `GetMenuInfo(dwStyle)` on the borrowed root;
   replay with `WM_MENUCOMMAND` `(wParam = item position, lParam = HMENU)` instead of
-  `WM_COMMAND`.
+  `WM_COMMAND`. Measured payload and timing:
+  `question.notifybypos_reports_a_position.trace`.
 
-**Probe gate.** Exact message ordering (post vs send, `WM_MENUSELECT` sequence,
-`WM_EXITMENULOOP` timing) must be established by the trace harness against untouched
-`TrackPopupMenu` before the replay code freezes (§06.2). Static analysis alone is not
-evidence here — matching Audit 2 §2's own caveat.
+**Probe gate — met.** The ordering questions this section could not answer from
+documentation (post versus send, the `WM_MENUSELECT` sequence, `WM_EXITMENULOOP`
+timing, the NONOTIFY suppression set, and whether a duplicate `WM_COMMAND`
+survives `TPM_RETURNCMD`) were recorded by the harness on 2026-08-24 and are
+committed as fixtures. Phase 2.3 is unblocked; the replay code freezes against
+those traces, and `hostprobe.exe --verify` is what says a later Windows changed
+its mind.
 
 ## 4. Command-origin table
 

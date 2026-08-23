@@ -1,0 +1,8 @@
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP

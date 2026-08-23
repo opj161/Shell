@@ -100,6 +100,11 @@ $rules = @(
        Regex = 'WideCharToMultiByte\s*\([^;]*\bMB_(PRECOMPOSED|COMPOSITE|ERR_INVALID_CHARS|USEGLYPHCHARS)\b'
        Why   = 'WideCharToMultiByte takes WC_*; an MB_* flag with CP_UTF8 fails outright with ERROR_INVALID_FLAGS' },
 
+    @{ Name  = "Shell's composed menu must not carry MNS_NOTIFYBYPOS (docs/refactor/01 section 3a)"
+       Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
+       Regex = 'MNS_NOTIFYBYPOS'
+       Why   = 'measured: with TPM_RETURNCMD a by-position menu returns 1 and sends no WM_MENUCOMMAND, so the selection is lost - see src\tests\hostprobe\fixtures\question.notifybypos_with_returncmd.trace' },
+
     @{ Name  = 'SystemParametersInfo on the menu path must not broadcast (docs/refactor/02 section 4a)'
        Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
        Regex = 'SystemParametersInfoW?\s*\([^;]*SPIF_(SENDCHANGE|SENDWININICHANGE|UPDATEINIFILE)'

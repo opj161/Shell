@@ -1,0 +1,4 @@
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu

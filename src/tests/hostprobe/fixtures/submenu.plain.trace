@@ -1,0 +1,14 @@
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu

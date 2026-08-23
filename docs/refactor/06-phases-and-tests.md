@@ -75,14 +75,33 @@ in each is stated below rather than in a separate tracker.
 | ✅ | `SPI_SETMENUSHOWDELAY` `fWinIni = 0` | 3 |
 | ✅ | Config StaleWithError — a failed parse serves the live generation | 3 |
 | ✅ | Persisted last-known-good shadow + recovery on a fresh process | 3 |
-| ⬜ | **0.0 trace harness** — still not built; Phase 2.3 and four other items stay blocked on it | 0 |
+| ✅ | **0.0 trace harness** — `src/tests/hostprobe/`, 19 scenarios, baselines committed; Phase 2.3 and the four items gated on it are unblocked | 0 |
 | ⬜ | Provider deadline and deferral (§02.2a) — the remaining unbounded work on the menu thread | 1.3 |
 | ⬜ | Diagnostics ring (§02.6) | 1.4 |
 | ⬜ | Cold-start measurement, then the persistence decision for §02.1 step 3 | 1.5 |
 | ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B, TPM normalization | 2 |
 | ⬜ | `shell.exe -check`, circuit breaker, bypass gesture, taskbar Stage 2 | 3 |
 
-Two measurements were taken rather than assumed, and both are recorded where
+### What the harness settled (2026-08-24)
+
+The four questions §2 below listed as blocking design rules were recorded
+against untouched Windows, and two of them came back the opposite way round
+from the plan's assumption. Full detail and the deep links are in
+`src/tests/hostprobe/fixtures/README.md`; the consequences are folded into
+§01.3a and §05.4.
+
+| Question | Answer | What it changed |
+|---|---|---|
+| Does `TPM_RETURNCMD` leave a duplicate `WM_COMMAND`? | **No.** RETURNCMD is what suppresses it | `TPM_NONOTIFY` is never needed; its `HostProfile` opt-in is dropped rather than built |
+| What does `TPM_NONOTIFY` suppress? | The whole menu **lifecycle** — ENTERMENULOOP, INITMENU, INITMENUPOPUP, UNINITMENUPOPUP, EXITMENULOOP. `WM_COMMAND`, `WM_MENUSELECT`, `WM_MEASUREITEM` and `WM_DRAWITEM` all survive | Adding it would suppress the very `WM_INITMENUPOPUP` the bridge exists to deliver. The synthesised-`WM_MENUSELECT` design is dropped: nothing suppressed it |
+| Is the `WM_MENUCHAR` low word an index or an identifier? | **Index**, and an out-of-range one is refused rather than reinterpreted | Mnemonics (§05.4 Stage 1) unblocked as specified |
+| Is native replay sent or posted? | **Posted**, after `WM_EXITMENULOOP` and after the tracking call returns | QA-03 inverted: replay must post, not send |
+
+Plus one the plan had not asked: `MNS_NOTIFYBYPOS` and `TPM_RETURNCMD` do not
+compose — with both set the call returns 1 and no `WM_MENUCOMMAND` is sent, so
+the selection is lost. Shell's composed menu must never carry the style.
+
+Three measurements were taken rather than assumed, and all are recorded where
 the code that depends on them lives:
 
 - The packaged-verb scan, on this machine: 289 packages, 244 manifests read,
@@ -91,6 +110,8 @@ the code that depends on them lives:
   used to pay before anything was drawn (`Include/PackageCatalogService.h`).
 - The Recycle Bin premise behind item 0.9, probed rather than assumed (§0.9
   below).
+- The whole host-observable message stream, for 19 scenarios, recorded as
+  committed fixtures rather than reasoned about (`src/tests/hostprobe/`).
 
 Every fix above was verified to be *caught* by its test: the defect was
 reintroduced in a copy of the header, the suite rebuilt, and the specific test
@@ -162,10 +183,46 @@ MSAA exposure → mnemonics/type-ahead → smart columns → Reliability Center 
 favorites/recents → inspector. MSAA/mnemonics/columns can pull forward anytime (small,
 independent).
 
-## 2. Windows trace harness (`src/tests/hostprobe/`, new)
+## 2. Windows trace harness (`src/tests/hostprobe/`) — **built**
 
-The single highest-leverage testing investment (A1§25, A2§25). A small standalone
-exe + a hosted-test mode:
+```powershell
+src\bin\x64\hostprobe.exe                       # every scenario, printed
+src\bin\x64\hostprobe.exe question              # just the ones that assert
+src\bin\x64\hostprobe.exe --verify src\tests\hostprobe\fixtures
+```
+
+It builds on every platform and **is deliberately not run by `build.ps1`**: it
+creates a window and shows real popup menus, which does not belong in a
+developer's build. Execution is the interactive VM job.
+
+Three mechanics were established by probing rather than chosen, and each of the
+first attempts was wrong:
+
+- **Keys are posted to the owner's thread queue, not injected.** `SendInput`
+  would put real keystrokes into whatever holds the foreground. Measured
+  instead: the menu's modal loop reads keyboard messages off the *thread*
+  queue, so `PostThreadMessage` drives it identically to posting at the
+  `#32768` window — and depends on nothing undocumented, not even that class
+  name.
+- **Navigation is closed-loop.** Counting key presses is wrong three ways: a
+  separator is skipped silently, a press before the loop is reading is
+  discarded, and a `TPM_NONOTIFY` menu emits nothing at all until something is
+  selected. The first version counted presses and produced a scenario with an
+  empty trace that read as a discovery about Windows rather than as a harness
+  fault. The driver now steps and watches `WM_MENUSELECT` until the highlight is
+  where the script asked, and reports a navigation failure as a failure.
+- **A watchdog is always armed.** A menu left standing blocks the tracking call
+  forever. `EndMenu` ends "the calling thread's active menu" and the driver is
+  not that thread, so the watchdog uses the documented alternative — posting
+  `WM_CANCELMODE` to the owner.
+
+Two smaller things that keep runs identical: the popup is placed in the screen
+quadrant furthest from the live cursor (the first run drew it under the mouse
+and filled the trace with `MF_MOUSESELECT` hovers), and consecutive identical
+lines collapse, because an owner-drawn item is redrawn as often as the
+compositor likes.
+
+Original specification, for reference:
 
 - Creates real popup menus under a probe window whose WndProc records every message:
   WM_INITMENU, WM_INITMENUPOPUP(+lParam), WM_MENUSELECT, WM_MENUCHAR, WM_MEASUREITEM,
@@ -180,23 +237,34 @@ exe + a hosted-test mode:
   PopupInterceptionBackend to decide primary backend empirically (§01.9), and the
   TPM-replay ordering probe that gates Phase 2.3.
 
-Dedicated probes added from QA validation (all block their dependent design rules):
+Dedicated probes added from QA validation:
 
-1. **`WM_MENUCHAR` position-vs-ID** — record what untouched Windows does with a
-   returned LOWORD on current builds; *Using Menus* documents zero-based index
-   (QA-01). Gates §05.4 Stage 1.
-2. **`TPM_NONOTIFY` suppression set** — which of `WM_MENUSELECT`, `WM_MEASUREITEM`,
-   `WM_DRAWITEM`, `WM_COMMAND` still reach the owner with NONOTIFY set. The pages are
-   silent ("does not send notification messages", unenumerated). Gates the HostContract
-   rule freeze and any synthesized-notification design in §01.3.
-3. **UNINIT tolerance** — host receives `WM_UNINITMENUPOPUP` for a popup it never
+1. ✅ **`WM_MENUCHAR` position-vs-ID** (QA-01) —
+   `question.menuchar_low_word_is_an_index` and
+   `..._is_not_an_identifier`. Answer: index; out-of-range refused. §05.4
+   Stage 1 unblocked.
+2. ✅ **`TPM_NONOTIFY` suppression set** (QA-02) — `select.nonotify.*`,
+   `question.nonotify_still_measures_ownerdraw` and its control. Answer: the
+   lifecycle, not the notifications. §01.3a. Also settled the RETURNCMD
+   duplicate-`WM_COMMAND` question the same table was gating.
+3. ⬜ **UNINIT tolerance** — host receives `WM_UNINITMENUPOPUP` for a popup it never
    really tracked (LegacyEager descendants, §01.5 divergence note); must be non-fatal
-   for representative handlers.
-4. **Gesture non-interference** — bypass (`Ctrl+Alt+RClick`) and config-reload
-   (`Shift+Ctrl+RClick`) can never both fire from one click (QA-04).
-5. **Replay delivery-before-destroy** — if any posted-message replay variant is ever
-   considered, prove the host processes it before its own `DestroyMenu` runs
-   (QA-03); default design is synchronous precisely to avoid needing this.
+   for representative handlers. Needs a Shell-side scenario, not a native one, so it
+   lands with the takeover half of the harness.
+4. ⬜ **Gesture non-interference** — bypass (`Ctrl+Alt+RClick`) and config-reload
+   (`Shift+Ctrl+RClick`) can never both fire from one click (QA-04). Also
+   Shell-side; lands with the bypass gesture in Phase 3.
+5. ✅ **Replay delivery ordering** (QA-03) — answered the other way round.
+   `select.plain.classic` and `question.notifybypos_reports_a_position` show
+   Windows **posts** `WM_COMMAND`/`WM_MENUCOMMAND` after `WM_EXITMENULOOP` and
+   after the tracking call returns, so the replay design is posted, not
+   synchronous, and delivery-before-destroy is Windows' problem rather than one
+   Shell introduces.
+
+**Still to build: the takeover half.** Everything above records what *untouched
+Windows* does, which is the baseline and was the blocking half. Running the same
+scenarios through Shell's hook and diffing needs a deployed, injected build, so
+it is scheduled with the Phase 2.3 replay work rather than here.
 
 CI role: builds the probe on all platforms but *execution* requires an interactive
 desktop — run in the scheduled VM job (below), not PR CI.

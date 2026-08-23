@@ -125,8 +125,22 @@ word of the return value contains the **zero-based index** of the menu item". So
 current popup's composed order — never its command ID (synthetic IDs ≥ 0x0FFFFFFF would
 make Windows execute unrelated items). Match against stored mnemonics (`title.normalize`
 already parsed, `MenuItem.h:198`); duplicate mnemonics cycle per press, Windows-native.
-Replaces today's swallow cases (`ContextMenu.cpp:6590-6593`). Position-vs-ID behavior
-pinned by a §06.2 probe case before implementation.
+Replaces today's swallow cases (`ContextMenu.cpp:6590-6593`).
+
+**Position-vs-ID is now measured, and the probe is committed.** Against a menu
+whose items carry identifiers 5001…5005, replying `MAKELRESULT(2, MNC_EXECUTE)`
+selects **5003** — the item at index 2 — and replying
+`MAKELRESULT(5003, MNC_EXECUTE)` selects **nothing**: an out-of-range index is
+refused, not reinterpreted as an identifier
+(`src/tests/hostprobe/fixtures/question.menuchar_low_word_is_*`, Windows 11
+26200.8875 x64, 2026-08-24). So the stated rule holds and the failure mode it
+guards against is real: a synthetic ID at or above `0x0FFFFFFF` in the low word
+would simply lose the keystroke. Stage 1 is unblocked.
+
+One incidental behaviour to expect when implementing: the `WM_MENUSELECT` that
+follows an `MNC_EXECUTE` reply carries `MF_MOUSESELECT`, although nothing was
+clicked. Anything keying off that flag to distinguish mouse from keyboard will
+be wrong for mnemonics.
 Stage 2 — prefix type-ahead: buffer chars for 1 s; select first visible match
 (composed items + materialized natives); no lazy-tree violation: unmatched-deep search
 stays out; optional "Search deeper…" item defers to a later phase (A2§20 caution).
