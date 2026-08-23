@@ -148,6 +148,33 @@ Worked examples from this codebase:
 - Checking whether reconstructing `@{PackageFullName? ms-resource://…}` would fix
   `appx.name`: it resolved 2 of 38 packages, so it was not worth adding.
 
+Three things reliably waste a probe's first attempt on this machine, all of
+them avoidable:
+
+- **Write source files with a file-writing tool, never a shell heredoc.** The
+  Windows shells here are reached through enough layers that a backslash in
+  C++ does not survive: `L'\\'` arrives as `L'\'`, which fails to compile with
+  `C2017: illegal escape sequence` two lines away from anything that looks
+  wrong. Nesting a heredoc inside another language multiplies the problem.
+  Where a literal separator is genuinely needed, `const wchar_t sep = 0x5C;`
+  sidesteps the question entirely.
+- **Pass `-NoProfile` to every `powershell` invocation.** `build.ps1` already
+  does for `check-invariants.ps1`. Without it the cost is whatever the
+  machine's PowerShell profile costs — about forty seconds here — and it looks
+  exactly like the script being slow, which is a long way to chase for
+  nothing.
+- **Do not check line endings with `sed`, `cat -A` or `file`.** The MSYS tools
+  in Git Bash are in text mode and will show you clean `$` line ends on a file
+  that is CRLF, or the reverse. `.gitattributes` checks source out as CRLF, so
+  when a change might have introduced bare LF, count the bytes:
+  `python -c "d=open(p,'rb').read(); print(d.count(b'\n')-d.count(b'\r\n'))"`.
+  Zero is the answer you want.
+
+A probe that links repository sources needs the same include roots and
+libraries the owning project lists, not a minimal guess — `src\dll\src` for
+`Include/...` paths, `src\shared` for `System.h`, and `user32.lib` for
+`Packages.cpp`, whose `icontains` calls `CharUpperW`.
+
 Then encode the invariant in `src/tests`. The suites are dependency-free and
 self-registering; see `src/tests/test.h`. Prefer testing a real invariant over a
 mock: `test_native_menu_lazy` drives a real owner window whose child popups sleep
