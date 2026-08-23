@@ -55,6 +55,9 @@ namespace hostprobe
 
 		HMENU build(MenuShape shape, bool notify_by_pos)
 		{
+			if(shape == MenuShape::Invalid)
+				return reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(0xDEAD0001));
+
 			auto root = ::CreatePopupMenu();
 
 			::AppendMenuW(root, MF_STRING, FIRST_ID + 0, L"&Alpha");
@@ -187,10 +190,27 @@ namespace hostprobe
 		result.navigation_failed = probe.navigation_failed();
 		result.last_error = probe.last_error();
 		result.trace = probe.trace().render();
+		result.draw_items = probe.draw_items();
+
+		// The trace on its own does not pin the thing that most often matters.
+		// cancel.returncmd and cancel.plain produce identical message streams and
+		// return 0 and 1 respectively; without this line a fixture would not
+		// notice if those swapped. The last-error code is reduced to set/none
+		// because its exact value after a *successful* call is not something to
+		// hold Windows to, while "a failure sets one" is the whole distinction
+		// HostContract.h depends on.
+		{
+			wchar_t summary[160];
+			::swprintf_s(summary, L"= returned %d, lasterror %s, ownerdrawn %s\n",
+						 result.returned,
+						 result.last_error == ERROR_SUCCESS ? L"none" : L"set",
+						 result.draw_items ? L"drawn" : L"not drawn");
+			result.trace += summary;
+		}
+
 		result.command_ids = probe.trace().count(WM_COMMAND);
 		result.menu_commands = probe.trace().count(WM_MENUCOMMAND);
 		result.measure_items = probe.trace().count(WM_MEASUREITEM);
-		result.draw_items = probe.trace().count(WM_DRAWITEM);
 		result.menu_selects = probe.trace().count(WM_MENUSELECT);
 		result.init_popups = probe.trace().count(WM_INITMENUPOPUP);
 		result.uninit_popups = probe.trace().count(WM_UNINITMENUPOPUP);
@@ -202,7 +222,8 @@ namespace hostprobe
 		if(probe.trace().first(WM_MENUCOMMAND, &by_pos))
 			result.command_position = static_cast<UINT>(by_pos.wparam);
 
-		::DestroyMenu(menu);
+		if(s.shape != MenuShape::Invalid)
+			::DestroyMenu(menu);
 		return result;
 	}
 
@@ -327,7 +348,7 @@ namespace hostprobe
 				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_RETURNCMD;
 				s.shape = MenuShape::WithOwnerDraw;
 				s.script = ScriptKind::SelectSecond;
-				s.expectation = Expect::MeasureItemArrives;
+				s.expectation = Expect::OwnerDrawReachesTheOwner;
 				s.why = L"the pages say only 'does not send notification "
 						L"messages' without enumerating which";
 				v.push_back(s);
@@ -340,7 +361,7 @@ namespace hostprobe
 				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
 				s.shape = MenuShape::WithOwnerDraw;
 				s.script = ScriptKind::SelectSecond;
-				s.expectation = Expect::MeasureItemArrives;
+				s.expectation = Expect::OwnerDrawReachesTheOwner;
 				s.why = L"control for the NONOTIFY comparison";
 				v.push_back(s);
 			}
@@ -370,6 +391,25 @@ namespace hostprobe
 				s.expectation = Expect::Record;
 				s.why = L"undecided in the plan; recorded so the replay rule can "
 						L"be written against what Windows does";
+				v.push_back(s);
+			}
+
+			{
+				// Q5. "If the user cancels the menu without making a selection,
+				// or if an error occurs, the return value is zero" - so under
+				// TPM_RETURNCMD the two are indistinguishable by return value,
+				// and Shell has to tell them apart to know whether to answer a
+				// notifying host TRUE or FALSE. Does the last-error code
+				// separate them? Cancel is recorded as leaving it at 0
+				// (cancel.returncmd), so this asks what a real failure leaves.
+				Scenario s;
+				s.name = L"question.a_failed_track_sets_a_last_error";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
+				s.shape = MenuShape::Invalid;
+				s.script = ScriptKind::Cancel;
+				s.expectation = Expect::FailedWithLastError;
+				s.why = L"Include/HostContract.h has to answer a notifying host "
+						L"TRUE for a cancel and FALSE for a failure";
 				v.push_back(s);
 			}
 

@@ -79,7 +79,8 @@ in each is stated below rather than in a separate tracker.
 | ⬜ | Provider deadline and deferral (§02.2a) — the remaining unbounded work on the menu thread | 1.3 |
 | ⬜ | Diagnostics ring (§02.6) | 1.4 |
 | ⬜ | Cold-start measurement, then the persistence decision for §02.1 step 3 | 1.5 |
-| ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B, TPM normalization | 2 |
+| ✅ | TPM normalization — `TPM_RETURNCMD` always added, native replay posted, synthetic identifiers no longer reach the host | 2.3 |
+| ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B | 2 |
 | ⬜ | `shell.exe -check`, circuit breaker, bypass gesture, taskbar Stage 2 | 3 |
 
 ### What the harness settled (2026-08-24)
@@ -149,10 +150,18 @@ shows provider table populated with a `deferred` count.
 
 1. `TakeoverSession` consolidation (§01.2) — no behavior change.
 2. `NativeMenuBridge` INIT/UNINIT pairing (§01.5) + tests.
-3. HostContract normalization behind the probe gate (§01.3): land internal
-   **`TPM_RETURNCMD`-only** tracking + replay after harness equivalence is
-   demonstrated for native items across the TPM matrix. `TPM_NONOTIFY` is added only
-   if probe 2 shows a duplicate `WM_COMMAND`, and then per `HostProfile` (§07 A4).
+3. ✅ HostContract normalization (§01.3), landed as `Include/HostContract.h`
+   after the harness answered its gating questions. `TPM_RETURNCMD` is now
+   always added and `TPM_NONOTIFY` never is — probe 2 showed no duplicate
+   `WM_COMMAND` to suppress, so the `HostProfile` opt-in for NONOTIFY was
+   dropped rather than built. Native replay is posted rather than sent, per the
+   reversed QA-03.
+
+   One thing the plan did not anticipate: adding `TPM_RETURNCMD` makes a
+   cancelled menu and a *failed* tracking call return the same 0, which would
+   have made Shell answer a notifying host TRUE for a menu that never appeared.
+   A twentieth scenario established that the last-error code separates them
+   (`question.a_failed_track_sets_a_last_error`).
 4. WinEvent lifecycle state machine (§01.6).
 5. Flicker-hack A/B benchmark → gate/delete (§02.4). *(SPI: see Phase 3.)*
 

@@ -3,6 +3,7 @@
 #include "Include/ContextMenu.h"
 #include "Include/ShellExt.h"
 #include "Include/ComActivationPolicy.h"
+#include "Include/HostContract.h"
 #include "Include/PackageCatalogService.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/TaskbarHitCache.h"
@@ -844,10 +845,16 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	// SEH function: cannot hold an object that requires unwinding.
 	auto perf_pre_display = perf::menu_perf_begin();
 
+	// Distinguishes a menu the user dismissed from a call that never showed one.
+	// Both return zero once TPM_RETURNCMD is set, and the last-error code is what
+	// tells them apart - measured, not documented. See Include/HostContract.h.
+	auto track_error = static_cast<DWORD>(ERROR_SUCCESS);
+
 	auto invoke = [&](HMENU hmenu, uint32_t flag, Point pt)
 	{
 		if(!invoked)
 		{
+			::SetLastError(ERROR_SUCCESS);
 			if(tfunc == 0)
 			{
 				// Calling the real TrackPopupMenu here would re-enter this hook:
@@ -867,6 +874,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				result = iathook_NtUserTrackPopupMenuEx.invoke<decltype(TrackPopupMenuExProc)>(hmenu, flag, pt.x, pt.y, hWnd, lptpm);
 			else
 				result = ::TrackPopupMenuEx(hmenu, flag, pt.x, pt.y, hWnd, lptpm);
+			track_error = ::GetLastError();
 			invoked = true;
 		}
 	};
@@ -904,10 +912,12 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				if(ctx != nullptr)
 				{
 
-					Flag<uint32_t> flag(uFlags);
-					//Selections::point = { x, y };
-					//	flag.remove(TPM_RETURNCMD);
-					flag.remove(TPM_NONOTIFY);
+					// Add TPM_RETURNCMD, drop TPM_NONOTIFY. Both halves and the
+					// reasons are in Include/HostContract.h; the short version
+					// is that without RETURNCMD the tracked menu answers TRUE
+					// instead of an identifier, so InvokeCommand matches nothing
+					// and the user's own command silently does not run.
+					Flag<uint32_t> flag(plan_host_track(uFlags).flags);
 					//	flag.remove(TPM_NOANIMATION);
 
 				//	flag.add(TPM_HORPOSANIMATION);
@@ -1000,10 +1010,32 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					perf::menu_perf_end(perf_pre_display, L"popup.total_pre_display");
 
 					invoke(ctx->MenuHandle(), flag, { x, y });
-				
+
 					// v = 0;
 					// SystemParametersInfoW(SPI_SETMENUANIMATION, 0, &v, SPIF_SENDCHANGE);
+
+					// With TPM_RETURNCMD now always set, this is the identifier
+					// of the chosen item rather than TRUE.
+					auto selected = result;
+					auto failed = selected == 0 && track_error != ERROR_SUCCESS;
 					result = ctx->InvokeCommand(result);
+
+					// ctx is gone - InvokeCommand deletes it - so everything the
+					// host contract needs was already read out of it above.
+					auto completion = complete_host_contract(uFlags, selected, result, failed);
+					result = completion.result;
+
+					if(completion.notify == HostNotification::Command)
+					{
+						// Posted, not sent: Windows posts this after the tracking
+						// call returns, and a host that receives it before its own
+						// call has returned is seeing a sequence the real API
+						// never produces. Measured in
+						// src\tests\hostprobe\fixtures\select.plain.classic.trace.
+						// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex
+						::PostMessageW(hWnd, WM_COMMAND,
+									   MAKEWPARAM(completion.notify_id, 0), 0);
+					}
 					__leave;
 				}
 			}

@@ -7,3 +7,4 @@ WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
 WM_MENUSELECT        item=0 flags=CLOSED menu=null
 WM_EXITMENULOOP
 WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn

@@ -11,7 +11,34 @@ These are measurements, not specifications. A different Windows build may
 legitimately produce a different stream; that is the thing the fixtures exist to
 notice. When one changes, record the new build and the diff rather than
 overwriting silently — this directory's value is that it says what *this* Windows
-did, and the four findings below are things no documentation states.
+did, and the findings below are things no documentation states.
+
+## Reading a trace
+
+One line per observed message, handles replaced by aliases assigned in
+first-seen order, and a summary line at the end:
+
+```
+= returned 1, lasterror none, ownerdrawn not drawn
+```
+
+The summary exists because the message stream alone does not pin the thing that
+most often matters. `cancel.returncmd` and `cancel.plain` produce *identical*
+streams and return 0 and 1 respectively; without that line a fixture would not
+notice if the two swapped.
+
+Two deliberate omissions:
+
+- **`WM_DRAWITEM` is counted, not listed.** It is a paint — how many arrive and
+  where they fall among the selections depends on repaints, not on the menu
+  contract, and recording it inline made the two owner-draw scenarios fail their
+  own baseline on a re-run. What is worth pinning, that it survives
+  `TPM_NONOTIFY` at all, is the `ownerdrawn` field.
+- **The exact last-error value is reduced to `none`/`set`.** Its value after a
+  *successful* call is not something to hold Windows to; that a *failure* sets
+  one is the whole distinction `Include/HostContract.h` depends on.
+
+Consecutive identical lines collapse to one.
 
 ## What the baselines established
 
@@ -79,6 +106,20 @@ after `WM_EXITMENULOOP`. That is consistent with "The window does not receive a
 replay that sends the message synchronously from inside the hook is *less*
 faithful than one that posts it — the opposite of what `docs/refactor/01`
 §3 assumed under QA-03.
+
+### A failed track is distinguishable from a cancelled one, but only by the last error
+
+`question.a_failed_track_sets_a_last_error` tracks a handle that is not a menu:
+the call returns 0 and sets `ERROR_INVALID_MENU_HANDLE` (1401), while
+`cancel.returncmd` returns the same 0 and leaves the last error at 0.
+
+The documentation says the two are indistinguishable — "If the user cancels the
+menu without making a selection, or if an error occurs, the return value is
+zero" — and once Shell always sets `TPM_RETURNCMD` they really do collapse to
+the same value, so a notifying host would be told the menu succeeded when it
+never appeared. `Include/HostContract.h` uses the last-error code to separate
+them. That is **undocumented behaviour**, isolated to one boolean at one call
+site and pinned by this scenario.
 
 ### Submenu teardown is inside-out
 

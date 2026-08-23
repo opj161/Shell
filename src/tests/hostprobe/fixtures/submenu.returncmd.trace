@@ -11,3 +11,4 @@ WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
 WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
 WM_MENUSELECT        item=0 flags=CLOSED menu=null
 WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn

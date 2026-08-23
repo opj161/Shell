@@ -28,12 +28,22 @@ using namespace hostprobe;
 
 namespace
 {
-	std::wstring read_file(const std::wstring &path)
+	// `found` is separate from emptiness on purpose: a scenario whose owner
+	// window observes nothing at all - a call that failed before showing a menu -
+	// has an empty trace, and that is the observation rather than a missing
+	// baseline.
+	std::wstring read_file(const std::wstring &path, bool *found)
 	{
+		if(found)
+			*found = false;
+
 		auto h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
 							   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 		if(h == INVALID_HANDLE_VALUE)
 			return std::wstring();
+
+		if(found)
+			*found = true;
 
 		std::string bytes;
 		char buf[4096];
@@ -131,10 +141,24 @@ namespace
 					  L"%zu WM_MENUCOMMAND\n", r.command_ids, r.menu_commands);
 			return 1;
 
-		case Expect::MeasureItemArrives:
-			if(r.measure_items > 0)
+		case Expect::OwnerDrawReachesTheOwner:
+			// Both halves, because the NONOTIFY question is whether an
+			// owner-drawn menu can be tracked with that flag at all - and it
+			// cannot if either the measure or the draw is suppressed.
+			if(r.measure_items > 0 && r.draw_items > 0)
 				return 0;
-			::wprintf(L"    FAIL no WM_MEASUREITEM reached the owner\n");
+			::wprintf(L"    FAIL owner-draw did not reach the owner: %zu "
+					  L"WM_MEASUREITEM, %zu WM_DRAWITEM\n",
+					  r.measure_items, r.draw_items);
+			return 1;
+
+		case Expect::FailedWithLastError:
+			// The distinction Shell needs: a cancelled track returns 0 and
+			// leaves the last error alone; a failed one returns 0 and sets it.
+			if(r.returned == 0 && r.last_error != ERROR_SUCCESS)
+				return 0;
+			::wprintf(L"    FAIL expected a failed call with a last error, got "
+					  L"%d / %lu\n", r.returned, r.last_error);
 			return 1;
 
 		case Expect::MenuCommandPositionEquals:
@@ -219,8 +243,9 @@ int __cdecl wmain(int argc, wchar_t **argv)
 		if(!verify_dir.empty())
 		{
 			auto path = verify_dir + L"\\" + s.name + L".trace";
-			auto expected = read_file(path);
-			if(expected.empty())
+			bool found = false;
+			auto expected = read_file(path, &found);
+			if(!found)
 			{
 				::wprintf(L"    FAIL no baseline at %s\n", path.c_str());
 				failures++;

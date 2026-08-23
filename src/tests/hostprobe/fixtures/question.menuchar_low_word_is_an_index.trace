@@ -6,3 +6,4 @@ WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
 WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
 WM_MENUSELECT        item=0 flags=CLOSED menu=null
 WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn

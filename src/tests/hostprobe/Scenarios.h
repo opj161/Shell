@@ -7,7 +7,10 @@
 
 namespace hostprobe
 {
-	enum class MenuShape { Flat, WithSubmenu, WithOwnerDraw };
+	// Invalid is not a shape so much as the absence of one: it tracks a handle
+	// that is not a menu, to find out how a *failed* call differs from a
+	// cancelled one.
+	enum class MenuShape { Flat, WithSubmenu, WithOwnerDraw, Invalid };
 
 	enum class ScriptKind { SelectSecond, SelectInSubmenu, Cancel, UnmatchedChar };
 
@@ -19,8 +22,9 @@ namespace hostprobe
 		ReturnEquals,
 		ReturnDiffers,
 		NoCommandMessage,
-		MeasureItemArrives,
+		OwnerDrawReachesTheOwner,
 		MenuCommandPositionEquals,
+		FailedWithLastError,
 	};
 
 	struct Scenario

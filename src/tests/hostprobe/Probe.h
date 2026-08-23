@@ -164,6 +164,7 @@ namespace hostprobe
 			_last_error = 0;
 			_select_count.store(0);
 			_popup_count.store(0);
+			_draw_items.store(0);
 			_selected_item.store(0);
 			_selected_is_popup.store(false);
 			::ResetEvent(_menu_up);
@@ -330,6 +331,19 @@ namespace hostprobe
 		LRESULT on_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		{
 			auto name = message_name(msg);
+
+			// WM_DRAWITEM is counted but kept out of the trace text. It is a
+			// paint: how many arrive and where they interleave with selection is
+			// a function of repaints, not of the menu contract, and recording it
+			// inline made two scenarios fail their own baseline on a re-run. What
+			// is worth pinning - that it survives TPM_NONOTIFY at all - is in the
+			// summary line every trace ends with.
+			if(msg == WM_DRAWITEM)
+			{
+				_draw_items.fetch_add(1);
+				name = nullptr;
+			}
+
 			if(name)
 				record(name, msg, wp, lp);
 
@@ -486,6 +500,7 @@ namespace hostprobe
 		// re-entrancy rules exist to forbid.
 		std::atomic<size_t> _select_count{ 0 };
 		std::atomic<size_t> _popup_count{ 0 };
+		std::atomic<size_t> _draw_items{ 0 };
 		std::atomic<UINT> _selected_item{ 0 };
 		std::atomic<bool> _selected_is_popup{ false };
 		bool _navigation_failed{};
@@ -493,5 +508,6 @@ namespace hostprobe
 	public:
 		bool navigation_failed() const { return _navigation_failed; }
 		void clear_navigation_failure() { _navigation_failed = false; }
+		size_t draw_items() const { return _draw_items.load(); }
 	};
 }

@@ -84,6 +84,7 @@
     <ClInclude Include="..\dll\src\Include\BitmapCache.h" />
     <ClInclude Include="..\dll\src\Include\ComActivationPolicy.h" />
     <ClInclude Include="..\dll\src\Include\ConfigLifecycle.h" />
+    <ClInclude Include="..\dll\src\Include\HostContract.h" />
     <ClInclude Include="..\dll\src\Include\PackageCatalogService.h" />
     <ClInclude Include="..\dll\src\Include\MenuText.h" />
     <ClInclude Include="..\dll\src\Include\NativeMenuLazy.h" />
@@ -135,6 +136,7 @@
     <ClCompile Include="test_config_lifecycle.cpp" />
     <ClCompile Include="test_package_catalog.cpp" />
     <ClCompile Include="test_config_shadow.cpp" />
+    <ClCompile Include="test_host_contract.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression
        tests exercise the real evaluator instead of a copy of it. The closure is
