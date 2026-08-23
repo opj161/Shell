@@ -3922,7 +3922,15 @@ namespace Nilesoft
 
 				if(_showdelay[1] != _showdelay[0])
 				{
-					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[1], nullptr, SPIF_SENDCHANGE);
+					// fWinIni = 0: change this process's view of the setting and
+					// nothing else. It "can be zero if you do not want to update
+					// the user profile or broadcast the WM_SETTINGCHANGE message";
+					// SPIF_SENDCHANGE (== SPIF_SENDWININICHANGE, WinUser.h) does
+					// broadcast it "to all top-level windows", running every one of
+					// their window procedures - and init_cfg() runs per menu, so
+					// that was two desktop-wide broadcasts per right-click.
+					// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
+					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[1], nullptr, 0);
 				}
 			}
 
@@ -4974,7 +4982,8 @@ namespace Nilesoft
 
 				if(_showdelay[0] != UINT32_MAX && _showdelay[1] != UINT32_MAX && _showdelay[0] != _showdelay[1])
 				{
-					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[0], nullptr, SPIF_SENDCHANGE);
+					// Transient restore, same reasoning as the set in init_cfg().
+					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[0], nullptr, 0);
 					_showdelay[0] = UINT32_MAX;
 				}
 

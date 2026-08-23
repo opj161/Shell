@@ -82,7 +82,12 @@ $rules = @(
     @{ Name  = 'MB_* conversion flags must not be passed to WideCharToMultiByte'
        Dir   = 'src'; Include = @('*.h', '*.cpp')
        Regex = 'WideCharToMultiByte\s*\([^;]*\bMB_(PRECOMPOSED|COMPOSITE|ERR_INVALID_CHARS|USEGLYPHCHARS)\b'
-       Why   = 'WideCharToMultiByte takes WC_*; an MB_* flag with CP_UTF8 fails outright with ERROR_INVALID_FLAGS' }
+       Why   = 'WideCharToMultiByte takes WC_*; an MB_* flag with CP_UTF8 fails outright with ERROR_INVALID_FLAGS' },
+
+    @{ Name  = 'SystemParametersInfo on the menu path must not broadcast (docs/refactor/02 section 4a)'
+       Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
+       Regex = 'SystemParametersInfoW?\s*\([^;]*SPIF_(SENDCHANGE|SENDWININICHANGE|UPDATEINIFILE)'
+       Why   = 'broadcasts WM_SETTINGCHANGE to every top-level window twice per menu; pass fWinIni 0' }
 )
 
 # Enable each of these as its phase lands; see docs/refactor/06 and 07.
@@ -90,12 +95,7 @@ $deferredRules = @(
     @{ Name  = '[DEFERRED Phase 1] GetState(TRUE) before first paint is forbidden (docs/refactor/02 section 2)'
        Dir   = 'src\dll\src'; Include = @('ExplorerCommand.cpp')
        Regex = 'GetState\s*\([^)]*,\s*TRUE\s*,'
-       Why   = 'fOkToBeSlow TRUE lets a verb handler stall the menu thread without bound' },
-
-    @{ Name  = '[DEFERRED Phase 3] SPIF_SENDCHANGE on the menu path is forbidden (docs/refactor/02 section 4)'
-       Dir   = 'src\dll\src'; Include = @('ContextMenu.cpp')
-       Regex = 'SystemParametersInfoW?\s*\([^;]*SPIF_SENDCHANGE'
-       Why   = 'broadcasts WM_SETTINGCHANGE to every top-level window twice per menu; pass fWinIni 0' }
+       Why   = 'fOkToBeSlow TRUE lets a verb handler stall the menu thread without bound' }
 )
 
 function Test-Rules
