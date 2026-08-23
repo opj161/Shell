@@ -159,11 +159,65 @@ for each candidate command:
   registration order, so an item that was deferred once does not jump position when
   it appears next time.
 
-Acceptance: with a deliberately slow fake provider (sleep 2 s in `GetState`), the
-menu paints within the normal budget, the slow item is absent from the first menu and
-present in the second, and no UI thread ever blocks longer than the per-menu budget.
-Test: extend `test_explorer_command.cpp`'s fake-command pattern with an injected clock
-and a blocking fake.
+### 2a-i. As implemented (2026-08-24) — measured first, and the plan resized
+
+The table above named the calls but not their cost. Probed on this machine
+(Windows 11 26200.8875 x64), 23 registered handlers, single-file selection,
+doing exactly what `fill_menuitem_from_explorer_command` does:
+
+| | ms on the menu thread |
+|---|---|
+| first menu in a process | **~700** |
+| **every menu after that** | **~170** |
+| of which `CoCreateInstance` | ~46 (about 2 ms × 23, *warm*) |
+| of which icon extraction | ~32 |
+| worst single provider | ~62, warm, every time |
+
+170 ms **per right-click**, before anything is drawn — eleven times the 15 ms
+first-paint budget, and larger than the 111 ms packaged-verb scan that `7ee2433`
+moved off this thread. This was the biggest remaining item and the plan had it
+right in principle; it had the *remedy* wrong in two ways.
+
+**Wrong remedy 1: cache the presentation.** The plan proposed caching
+title/state/icon keyed by `(clsid, selection_shape)`. But `GetTitle` and
+`GetState` genuinely depend on the selection — a title can embed a filename —
+so any shape coarser than the exact selection risks showing a wrong one. The
+measurement points somewhere better: **`CoCreateInstance` is the largest single
+line and is the one call that takes no selection at all.** Keeping activated
+providers alive per thread takes a warm menu from ~170 ms to ~41 ms with *no*
+staleness risk, because every menu still asks a live object fresh. That is what
+landed, in `ExplorerCommand.cpp`.
+
+**Wrong remedy 2: resolve on a worker under a deadline.** The `IExplorerCommand`
+page says "These methods are called on the UI thread"
+(<https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand>)
+— that is the environment handlers are written against, and moving them to a
+thread that owns no windows is a divergence whose blast radius cannot be tested
+here. So the calls stay on the menu thread, bounded by a whole-menu budget and
+by remembering which providers have never once been quick
+(`Include/ProviderHealth.h`).
+
+**The consequence, stated rather than hidden:** a single provider that blocks for
+seconds still blocks *one* menu. The plan's acceptance criterion — a fake
+provider sleeping 2 s does not delay first paint at all — is not met, and cannot
+be without taking the call off the UI thread. What is met is that it delays
+exactly one menu and is then skipped, with a re-probe every 200 menus so the
+exclusion is not permanent.
+
+**One trap worth recording, because the design was one line from having it.**
+On the first menu everything is cold and therefore looks pathological. A policy
+that condemned a provider on one slow sample would defer whatever the budget let
+it sample, two per menu — and within a dozen right-clicks the menu would contain
+no packaged verbs at all, permanently, which is far worse than the latency it
+set out to fix. Judgement is therefore on a provider's *best* time and never
+before its second sample. `test_provider_health.cpp` simulates the whole
+sequence; injecting the one-sample rule fails it 24 times.
+
+Acceptance, restated against what was built: a warm menu costs ~41 ms of
+provider work rather than ~170 ms; the first menu in a process is bounded by the
+budget instead of costing ~700 ms; a provider that has never been quick is
+skipped and recorded as `Deferred` in the ring; and no provider's exclusion is
+permanent.
 
 ## 3. Selection array reuse
 

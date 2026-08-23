@@ -76,7 +76,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Config StaleWithError — a failed parse serves the live generation | 3 |
 | ✅ | Persisted last-known-good shadow + recovery on a fresh process | 3 |
 | ✅ | **0.0 trace harness** — `src/tests/hostprobe/`, 19 scenarios, baselines committed; Phase 2.3 and the four items gated on it are unblocked | 0 |
-| ⬜ | Provider deadline and deferral (§02.2a) — the remaining unbounded work on the menu thread | 1.3 |
+| ✅ | Provider budget and deferral (§02.2a) — live providers reused per thread, whole-menu budget, slow ones remembered. Warm menu ~170 ms → ~41 ms | 1.3 |
 | ✅ | Diagnostics ring (§02.6) — always-on phase timing, 47.8 ns per phase; the registry value now gates only the log file | 1.4 |
 | ⬜ | Cold-start measurement, then the persistence decision for §02.1 step 3 | 1.5 |
 | ✅ | TPM normalization — `TPM_RETURNCMD` always added, native replay posted, synthetic identifiers no longer reach the host | 2.3 |
@@ -111,8 +111,14 @@ the code that depends on them lives:
   used to pay before anything was drawn (`Include/PackageCatalogService.h`).
 - The Recycle Bin premise behind item 0.9, probed rather than assumed (§0.9
   below).
-- The whole host-observable message stream, for 19 scenarios, recorded as
+- The whole host-observable message stream, for 20 scenarios, recorded as
   committed fixtures rather than reasoned about (`src/tests/hostprobe/`).
+- The packaged-verb *providers*, which turned out to cost far more than the
+  scan did: **~700 ms on the first menu in a process and ~170 ms on every menu
+  after it**, of which ~46 ms is `CoCreateInstance` alone, warm. That number is
+  what re-shaped §02.2a (`Include/ProviderHealth.h`).
+- The diagnostics ring's own overhead, against the budget set for it: 47.8 ns
+  per phase, ~0.6 µs per menu (`Include/Diagnostics/DiagnosticsRing.h`).
 
 Every fix above was verified to be *caught* by its test: the defect was
 reintroduced in a copy of the header, the suite rebuilt, and the specific test

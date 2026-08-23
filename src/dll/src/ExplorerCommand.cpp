@@ -1,6 +1,8 @@
 #include <pch.h>
 #include "Include/ExplorerCommandCatalog.h"
 #include "Include/PackageCatalogService.h"
+#include "Include/ProviderHealth.h"
+#include "Include/Diagnostics/DiagnosticsRing.h"
 #include "Include/ContextMenu.h"
 
 #include <shobjidl.h>
@@ -86,11 +88,107 @@ namespace Nilesoft
 				return cmd;
 			}
 
-			bool fill_menuitem_from_explorer_command(menuitem_t *item,
+			/*
+				Activated providers, kept alive and reused.
+
+				Measured on this machine: CoCreateInstance costs about 2 ms per
+				provider even fully warm, 46 ms across the 23 registered here,
+				and that was paid again on every single right-click. It is also
+				the one call in the sequence that has nothing to do with the
+				selection - GetState, GetTitle and GetIcon each take an
+				IShellItemArray parameter, so a live IExplorerCommand is meant to
+				be asked again about something else. Keeping them takes a warm
+				menu from ~170 ms to ~41 ms. See Include/ProviderHealth.h.
+
+				Thread-local, and that is the whole of the apartment story. These
+				are COM objects created in the menu thread's apartment, and
+				"interface pointers must be marshaled when passed between
+				apartments" - so rather than marshal, each thread keeps its own
+				and never lends them out. Explorer raises its menus from the same
+				thread over and over, which is exactly the case this helps.
+				https://learn.microsoft.com/en-us/windows/win32/com/single-threaded-apartments
+
+				No destructor runs on these. The module is pinned for the life of
+				the host and a thread-local destructor firing while another
+				thread is inside a menu is a shutdown crash waiting for a bad
+				day; a released process is a released process.
+			*/
+			struct CachedProvider
+			{
+				GUID clsid{};
+				IExplorerCommand *cmd{};
+			};
+
+			std::vector<CachedProvider> &provider_cache()
+			{
+				static thread_local std::vector<CachedProvider> cache;
+				return cache;
+			}
+
+			// Returns a pointer the caller owns a reference to, from the cache if
+			// this thread has one. The cache keeps its own reference, so the
+			// caller releases exactly as it always did.
+			IExplorerCommand *acquire_explorer_command(const GUID &clsid)
+			{
+				auto &cache = provider_cache();
+				for(auto &entry : cache)
+				{
+					if(::IsEqualGUID(entry.clsid, clsid) && entry.cmd)
+					{
+						entry.cmd->AddRef();
+						return entry.cmd;
+					}
+				}
+
+				auto cmd = activate_explorer_command(clsid);
+				if(!cmd)
+					return nullptr;
+
+				cmd->AddRef();				// one for the cache, one for the caller
+				cache.push_back({ clsid, cmd });
+				return cmd;
+			}
+
+			// Drops a provider this thread has stopped trusting - it failed a
+			// call it had answered before, so the object may be in a state its
+			// author never expected to be reused from. The next menu activates a
+			// fresh one.
+			void forget_explorer_command(const GUID &clsid)
+			{
+				auto &cache = provider_cache();
+				for(size_t i = 0; i < cache.size(); i++)
+				{
+					if(::IsEqualGUID(cache[i].clsid, clsid))
+					{
+						if(cache[i].cmd)
+							cache[i].cmd->Release();
+						cache.erase(cache.begin() + static_cast<ptrdiff_t>(i));
+						return;
+					}
+				}
+			}
+
+			// Why an item did or did not end up in the menu.
+			//
+			// "It declined to appear" and "it errored" used to be the same
+			// answer, which was harmless while every menu activated a fresh
+			// object and stopped being harmless the moment they are reused: half
+			// the providers on this machine legitimately return no title for a
+			// given selection, and dropping a cached object for that would
+			// re-activate them on every single right-click - exactly the cost
+			// the cache exists to remove.
+			enum class FillResult
+			{
+				Shown,
+				Hidden,		// a live provider that has nothing to offer here
+				Failed,		// the call itself did not succeed
+			};
+
+			FillResult fill_menuitem_from_explorer_command(menuitem_t *item,
 				IExplorerCommand *cmd, IShellItemArray *selection)
 			{
 				if(!item || !cmd)
-					return false;
+					return FillResult::Failed;
 
 				EXPCMDSTATE state = ECS_ENABLED;
 				// fOkToBeSlow is FALSE and stays FALSE on this path. It means the
@@ -115,13 +213,18 @@ namespace Nilesoft
 					hr_state = S_OK;
 				}
 				if(SUCCEEDED(hr_state) && (state & ECS_HIDDEN))
-					return false;
+					return FillResult::Hidden;
 
 				LPWSTR title = nullptr;
-				if(FAILED(cmd->GetTitle(selection, &title)) || !title || !*title)
+				auto hr_title = cmd->GetTitle(selection, &title);
+				if(FAILED(hr_title) || !title || !*title)
 				{
 					if(title) ::CoTaskMemFree(title);
-					return false;
+					// A provider that answers with no title is choosing not to
+					// appear for this selection; one whose call failed is a
+					// different thing, and only the second is a reason to stop
+					// reusing the object.
+					return FAILED(hr_title) ? FillResult::Failed : FillResult::Hidden;
 				}
 				item->title = take_cotask_string(title).move();
 				item->hash = MenuItemInfo::normalize(item->title, &item->name, &item->tab,
@@ -139,7 +242,7 @@ namespace Nilesoft
 				if(flags & ECF_ISSEPARATOR)
 				{
 					item->type = 2;
-					return true;
+					return FillResult::Shown;
 				}
 				// ECF_HASSUBCOMMANDS is the documented child-command flag.
 				// ECF_ISDROPDOWN is a drop-down submenu of the same kind.
@@ -160,7 +263,7 @@ namespace Nilesoft
 
 				item->explorer_command = cmd;
 				item->explorer_command_owned = true;
-				return true;
+				return FillResult::Shown;
 			}
 
 			IShellItemArray *create_shell_item_array_from_paths(const std::vector<std::wstring> &paths)
@@ -258,7 +361,12 @@ namespace Nilesoft
 				child->parent = node;
 				child->is_toplevel = false;
 				child->wid = ident.get_id();
-				if(fill_menuitem_from_explorer_command(child.get(), child_cmd, selection))
+				// Sub-commands come from the parent's enumerator rather than from
+				// the catalog, so they are not cached and not budgeted - this
+				// runs when the user opens the submenu, which is after first
+				// paint and after they have asked for it.
+				if(fill_menuitem_from_explorer_command(child.get(), child_cmd, selection)
+					== FillResult::Shown)
 				{
 					if(child->is_menu())
 						child->native_popup.materialized = false;
@@ -323,6 +431,14 @@ namespace Nilesoft
 				accepted.push_back(id);
 			}
 
+			// One allowance for the whole menu, spent between providers. Nothing
+			// interrupts a call that is already running - see the note in
+			// Include/ProviderHealth.h about why these stay on this thread - but
+			// a menu with twenty slow handlers now costs one overrun instead of
+			// twenty.
+			auto budget = ProviderBudget::begin();
+			auto &health = ProviderHealth::instance();
+
 			for(const auto &reg : regs)
 			{
 				if(!explorer_command_matches_any(reg, kinds))
@@ -333,17 +449,52 @@ namespace Nilesoft
 				if(explorer_command_already_represented(by_clsid, accepted))
 					continue;
 
-				auto cmd = activate_explorer_command(reg.clsid);
-				if(!cmd)
+				auto hash = provider_hash(reg.clsid);
+				auto verdict = health.consider(hash, budget.remaining_us());
+				if(verdict != ProviderVerdict::Try)
+				{
+					// Omitted from this menu, not forgotten: the next menu asks
+					// again if the budget allows, and every twentieth asks even
+					// a provider that has never once been quick. The record is
+					// what makes this reportable rather than mysterious.
+					Diagnostics::session_provider(hash, 0, Diagnostics::ProviderResult::Deferred);
 					continue;
+				}
+
+				auto spent_before = budget.spent_us();
+
+				auto cmd = acquire_explorer_command(reg.clsid);
+				if(!cmd)
+				{
+					health.record(hash, budget.spent_us() - spent_before, false);
+					Diagnostics::session_provider(hash, budget.spent_us() - spent_before,
+												  Diagnostics::ProviderResult::Failed);
+					continue;
+				}
 
 				std::unique_ptr<menuitem_t> item(new menuitem_t);
 				item->parent = root;
 				item->is_toplevel = true;
 				item->wid = ident.get_id();
-				if(!fill_menuitem_from_explorer_command(item.get(), cmd, selection))
+				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd, selection);
+
+				auto cost = budget.spent_us() - spent_before;
+				health.record(hash, cost, filled != FillResult::Failed);
+				Diagnostics::session_provider(hash, cost,
+					filled == FillResult::Failed ? Diagnostics::ProviderResult::Failed
+												 : Diagnostics::ProviderResult::Ok);
+
+				if(filled != FillResult::Shown)
 				{
 					cmd->Release();
+
+					// Hidden is a live provider declining this selection, and
+					// happens constantly - it stays cached. Failed means a call
+					// that used to work did not, so this thread stops reusing
+					// that object; a fresh activation next time costs 2 ms and
+					// beats asking a wedged provider forever.
+					if(filled == FillResult::Failed)
+						forget_explorer_command(reg.clsid);
 					continue;
 				}
 
