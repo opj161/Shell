@@ -90,6 +90,8 @@ in each is stated below rather than in a separate tracker.
 | ◐ | CoCI policy compile (§01.9) — the fast path landed; conditional attach deferred with reasons in §01.9a | 3 |
 | ✅ | **Takeover half of the harness** — `--takeover` loads Shell into the probe process; all 23 scenarios byte-identical, and the one that was not found a real defect | 0 |
 | ✅ | The hook no longer destroys the host's last-error code (found by the above) | 2 |
+| ✅ | **Replay half of the harness** — four shell-namespace scenarios; `b63fdc2` and `a634ab6` verified against a real borrowed menu | 0 |
+| ✅ | The circuit breaker no longer counts deliberate declines, which had switched takeover off after three popups in any non-Explorer host | 3 |
 | ✅ | MSAA (§05.3) — confirmed against Shell's own composed menu in a real `explorer.exe`; closed as already satisfied | 5 |
 
 ### What the harness settled (2026-08-24)
@@ -272,12 +274,18 @@ Dedicated probes added from QA validation:
    `question.nonotify_still_measures_ownerdraw` and its control. Answer: the
    lifecycle, not the notifications. §01.3a. Also settled the RETURNCMD
    duplicate-`WM_COMMAND` question the same table was gating.
-3. ⬜ **UNINIT tolerance** — host receives `WM_UNINITMENUPOPUP` for a popup it never
-   really tracked (LegacyEager descendants, §01.5 divergence note); must be non-fatal
-   for representative handlers. Still open, and now blocked on something narrower
-   than "the takeover half": that exists, but Shell *declines* the probe's own
-   menus, so no borrowed popup is ever initialised. It needs the shell-item
-   scenario described below.
+3. ◐ **UNINIT tolerance** — the pairing itself is now verified against a real
+   borrowed menu: `takeover.every_borrowed_popup_is_told_it_is_finished` builds
+   its menu through the shell namespace, so the popup Shell borrows is one that
+   whichever handlers this machine has installed filled, and every INIT is
+   matched by exactly one UNINIT. Removing the UNINIT loop fails that scenario
+   and no other.
+
+   What is still open is the narrower §01.5 divergence: an UNINIT for a
+   `LegacyEager` descendant the user never opened, which untouched Windows would
+   never send. That needs a configuration with a location-bearing `moveto` rule
+   to force the eager policy, and representative third-party handlers to receive
+   it.
 4. ✅ **Gesture non-interference** — bypass (`Ctrl+Alt+RClick`) and config-reload
    (`Shift+Ctrl+RClick`) can never both fire from one click (QA-04). **Answered
    without the harness, and better.** A harness run could only have shown that
@@ -325,16 +333,43 @@ happened to leave, destroying the failed-versus-cancelled distinction that
 `Include/HostContract.h` itself consumes. Fixed; re-introducing it fails that
 scenario and no other.
 
-**Still to build: the replay half.** Verifying that Shell's composed menu
-reproduces the baseline needs Shell to actually take over, which needs a
-scenario that builds its menu the way a file manager does —
-`IShellFolder::GetUIObjectOf` → `IContextMenu::QueryContextMenu` → track. That
-is the path `b63fdc2` fixed and the one probe 3 above is waiting for. Its traces
-cannot be fixtures (the items depend on which handlers a machine has installed),
-so it asserts properties instead: that the tracked menu is Shell's rather than
-the host's, that a native item selected in a non-`RETURNCMD` host produces
-exactly one `WM_COMMAND` carrying the original wID, and that every borrowed
-popup that received an INIT receives exactly one UNINIT.
+### The replay half — built the same day, and it found the worse bug
+
+Four `takeover.*` scenarios build their menu the way a file manager does —
+`SHParseDisplayName` → `SHBindToParent` → `IShellFolder::GetUIObjectOf` →
+`IContextMenu::QueryContextMenu` → track (`src/tests/hostprobe/ShellMenu.h`).
+That is what sets `loader.contextmenuhandler` and makes `QueryShellWindow` take
+its `goto ui` branch, so it is the only shape Shell will take over from a host
+that is not Explorer — and it is the path `b63fdc2` fixed.
+
+Their traces are printed and never stored: a shell menu's items come from
+whichever handlers the machine has installed. They assert properties instead —
+Shell substitutes a menu of its own, every borrowed popup that received an INIT
+receives exactly one UNINIT, a non-`RETURNCMD` host is told which of *its* items
+was chosen by wID exactly once, and a `RETURNCMD` host gets the identifier back
+and is not notified as well.
+
+**They exposed a defect worse than the last-error one.** Run in the same process
+as the 23 declining scenarios, the first of them failed: three declines had
+opened the circuit breaker, because `ContextMenu::Initialize` returned the same
+`nullptr` for "not a window I handle" as for a real failure. A file manager
+raising three of its own internal popups would have lost Shell for the session.
+Fixed in `5085b93`; §01.7a has the reasoning. **The scenario ordering is
+load-bearing** — the `takeover.*` cases must stay last.
+
+Two things to know before relying on this:
+
+- **`--shell` cannot redirect them.** COM activates Shell by the path in the
+  registry, so they exercise the *installed* copy whatever `--shell` says. Two
+  knowingly broken builds passed every assertion before that was noticed; the
+  harness now refuses the configuration and lists every `shell.dll` mapped in
+  the process. Deploy the build you want to test.
+- **Each assertion was checked to catch its defect** — removing the UNINIT loop
+  fails the pairing scenario and nothing else, disabling the `WM_COMMAND` replay
+  fails the identifier scenario and nothing else, and the breaker regression
+  fails the first. Doing that needed the defective build to *be* the registered
+  one, which a per-user `HKCU\Software\Classes\CLSID\...\InprocServer32`
+  override achieves without touching HKLM or restarting Explorer.
 
 CI role: builds the probe on all platforms but *execution* requires an interactive
 desktop — run in the scheduled VM job (below), not PR CI.

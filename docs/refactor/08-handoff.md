@@ -38,7 +38,7 @@ Five rules have held throughout and are worth keeping:
 
 ## 2. What has landed on this branch
 
-Fifteen commits, `940ff6a`..`6ff63c8`.
+Seventeen commits, `940ff6a`..`5085b93`.
 
 | Commit | What |
 |---|---|
@@ -56,6 +56,8 @@ Fifteen commits, `940ff6a`..`6ff63c8`.
 | `cc5550d` | **Type-ahead** — typing a name selects it; mnemonics keep precedence |
 | `5e44534` | **CoCI policy compile** — the COM detour stops walking the rule list for CLSIDs no rule names |
 | `6ff63c8` | **Takeover harness + last-error fix** — the hook was handing hosts the wrong `GetLastError` after a failed track |
+| `2142525` | **MSAA closed** — confirmed against Shell's own menu in a real Explorer; the `MSAAMENUINFO` design deleted |
+| `5085b93` | **Replay harness + breaker fix** — three menus Shell does not handle no longer switch takeover off for the process |
 
 ### The measurements that changed decisions
 
@@ -75,44 +77,65 @@ Fifteen commits, `940ff6a`..`6ff63c8`.
 | `DllGetClassObject` is where `BootstrapOnce` is called from | The takeover harness needs **no** injected or deployed build — asking Shell for a class object installs the hook in the asking process |
 | 22 of 23 takeover traces byte-identical; the 23rd was Shell's bug | The hook destroyed the host's last-error code. Fixed, and the native fixtures became the takeover gate |
 | Shell's composed menu in real Explorer reports 22 named items and 6 separators through `IAccessible` | §05.3 closed as already satisfied; the `MSAAMENUINFO` design deleted rather than deferred |
+| Three declined popups open the circuit breaker, and a host that is not Explorer produces them constantly | The breaker was counting decisions as failures. Only real failures count now, and the ring gained a `Declined` decision |
+| A shell-namespace menu **is** taken over, and its native identifiers survive the round trip intact | `b63fdc2`'s replay and `a634ab6`'s INIT/UNINIT pairing verified against a real borrowed menu rather than a fake |
+| COM activates Shell by the path in the registry, not by whichever copy is already mapped | Two knowingly broken builds passed every takeover assertion through `--shell`. The harness now refuses that configuration |
 
 ## 3. Where to pick up
 
 Ordered by user value, with what is known about each.
 
-### 3.1 The replay half of the harness (§06.2 probe 3)
-
-The takeover half is built and green — `hostprobe --takeover` runs every
-scenario through Shell's hook, and all 23 come back byte-identical to the native
-baselines. But that verifies the **fail-open and breaker paths**, not the
-replay: `QueryShellWindow` does not recognise the probe's own window class, so
-Shell declines all of them and the breaker opens after three.
-
-What is left is a scenario that makes Shell *take over* — one that builds its
-menu the way a file manager does, `IShellFolder::GetUIObjectOf` →
-`IContextMenu::QueryContextMenu` → track, which is what sets
-`loader.contextmenuhandler` and takes the `goto ui` branch in
-`Selections::QueryShellWindow`. That is the path `b63fdc2` fixed, and it is what
-probe 3 (UNINIT tolerance) is waiting for.
-
-Its traces cannot be fixtures — the items depend on which handlers a machine has
-installed — so it asserts properties instead: the tracked menu is Shell's rather
-than the host's, a native item chosen in a non-`RETURNCMD` host produces exactly
-one `WM_COMMAND` carrying the original wID, and every borrowed popup that
-received an INIT receives exactly one UNINIT.
-
-### 3.2 Directory Opus and Everything are on this machine
+### 3.1 Drive Directory Opus and Everything - *nothing blocks this*
 
 This document used to end by naming Total Commander and Directory Opus as
 "exactly the hosts these changes are for and exactly the ones this machine
 cannot test". That was wrong. **Directory Opus 13 and Everything 1.5a are both
-installed and running here**, and both hold `shell.dll` — they show up in
+installed and running here**, and both hold `shell.dll` - they appear in
 `backup-and-upgrade.ps1`'s list of processes pinning the module, along with
-forty-five others. Restarting either picks up a freshly deployed build.
+fifty-five others. Restarting either picks up a freshly deployed build.
 
-Nothing has been driven through them yet. They are the natural place to check
-the `TPM_RETURNCMD` replay against a host Shell did not write, once §3.1's
-shell-item scenario says what to look for.
+The harness now says what to look for, because the properties it asserts
+in-process are the ones that matter in a real host: does Shell substitute its
+own menu, does a chosen native item reach the host as its own wID exactly once,
+and does every borrowed popup that was initialised get told it is finished with.
+Directory Opus is the interesting one - it either passes `TPM_RETURNCMD` or it
+does not, and which it is decides which half of `complete_host_contract` has
+ever run outside a test.
+
+The breaker fix in `5085b93` matters most here and is unverified there: before
+it, three of Opus's own internal popups would have switched Shell off for the
+rest of the session.
+
+### 3.2 A way to read the ring from outside the process - *and a live puzzle*
+
+`shell.exe -report perf` is named in §06.4 and does not exist. The ring is
+process-local, so in a real Explorer there is currently no way to see any of it.
+
+The documented substitute is the `perf` registry value, which writes breaching
+phases to `shell.log` - and **it produces nothing at all from `explorer.exe`**,
+while the same DLL in the same session logs freely from another host. Measured,
+not guessed (2026-08-24, Windows 11 26200.8875 x64, deployed build, `perf` = 1):
+
+| Host | Menu appeared | Phase lines written |
+|---|---|---|
+| `hostprobe.exe --takeover` | yes | yes - `explorer.commands 42.95ms items=30`, `popup.total_pre_display 45.05ms` |
+| `explorer.exe`, started after the deploy, canonical `shell.dll` | yes - 28 items, read back through MSAA | **none** |
+
+Repro: append a marker to the installed `shell.log`, post `WM_CONTEXTMENU` to
+Explorer's `SHELLDLL_DefView`, confirm the menu appeared with an `IAccessible`
+read, and look after the marker. Nothing follows it.
+
+Ruled out: the registry read (a probe linking the shipping `Registry.cpp`
+answers `true, value = 1`), the log path (`Path::Module` resolves to the
+canonical `shell.log` for a process that started after the deploy), and
+permissions on the log file itself (a medium-integrity process opens it for
+append successfully - though **not** the directory, so a log path that does not
+already exist cannot be created there, which is worth remembering for any
+process still holding a rotated `shell.dll.old.*`).
+
+Do not sink more time into the log sink. Build the export instead: it is on the
+plan, the Reliability Center (§05.1) needs it anyway, and it is the only
+channel that will work inside a host nobody can attach a debugger to.
 
 ### 3.3 `TakeoverSession` and the WinEvent lifecycle (§01.1, §01.6)
 
@@ -181,6 +204,15 @@ counters) · targeted moveto (§04.6) · favorites and the rule inspector
 - **`--takeover` is one-way within a run.** Shell pins its own module once its
   hooks are installed, so a process cannot go back to native afterwards. Never
   mix takeover and native scenarios in one invocation.
+- **The order of the harness scenarios is load-bearing.** The `takeover.*` cases
+  must stay last, after the plain popups Shell declines. That ordering is what
+  exposed the breaker counting declines, and moving them would lose the
+  coverage silently.
+- **`--shell` cannot redirect the shell-namespace scenarios.** COM activates
+  Shell by the path in the registry, so those scenarios test the *installed*
+  copy no matter what `--shell` says. Two knowingly broken builds passed every
+  assertion before this was caught; the harness refuses the configuration now
+  and prints every `shell.dll` mapped in the process.
 - **Which Shell `--takeover` loads decides which configuration it runs.**
   `Initializer` derives `shell.nss` from the directory of the module it was
   given, so the build output means no configuration at all (the identity config
@@ -201,7 +233,7 @@ counters) · targeted moveto (§04.6) · favorites and the rule inspector
 
 At the time of writing: 26,327 checks / 0 failures on x64 and x86, arm64 builds
 and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)`,
-23 harness scenarios / 0 failures **native and through takeover**:
+23 harness scenarios native and 27 through takeover, 0 failures:
 
 ```powershell
 .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
