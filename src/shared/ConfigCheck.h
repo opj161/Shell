@@ -65,6 +65,27 @@ namespace Nilesoft
 
 			// ParserException::errortostr for `error`.
 			wchar_t message[CONFIG_CHECK_MESSAGE];
+
+			// What `settings { priority }` came to, so the caller can tell the
+			// user when the machine will overrule it. See CONFIG_CHECK_PRIORITY_*.
+			//
+			// Added after the struct shipped, at the end, which is what the
+			// cbSize at offset 0 is for: an older shell.exe passes a smaller
+			// size, a newer DLL sees it and refuses rather than writing past
+			// the caller's buffer.
+			uint32_t priority;
+		};
+
+		// `priority` is an expression, not a constant - a configuration may
+		// write `priority = sys.something`, and what it evaluates to depends on
+		// the menu being opened. A validator that reports on a file rather than
+		// on a click can only speak for the cases where it does not.
+		enum ConfigCheckPriority : uint32_t
+		{
+			CONFIG_CHECK_PRIORITY_UNSET = 0,	// no `priority` in the configuration
+			CONFIG_CHECK_PRIORITY_ON = 1,		// evaluates truthy: Shell wants the classic menu
+			CONFIG_CHECK_PRIORITY_OFF = 2,		// evaluates falsy: the modern menu is wanted
+			CONFIG_CHECK_PRIORITY_DYNAMIC = 3,	// depends on the click; nothing can be said here
 		};
 
 		// Exit codes, and the function's return value. These are what a script

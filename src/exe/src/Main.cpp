@@ -790,6 +790,36 @@ static int CheckConfig(const wchar_t *config_path)
 	format_config_check(result, code, line, ARRAYSIZE(line));
 	write_console_line(line);
 
+	/*
+		A configuration that parses can still not do what it says, and there is
+		exactly one case of that worth a line here.
+
+		`settings { priority = 0 }` asks for the Windows 11 modern menu. On a
+		machine registered with `-register -treat` it does nothing at all: COM
+		substitutes Shell for the modern menu class, Shell's object does not
+		implement what the modern menu asks for, and Explorer falls back to the
+		classic menu regardless of the setting. Measured four ways on
+		2026-08-24; the table is in CoCreateInstanceHook.
+
+		Nothing said so. Somebody who set priority = 0, restarted Explorer and
+		got the same menu had no way to find out why - which is the same
+		category of problem `-check` was built for.
+
+		A warning, not an error: the configuration is valid and the exit code
+		stays 0. Telling somebody their file is broken when it is not is how a
+		validator gets ignored.
+	*/
+	if(code == CONFIG_CHECK_OK
+	   && result.priority == CONFIG_CHECK_PRIORITY_OFF
+	   && QueryTreatAs() == TreatAsState::ours)
+	{
+		write_console_line(
+			L"  note: priority = 0 asks for the Windows 11 menu, but this machine is\r\n"
+			L"        registered with -treat, which redirects that menu to Shell and\r\n"
+			L"        overrules the setting. Run `shell.exe -unregister -treat` (as\r\n"
+			L"        administrator) to get the Windows 11 menu back.");
+	}
+
 	return code;
 }
 

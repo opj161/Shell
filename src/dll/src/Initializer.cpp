@@ -370,6 +370,53 @@ namespace Nilesoft
 				result.files = static_cast<uint32_t>(files.size());
 				result.entries = parser->TotalMenuCount;
 
+				/*
+					What `settings { priority }` came to.
+
+					Evaluated the same way CoCreateInstanceHook evaluates it, so
+					the report describes the code's own reading rather than the
+					text. A literal 0 or 1 answers cleanly; anything that
+					depends on the click - `priority = sys.something` - is
+					reported as dynamic rather than guessed at, because a
+					validator that runs on a file has no click to evaluate
+					against.
+
+					The caller pairs this with the machine's TreatAs state:
+					on a machine registered with -treat the setting is inert
+					whatever it says, and saying so is the whole point of
+					carrying it out here.
+					docs/refactor/01-takeover-contract.md section 9b.
+				*/
+				result.priority = CONFIG_CHECK_PRIORITY_UNSET;
+				if(cache->settings.priority)
+				{
+					result.priority = CONFIG_CHECK_PRIORITY_DYNAMIC;
+					try
+					{
+						Context context;
+						Object value = context.Eval(cache->settings.priority).move();
+						if(value.is_number())
+						{
+							// to_bool(), not static_cast<bool>. Object declares
+							// a non-template `explicit operator bool` that means
+							// *not null*, and being non-template it wins the
+							// overload against the numeric conversion template -
+							// so static_cast<bool> on a numeric zero is true.
+							// The hook next door avoids it by assigning to a
+							// bool, where the explicit operator is not a
+							// candidate; this says which one it wants.
+							result.priority = value.to_bool()
+								? CONFIG_CHECK_PRIORITY_ON
+								: CONFIG_CHECK_PRIORITY_OFF;
+						}
+					}
+					catch(...)
+					{
+						// An expression that throws when evaluated without a
+						// selection is exactly the dynamic case.
+					}
+				}
+
 				// The root, which is the file a user asked about even when they
 				// named none. Only overwritten on success: on failure the
 				// erroring file is the more useful answer.

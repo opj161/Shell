@@ -74,6 +74,62 @@ namespace Nilesoft
 				return state;
 			}
 
+			/*
+				Is the Windows 11 modern context menu redirected to us?
+
+				`shell.exe -register -treat` writes a TreatAs on
+				{86ca1aa0-...} naming Shell's CLSID, and from then on COM
+				substitutes Shell for the modern menu class. HKCR rather than
+				either hive on its own, because HKCR is the merged view COM
+				itself resolves against - a per-user redirect shadows the
+				machine one, and reading only HKLM would miss it.
+
+				Why this exists, rather than the code just assuming: two
+				separate mechanisms suppress the modern menu and only one of
+				them is a setting. See CoCreateInstanceHook and
+				docs/refactor/01-takeover-contract.md section 9b.
+			*/
+			static bool ModernMenuRedirectedToUs()
+			{
+				string key;
+				key.format(L"CLSID\\%s\\TreatAs",
+						   string::ToString(IID_FileExplorerContextMenu, 2).c_str());
+
+				wchar_t treatas[64]{};
+				DWORD cb = sizeof(treatas);
+				if(ERROR_SUCCESS != ::RegGetValueW(HKCR, key.c_str(), nullptr,
+												   RRF_RT_REG_SZ, nullptr, treatas, &cb))
+					return false;
+
+				// RegGetValueW with RRF_RT_REG_SZ terminates for us - unlike
+				// RegQueryValueEx, whose page says a REG_SZ "is NOT guaranteed
+				// to be null-terminated". The buffer is still bounded and the
+				// comparison is against a fixed string, so a value longer than
+				// this simply is not ours.
+				return string(treatas).equals(CLS_ContextMenu);
+			}
+
+			// Read on every modern-menu activation, so it is cached on the same
+			// two-second terms as IsRegisteredCached. Registration is an
+			// installer-time act; two seconds is far tighter than it needs to be
+			// and keeps a machine that was just registered from looking stale.
+			static bool ModernMenuRedirectedToUsCached()
+			{
+				static std::atomic<uint64_t> cached_tick{ 0 };
+				static std::atomic<bool> cached_state{ false };
+
+				auto now = ::GetTickCount64();
+				auto last = cached_tick.load(std::memory_order_relaxed);
+
+				if(last != 0 && (now - last) < 2000)
+					return cached_state.load(std::memory_order_relaxed);
+
+				bool state = ModernMenuRedirectedToUs();
+				cached_state.store(state, std::memory_order_relaxed);
+				cached_tick.store(now, std::memory_order_relaxed);
+				return state;
+			}
+
 			static bool IsHKCR(const string &key)
 			{
 				return Registry::Exists(HKCR, L"CLSID\\" + key);

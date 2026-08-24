@@ -317,3 +317,39 @@ TEST(expression, msg_button_results_are_unchanged)
 	CHECK(value_of(IDENT_MSG_IDNO, &v));  CHECK_EQ(v, static_cast<uint32_t>(IDNO));
 	CHECK(value_of(IDENT_MSG_RTLREADING, &v)); CHECK_EQ(v, static_cast<uint32_t>(MB_RTLREADING));
 }
+
+// ---------------------------------------------------------------------------
+// Object's two ways of being asked "is this true?", which disagree.
+// ---------------------------------------------------------------------------
+
+TEST(expression, an_objects_truth_is_to_bool_not_a_cast)
+{
+	// Object declares `explicit operator bool` meaning *not null*, and separately
+	// a template conversion for numeric types that means *not zero*. Being
+	// non-template, the explicit operator wins `static_cast<bool>` - so a
+	// numeric zero casts to true.
+	//
+	// This is live: `settings { priority = 0 }` is read through exactly this
+	// object, and reading it with a cast reports it as switched on. The hook in
+	// Main.cpp is correct by accident, because it assigns to a bool - where the
+	// explicit operator is not a candidate and the numeric template is chosen.
+	// Initializer::check had to say which one it wanted.
+	Object zero = 0;
+	Object one = 1;
+
+	CHECK(!zero.to_bool());
+	CHECK(one.to_bool());
+
+	// The trap itself, asserted rather than described, so anyone "simplifying"
+	// to_bool() into a cast sees this fail rather than shipping it.
+	CHECK_MSG(static_cast<bool>(zero),
+			  "explicit operator bool means not-null; if this ever means "
+			  "not-zero, to_bool() calls guarding numeric settings can be "
+			  "simplified - until then they cannot");
+
+	// A bool destination picks the numeric conversion, which is why the two
+	// call sites that do this are right.
+	bool assigned = zero;
+	CHECK(!assigned);
+}
+

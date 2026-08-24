@@ -832,6 +832,45 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 
 		if(rclsid == IID_FileExplorerContextMenu /*&& riid == {706461D1-AC5F-4730-BFE3-CAC6CAD5EF5E}*/)
 		{
+			/*
+				Two mechanisms suppress the Windows 11 modern menu, and only one
+				of them is a setting. Measured on this machine 2026-08-24,
+				Windows 11 26200.8875 x64, by raising the desktop menu and
+				looking at which window class appeared:
+
+					TreatAs   priority   menu
+					ours      1          classic (Shell)
+					ours      0          classic (Shell)   <- the setting is inert
+					absent    0          modern (Microsoft.UI.Content...)
+					absent    1          classic (Shell)
+
+				So `priority` does exactly what it says when there is no
+				redirect, and nothing at all when there is one: COM substitutes
+				Shell for the modern menu class, Shell's object does not
+				implement the interface the modern menu wants, and Explorer
+				falls back to the classic menu it was going to get anyway.
+
+				That cannot be fixed from here, and it is worth being explicit
+				about why rather than leaving the next reader to re-derive it.
+				A per-call opt-out of TreatAs does not exist; refusing the
+				redirected activation lands on the classic menu too, because
+				COM does not fall back to the original class when a TreatAs
+				substitute fails. Restoring the modern menu means removing the
+				redirect - `shell.exe -unregister -treat` - which is machine-wide
+				HKLM state and an elevated act, not something a config file read
+				by every host process gets to do.
+
+				What *is* fixable is the waste and the silence. When the
+				redirect is ours the answer is already decided, so this stops
+				building a Context and evaluating an expression on every
+				activation to reach it - docs/refactor/01-takeover-contract.md
+				section 9's "router de-dup". And `shell.exe -check` now says so,
+				which is where somebody who has just written priority = 0 will
+				find out that it did nothing.
+			*/
+			if(RegistryConfig::ModernMenuRedirectedToUsCached())
+				return hr;
+
 			if(cache->settings.priority)
 			{
 				Context context;
