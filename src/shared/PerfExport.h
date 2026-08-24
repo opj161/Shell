@@ -88,6 +88,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <atomic>
+#include <mutex>
 
 namespace Nilesoft
 {
@@ -108,7 +109,9 @@ namespace Nilesoft
 			// would not have caught it, and a version-1 host's zeroed reserved
 			// field would have read as "this host passes no TPM flags at all".
 			// 3: PERF_EXPORT_PHASES 16 -> 24.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 3;
+			// 4: the block gained a provider-name directory, and the header's
+			//    `reserved` became `directory_count`.
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 4;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -140,6 +143,36 @@ namespace Nilesoft
 			// desktop - so it is a window onto recent activity, not an archive.
 			inline constexpr uint32_t PERF_EXPORT_RECORDS = 16;
 
+			/*
+				The provider-name directory.
+
+				A record carries a provider's CLSID hash, deliberately:
+				docs/refactor/05-capabilities.md section 1 wants a report to be
+				able to say "these forty menus were all the same handler"
+				without carrying strings around the measured path. But a hash is
+				not something a user can act on - `provider e345019d 186 ms` names
+				nothing to quarantine - and the Reliability Center's whole value
+				is naming the extension that is slow.
+
+				So names live *beside* the records rather than in them: one entry
+				per distinct provider this host has ever activated, written once
+				when it is first seen and never again. Records stay hash-only and
+				the measured path stays string-free.
+
+				The reader cannot resolve these itself. The names come from
+				IExplorerCommand::GetTitle, which takes the selection and is
+				answered by the handler - so it exists only inside a host that
+				has actually built a menu. Reconstructing it from the registry
+				would mean duplicating the manifest scan in shell.exe.
+
+				32 entries at 40 characters is 2.6 KB on top of a ~36 KB block.
+				This machine registers 23 handlers; a host that somehow exceeds
+				32 gets hashes for the overflow and `directory_dropped` says so,
+				which is the same shape as dropped_phases.
+			*/
+			inline constexpr uint32_t PERF_EXPORT_DIRECTORY = 32;
+			inline constexpr size_t PERF_EXPORT_PROVIDER_NAME = 40;
+
 			// Deliberately not "%s%u" at every call site: the prefix contains a
 			// backslash and the remainder must not, which is a rule worth
 			// stating once.
@@ -160,6 +193,14 @@ namespace Nilesoft
 				uint32_t clsid_hash;
 				uint32_t microseconds;
 				uint32_t result;				// Diagnostics::ProviderResult
+			};
+
+			// One directory entry: the hash a record carries, and the title the
+			// handler gave the first time this host activated it.
+			struct PerfExportName
+			{
+				uint32_t clsid_hash;
+				wchar_t name[PERF_EXPORT_PROVIDER_NAME];	// truncated, always terminated
 			};
 
 			struct PerfExportRecord
@@ -197,7 +238,13 @@ namespace Nilesoft
 
 				uint32_t next;					// slot the next record goes in
 				uint32_t count;					// slots filled, <= capacity
-				uint32_t reserved;
+
+				// Directory entries filled, <= PERF_EXPORT_DIRECTORY. This was
+				// `reserved`, which is what a reserved field is for; the
+				// version moved with it so an older reader refuses the block
+				// rather than reading a directory it does not know is there.
+				uint32_t directory_count;
+
 				uint64_t published;				// sessions ever, keeps counting past a wrap
 				wchar_t host[PERF_EXPORT_HOST];	// image file name, not the full path
 			};
@@ -206,6 +253,17 @@ namespace Nilesoft
 			{
 				PerfExportHeader header;
 				PerfExportRecord records[PERF_EXPORT_RECORDS];
+
+				// Distinct providers seen, however many menus they appeared in.
+				// Grows only; an entry is never rewritten, so a reader that
+				// copies it mid-append sees either the old count or the new
+				// one, and both are consistent.
+				PerfExportName directory[PERF_EXPORT_DIRECTORY];
+
+				// Providers that did not fit. A report says so rather than
+				// quietly showing a hash and letting somebody wonder why one
+				// extension has a name and another does not.
+				uint32_t directory_dropped;
 			};
 
 #pragma pack(pop)
@@ -216,6 +274,8 @@ namespace Nilesoft
 			static_assert(sizeof(PerfExportPhase) == 8 + PERF_EXPORT_NAME * sizeof(wchar_t),
 						  "PerfExportPhase gained padding");
 			static_assert(sizeof(PerfExportProvider) == 12, "PerfExportProvider gained padding");
+			static_assert(sizeof(PerfExportName) == 4 + PERF_EXPORT_PROVIDER_NAME * sizeof(wchar_t),
+						  "PerfExportName gained padding");
 			static_assert(sizeof(PerfExportHeader) == 48 + PERF_EXPORT_HOST * sizeof(wchar_t),
 						  "PerfExportHeader gained padding");
 			static_assert(std::atomic<uint32_t>::is_always_lock_free,
@@ -268,6 +328,103 @@ namespace Nilesoft
 				driven by a test against a plain struct, with no section, no
 				second process and no timing.
 			*/
+			/*
+				A test seam. Declared here because the directory append needs it
+				too; the long explanation of why a seam is the only way to pin
+				either ordering is on perf_export_load below.
+			*/
+			using PerfExportInterpose = void (*)(void *);
+
+			/*
+				Look a provider's name up in the directory. Null when this host
+				has not activated it, which is normal on the first menu and for
+				anything past the cap - the caller prints the hash then.
+			*/
+			inline const wchar_t *perf_export_find_name(const PerfExportBlock &block, uint32_t clsid_hash)
+			{
+				auto count = block.header.directory_count;
+				if(count > PERF_EXPORT_DIRECTORY)
+					count = PERF_EXPORT_DIRECTORY;
+
+				for(uint32_t i = 0; i < count; i++)
+				{
+					if(block.directory[i].clsid_hash == clsid_hash)
+						return block.directory[i].name[0] ? block.directory[i].name : nullptr;
+				}
+				return nullptr;
+			}
+
+			/*
+				Record a provider's name, once.
+
+				Append-only and idempotent: an entry is never rewritten, so a
+				reader copying the block while this appends sees either the old
+				`directory_count` or the new one, and the entries below that
+				count are complete either way. That is why the name is written
+				*before* the count is raised, and why this needs no sequence
+				bump of its own.
+
+				Returns true when a new entry was added, which is the only case
+				that costs anything - a provider that has appeared before is a
+				scan of at most 32 integers.
+
+				`interpose` runs between the entry being written and the count
+				being raised, which is the only way to observe the ordering this
+				function exists for. A single-threaded test cannot otherwise
+				tell entry-then-count from count-then-entry: both leave the same
+				state behind once the call returns, so a test that inspects the
+				result afterwards passes either way. Same seam, and the same
+				reason, as perf_export_load's. Production passes nothing and pays
+				a null check.
+			*/
+			inline bool perf_export_note_name(PerfExportBlock &block, uint32_t clsid_hash,
+											  const wchar_t *name,
+											  PerfExportInterpose interpose = nullptr,
+											  void *interpose_context = nullptr)
+			{
+				if(!name || !*name)
+					return false;
+
+				auto count = block.header.directory_count;
+				if(count > PERF_EXPORT_DIRECTORY)
+				{
+					// Another writer, or a corrupted block. Refuse rather than
+					// clamp: writing at a clamped index would overwrite a real
+					// entry somebody is about to read.
+					return false;
+				}
+
+				for(uint32_t i = 0; i < count; i++)
+					if(block.directory[i].clsid_hash == clsid_hash)
+						return false;
+
+				if(count >= PERF_EXPORT_DIRECTORY)
+				{
+					block.directory_dropped++;
+					return false;
+				}
+
+				auto &entry = block.directory[count];
+				entry.clsid_hash = clsid_hash;
+
+				size_t at = 0;
+				for(; name[at] && at + 1 < PERF_EXPORT_PROVIDER_NAME; at++)
+					entry.name[at] = name[at];
+				entry.name[at] = L'\0';
+
+				// Last: the entry must be complete before the count admits it.
+				// A reader copies the directory outside the sequence protocol,
+				// so the count is the only thing telling it how far the table
+				// is valid. Raising it first would let a reader in another
+				// process copy a name that is still being written.
+				if(interpose)
+					interpose(interpose_context);
+
+				std::atomic_thread_fence(std::memory_order_release);
+				block.header.directory_count = count + 1;
+				return true;
+			}
+
 			inline void perf_export_store(PerfExportBlock &block, const PerfExportRecord &record)
 			{
 				auto capacity = block.header.capacity;
@@ -308,7 +465,6 @@ namespace Nilesoft
 				Production passes nothing and pays a null check, on a path that
 				runs a few times per report.
 			*/
-			using PerfExportInterpose = void (*)(void *);
 
 			/*
 				The other half: copy `want` most-recent records out, newest
@@ -585,11 +741,66 @@ namespace Nilesoft
 					return true;
 				}
 
+				/*
+					Serialised, and it has to be.
+
+					The block's sequence counter is a seqlock, which gives a
+					*reader* a way to notice it copied a half-written record.
+					It gives no protection at all against two writers: two menu
+					threads storing at once each bump the counter twice, so it
+					can read even while a write is in flight, and
+					`header.next` is a plain read-modify-write that would put
+					two records in one slot. A reader would then print a record
+					that is half of two, with nothing to say so - which is worse
+					than the missing record, because it looks like a
+					measurement.
+
+					One host really does raise menus on several threads: every
+					Explorer window has its own, and the taskbar has another.
+					The lock is process-local and uncontended in the normal
+					case, and `store` runs after the menu has closed.
+
+					The file comment's "exactly one writer for its whole life"
+					is about one *process* per block, which is what makes the
+					security descriptor the right boundary. It was never a
+					claim about threads.
+				*/
 				void store(const PerfExportRecord &record)
 				{
 					if(!open())
 						return;
+
+					std::lock_guard<std::mutex> lock(_writer);
 					perf_export_store(*_block, record);
+				}
+
+				/*
+					The name a handler gave itself, so a report can say which
+					extension cost 186 ms rather than which hash did.
+
+					Unlike `store`, this one *is* on the measured path - it is
+					called while the menu is being built, right after the
+					GetTitle that produced the name. What it costs there is an
+					uncontended lock and a scan of at most 32 integers, and only
+					the first sighting of a provider also copies 40 characters.
+					Set against the 3-60 ms the GetState/GetTitle/GetIcon
+					sequence next to it costs, that is noise - but it is not
+					zero, and saying it is off the path would be wrong.
+
+					The directory is deliberately *not* under the block's
+					sequence counter. Bumping that here would put a seqlock
+					write on the menu path and make a reader retry whenever a
+					provider appeared mid-report, in exchange for ordering an
+					append-only table already gets from writing the entry before
+					the count.
+				*/
+				void note_provider(uint32_t clsid_hash, const wchar_t *name)
+				{
+					if(!name || !*name || !open())
+						return;
+
+					std::lock_guard<std::mutex> lock(_writer);
+					perf_export_note_name(*_block, clsid_hash, name);
 				}
 
 			private:
@@ -623,6 +834,7 @@ namespace Nilesoft
 				HANDLE _mapping{};
 				PerfExportBlock *_block{};
 				bool _attempted{};
+				std::mutex _writer;
 			};
 
 			// What a reader learned about one process.
@@ -632,6 +844,27 @@ namespace Nilesoft
 				uint32_t architecture{};
 				uint64_t published{};
 				wchar_t host[PERF_EXPORT_HOST]{};
+
+				// Copied out rather than pointed at: the view is unmapped
+				// before perf_export_read returns, so a pointer into the
+				// block would dangle at exactly the moment it gets printed.
+				uint32_t directory_count{};
+				uint32_t directory_dropped{};
+				PerfExportName directory[PERF_EXPORT_DIRECTORY]{};
+
+				// The handler's own title for a provider, or null when this
+				// host has not activated it yet or the directory was full.
+				const wchar_t *name_for(uint32_t clsid_hash) const
+				{
+					auto count = directory_count > PERF_EXPORT_DIRECTORY
+						? PERF_EXPORT_DIRECTORY : directory_count;
+					for(uint32_t i = 0; i < count; i++)
+					{
+						if(directory[i].clsid_hash == clsid_hash)
+							return directory[i].name[0] ? directory[i].name : nullptr;
+					}
+					return nullptr;
+				}
 			};
 
 			enum class PerfExportStatus
@@ -693,6 +926,32 @@ namespace Nilesoft
 					for(size_t i = 0; i + 1 < PERF_EXPORT_HOST; i++)
 						source.host[i] = block.header.host[i];
 					source.host[PERF_EXPORT_HOST - 1] = L'\0';
+
+					/*
+						The directory, copied and re-terminated like everything
+						else that came out of another process's memory.
+
+						Read outside the sequence protocol on purpose. The
+						directory is append-only and the writer completes an
+						entry before raising the count, so the worst a reader
+						can see is the count from before an append - one name
+						short, never a half-written one. Folding it into the
+						seqlock would mean a provider appearing mid-report made
+						the whole read tear, which is a worse trade for a table
+						that changes once per provider per process lifetime.
+					*/
+					auto directory = block.header.directory_count;
+					if(directory > PERF_EXPORT_DIRECTORY)
+						directory = PERF_EXPORT_DIRECTORY;
+					source.directory_count = directory;
+					source.directory_dropped = block.directory_dropped;
+					for(uint32_t i = 0; i < directory; i++)
+					{
+						source.directory[i].clsid_hash = block.directory[i].clsid_hash;
+						for(size_t c = 0; c + 1 < PERF_EXPORT_PROVIDER_NAME; c++)
+							source.directory[i].name[c] = block.directory[i].name[c];
+						source.directory[i].name[PERF_EXPORT_PROVIDER_NAME - 1] = L'\0';
+					}
 
 					// Three attempts, because a torn read means the host
 					// published while this was copying and the next attempt

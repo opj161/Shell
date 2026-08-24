@@ -281,6 +281,21 @@ namespace Nilesoft
 			void session_provider(uint32_t clsid_hash, uint32_t microseconds, ProviderResult result) noexcept;
 			void session_decision(TakeoverDecision decision) noexcept;
 
+			/*
+				The title a provider gave itself, for the export's name
+				directory.
+
+				Deliberately not part of the session record. A record carries a
+				hash so the measured path never copies a string and so a report
+				can say "these forty menus were all the same handler"; the name
+				belongs to the *provider*, not to the menu, so it is written
+				once per distinct CLSID per process and read beside the records.
+				docs/refactor/05-capabilities.md section 1.
+
+				Costs a scan of at most 32 integers after the first sighting.
+			*/
+			void provider_name(uint32_t clsid_hash, const wchar_t *name) noexcept;
+
 			// Publishes if this was the outermost begin(). Safe to call without a
 			// matching begin() - it does nothing, which is what a hook path that
 			// bailed before starting a session needs.

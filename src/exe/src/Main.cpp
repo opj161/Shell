@@ -1008,9 +1008,37 @@ static int ReportPerf(bool detailed)
 			{
 				uint32_t ms = 0, tenth = 0;
 				perf_report_split_ms(record.providers[v].microseconds, ms, tenth);
-				report.append_format(L"                 provider %08x  %u.%u ms  %s\r\n",
-									 record.providers[v].clsid_hash, ms, tenth,
-									 perf_export_result_name(record.providers[v].result));
+
+				/*
+					Name the extension when the host knows it.
+
+					A hash is what the record carries and what makes "these
+					forty menus were all the same handler" answerable, but
+					`provider e345019d  186.0 ms` names nothing anybody can act
+					on - and acting on it is the entire point of
+					docs/refactor/05-capabilities.md section 1. The name comes
+					from the host's own directory, filled from
+					IExplorerCommand::GetTitle the first time it activated the
+					provider.
+
+					The hash stays on the line either way: it is the stable
+					identity, the title is not (a handler may title itself
+					differently for a different selection), and a quarantine
+					entry will be written against the hash.
+				*/
+				if(auto known = source.name_for(record.providers[v].clsid_hash))
+				{
+					report.append_format(L"                 provider %08x  %u.%u ms  %s  %s\r\n",
+										 record.providers[v].clsid_hash, ms, tenth,
+										 perf_export_result_name(record.providers[v].result),
+										 known);
+				}
+				else
+				{
+					report.append_format(L"                 provider %08x  %u.%u ms  %s\r\n",
+										 record.providers[v].clsid_hash, ms, tenth,
+										 perf_export_result_name(record.providers[v].result));
+				}
 			}
 		};
 

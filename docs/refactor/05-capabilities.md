@@ -75,12 +75,62 @@ Explorer.EXE  pid 41272  x64  -  8 menus, 8 held
                    provider e345019d  6.4 ms  ok
 ```
 
-What is still missing for the window: provider **names** — the ring carries a
-CLSID hash rather than a name, deliberately, so that a report can say "these
-forty menus were all the same handler" without carrying strings around the
-measured path, and the Reliability Center will have to resolve them from the
-catalog at display time — plus the quarantine action and the "Repair takeover"
-row.
+### 1a. Provider names — landed 2026-08-24, beside the records rather than in them
+
+This section used to end by saying names were missing and that the Reliability
+Center "will have to resolve them from the catalog at display time". That turned
+out to be the wrong place, for a reason worth recording: **nothing outside a host
+that has built a menu can resolve a CLSID to a name.** The name comes from
+`IExplorerCommand::GetTitle`, which takes the selection and is answered by the
+handler; the catalog holds registrations, not titles. Resolving in `shell.exe`
+would have meant duplicating the manifest scan there and still getting a
+different answer.
+
+So names live **beside** the records instead of in them, which keeps the property
+the hash was chosen for. `PerfExportBlock` gained a 32-entry directory of
+`(clsid_hash, name)`, written once the first time a host activates a provider;
+records still carry hashes only, and the measured path still copies no string
+except on that first sighting. The reader copies the directory out — the view is
+unmapped before `perf_export_read` returns, so a pointer into the block would
+dangle exactly when it gets printed.
+
+Measured in a real Explorer the same day:
+
+```text
+                 provider e345019d  11.4 ms  ok        NanaZip
+                 provider 9b0df3d3   0.0 ms  deferred
+                 provider 7c2bc7ba   0.0 ms  deferred  Unlock with File Locksmith
+```
+
+The third line is the one this feature exists for, and it is the sentence §02.2a
+made possible: a named extension that Shell **already dropped from this menu on
+the user's behalf**, rather than a hash the user can do nothing with. A provider
+with no name is one this host has not successfully activated yet — a deferral on
+the first menu in a process, or a handler that declined the selection — which is
+a true statement rather than a gap.
+
+The hash stays on the line. It is the stable identity; a title is not, because a
+handler may title itself differently for a different selection, and a quarantine
+entry has to be written against something that does not move.
+
+**One defect fixed on the way, and it was not in the new code.** `export_session`
+runs *outside* the diagnostics ring's mutex, so two menu threads publishing at
+once both drove the block's sequence counter. That counter is a seqlock: it lets
+a *reader* notice it copied a half-written record, and it offers nothing at all
+against concurrent writers — two writers each bump it twice, so it can read even
+while a write is in flight, and `header.next` is a plain read-modify-write that
+would put two records in one slot. A reader would then print a record that is
+half of two, with nothing to say so, which is worse than a lost record because it
+looks like a measurement. One host genuinely does raise menus on several threads:
+every Explorer window has its own and the taskbar has another. The writer is
+serialised now.
+
+`PerfExport.h`'s "exactly one writer for its whole life" was always about one
+*process* per block — which is what makes the security descriptor the right
+boundary — and was never a claim about threads.
+
+What is still missing for the window: the window, the quarantine action, and the
+"Repair takeover" row.
 
 The `Takeover` line's inputs also all exist now: `RegistryConfig::ModernMenuRedirectedToUs()`
 answers the TreatAs half (§01.9b), `IATHook::installed()` the interception half,

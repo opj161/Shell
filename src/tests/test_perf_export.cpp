@@ -28,6 +28,7 @@
 
 #include <vector>
 #include <memory>
+#include <string>
 
 using namespace Nilesoft::Shell::Diagnostics;
 
@@ -586,4 +587,186 @@ TEST(perf_report, milliseconds_round_rather_than_truncate)
 	perf_report_split_ms(949, whole, tenth);
 	CHECK_EQ(whole, 0u);
 	CHECK_EQ(tenth, 9u);
+}
+
+/*
+	The provider-name directory.
+
+	A record carries a CLSID hash so the measured path never copies a string.
+	That makes the report stable but unactionable - `provider e345019d 186 ms`
+	names nothing a user can quarantine - so the names live beside the records,
+	one entry per distinct provider, written the first time a host activates it.
+
+	What can go wrong here without looking wrong is the append: the count must
+	never admit an entry that is not finished, or a reader prints whatever was
+	in that slot. Hence entry-then-count, and hence these.
+*/
+TEST(perf_export, a_fresh_block_knows_no_provider_names)
+{
+	auto block = make_block();
+	CHECK(perf_export_find_name(block, 0xe345019du) == nullptr);
+	CHECK_EQ(block.header.directory_count, 0u);
+}
+
+TEST(perf_export, a_noted_name_comes_back_for_its_hash)
+{
+	auto block = make_block();
+	CHECK(perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename"));
+	CHECK_EQ(block.header.directory_count, 1u);
+	CHECK(same(perf_export_find_name(block, 0xe345019du), L"Rename with PowerRename"));
+}
+
+TEST(perf_export, an_unknown_hash_still_has_no_name)
+{
+	auto block = make_block();
+	perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename");
+	CHECK(perf_export_find_name(block, 0x9e0df88cu) == nullptr);
+}
+
+// The common case after the first menu: the same handler, every time. If this
+// appended it would exhaust 32 slots within a few right-clicks.
+TEST(perf_export, noting_the_same_provider_twice_adds_nothing)
+{
+	auto block = make_block();
+	CHECK(perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename"));
+	CHECK(!perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename"));
+	CHECK(!perf_export_note_name(block, 0xe345019du, L"Something else entirely"));
+	CHECK_EQ(block.header.directory_count, 1u);
+
+	// The first title wins: an entry is never rewritten, which is what lets a
+	// reader copy the directory outside the sequence protocol.
+	CHECK(same(perf_export_find_name(block, 0xe345019du), L"Rename with PowerRename"));
+}
+
+TEST(perf_export, a_provider_with_no_title_is_not_recorded)
+{
+	auto block = make_block();
+	CHECK(!perf_export_note_name(block, 0xe345019du, nullptr));
+	CHECK(!perf_export_note_name(block, 0xe345019du, L""));
+	CHECK_EQ(block.header.directory_count, 0u);
+}
+
+TEST(perf_export, a_name_that_fills_the_buffer_is_truncated_and_terminated)
+{
+	auto block = make_block();
+	std::wstring huge(PERF_EXPORT_PROVIDER_NAME + 40, L'x');
+	CHECK(perf_export_note_name(block, 1, huge.c_str()));
+
+	auto got = perf_export_find_name(block, 1);
+	CHECK(got != nullptr);
+	if(!got)
+		return;
+	CHECK_EQ(::lstrlenW(got), int(PERF_EXPORT_PROVIDER_NAME - 1));
+	CHECK_EQ(block.directory[0].name[PERF_EXPORT_PROVIDER_NAME - 1], L'\0');
+}
+
+TEST(perf_export, the_directory_fills_up_and_says_so_rather_than_overwriting)
+{
+	auto block = make_block();
+	for(uint32_t i = 0; i < PERF_EXPORT_DIRECTORY; i++)
+	{
+		wchar_t name[32];
+		::wsprintfW(name, L"provider %u", i);
+		CHECK(perf_export_note_name(block, 1000 + i, name));
+	}
+	CHECK_EQ(block.header.directory_count, PERF_EXPORT_DIRECTORY);
+	CHECK_EQ(block.directory_dropped, 0u);
+
+	// One too many: refused, counted, and nothing already there is disturbed.
+	CHECK(!perf_export_note_name(block, 9999, L"one too many"));
+	CHECK_EQ(block.header.directory_count, PERF_EXPORT_DIRECTORY);
+	CHECK_EQ(block.directory_dropped, 1u);
+	CHECK(perf_export_find_name(block, 9999) == nullptr);
+	CHECK(same(perf_export_find_name(block, 1000), L"provider 0"));
+	CHECK(same(perf_export_find_name(block, 1000 + PERF_EXPORT_DIRECTORY - 1),
+			   L"provider 31"));
+}
+
+// A count larger than the array is another process's corruption, and writing at
+// a clamped index would overwrite an entry somebody is about to read.
+TEST(perf_export, a_directory_count_beyond_the_array_is_refused_not_clamped)
+{
+	auto block = make_block();
+	perf_export_note_name(block, 1, L"first");
+	block.header.directory_count = PERF_EXPORT_DIRECTORY + 9;
+
+	CHECK(!perf_export_note_name(block, 2, L"second"));
+	CHECK(same(block.directory[0].name, L"first"));
+
+	// A lookup clamps instead, because reading a slot inside the array is
+	// harmless and refusing would lose every name the block does hold.
+	CHECK(same(perf_export_find_name(block, 1), L"first"));
+}
+
+/*
+	The append order, observed at the one moment it is visible.
+
+	A reader in another process copies the directory outside the sequence
+	protocol, so `directory_count` is the only thing telling it how far the
+	table is valid. If the count were raised before the entry was written, that
+	reader could copy a name still being filled in.
+
+	A test that inspects the block after the call returns cannot tell the two
+	orderings apart - both leave identical state - so this uses the same
+	interpose seam perf_export_load has, which runs between the entry and the
+	count. Written the other way round first, and it passed; that is why the
+	seam is here.
+*/
+TEST(perf_export, the_count_does_not_admit_an_entry_until_it_is_written)
+{
+	struct Seen
+	{
+		uint32_t count_at_that_moment;
+		PerfExportBlock *block;
+		wchar_t name_at_that_moment[PERF_EXPORT_PROVIDER_NAME];
+		uint32_t hash_at_that_moment;
+	} seen{};
+
+	auto block = std::make_unique<PerfExportBlock>();
+	*block = make_block();
+	seen.block = block.get();
+
+	perf_export_note_name(*block, 0x1234u, L"Rename with PowerRename",
+		[](void *ctx)
+		{
+			auto *s = static_cast<Seen *>(ctx);
+			s->count_at_that_moment = s->block->header.directory_count;
+			s->hash_at_that_moment = s->block->directory[0].clsid_hash;
+			::lstrcpynW(s->name_at_that_moment, s->block->directory[0].name,
+						PERF_EXPORT_PROVIDER_NAME);
+		}, &seen);
+
+	// Mid-append: the entry is already complete and the count has not yet
+	// admitted it, so a reader arriving here sees an empty directory rather
+	// than a half-written name.
+	CHECK_EQ(seen.count_at_that_moment, 0u);
+	CHECK_EQ(seen.hash_at_that_moment, 0x1234u);
+	CHECK(same(seen.name_at_that_moment, L"Rename with PowerRename"));
+
+	// And afterwards it is visible.
+	CHECK_EQ(block->header.directory_count, 1u);
+	CHECK(same(perf_export_find_name(*block, 0x1234u), L"Rename with PowerRename"));
+}
+
+TEST(perf_export, the_reader_copies_the_directory_out_of_the_block)
+{
+	// The view is unmapped before perf_export_read returns, so a source that
+	// pointed into the block instead of copying would dangle at exactly the
+	// moment the report prints it.
+	PerfExportWriter writer;
+	CHECK(writer.open());
+
+	writer.note_provider(0xabcd1234u, L"Search Everything");
+	writer.store(make_record(999, ::GetTickCount64()));
+
+	PerfExportSource source{};
+	std::vector<PerfExportRecord> out(PERF_EXPORT_RECORDS);
+	size_t written = 0;
+	auto status = perf_export_read(::GetCurrentProcessId(), source,
+								   out.data(), out.size(), written);
+
+	CHECK(status == PerfExportStatus::Ok);
+	CHECK(source.directory_count >= 1u);
+	CHECK(same(source.name_for(0xabcd1234u), L"Search Everything"));
+	CHECK(source.name_for(0x11112222u) == nullptr);
 }

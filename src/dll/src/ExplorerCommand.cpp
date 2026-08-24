@@ -455,6 +455,15 @@ namespace Nilesoft
 					filled == FillResult::Failed ? Diagnostics::ProviderResult::Failed
 												 : Diagnostics::ProviderResult::Ok);
 
+				// The handler's own title, for the report's name directory.
+				// This is the one place it exists: GetTitle takes the selection
+				// and is answered by the handler, so nothing outside a host
+				// that has built a menu can resolve a CLSID to it. Written once
+				// per distinct provider per process.
+				// docs/refactor/05-capabilities.md section 1.
+				if(!item->title.empty())
+					Diagnostics::provider_name(hash, item->title.c_str());
+
 				if(filled != FillResult::Shown)
 				{
 					cmd->Release();
