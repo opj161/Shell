@@ -38,7 +38,7 @@ Five rules have held throughout and are worth keeping:
 
 ## 2. What has landed on this branch
 
-Twelve commits, `940ff6a`..`cc5550d`.
+Fourteen commits, `940ff6a`..`5e44534`.
 
 | Commit | What |
 |---|---|
@@ -54,6 +54,7 @@ Twelve commits, `940ff6a`..`cc5550d`.
 | `a63c7a2` | **Bypass gesture and circuit breaker** — one gesture classifier, so reload and bypass cannot both fire |
 | `46c7a06` | **Config watcher** — save `shell.nss` and the menu follows, with no key combination |
 | `cc5550d` | **Type-ahead** — typing a name selects it; mnemonics keep precedence |
+| `5e44534` | **CoCI policy compile** — the COM detour stops walking the rule list for CLSIDs no rule names |
 
 ### The measurements that changed decisions
 
@@ -69,6 +70,7 @@ Twelve commits, `940ff6a`..`cc5550d`.
 | Owner-drawn + `MIIM_STRING` exposes names to a screen reader — **and Shell already sets it** | §05.3's premise is wrong; `MSAAMENUINFO` would be risk spent on a solved problem |
 | A rectangle model of the taskbar agrees with `ElementFromPoint` **49.6 %** of the time (84.2 % scoped to the XAML frame) | §02.5's Stage 2 as written would claim the system tray as background. Declined |
 | `ElementFromPointBuildCache` matches the four-call form at **1440 / 1440** points | Taken, for the call count rather than the 0.5 ms — a wedged provider now has one call to hang in, not four |
+| The COM detour is installed only inside `if(rt.loader.explorer)` | §01.9's "attach only if needed" buys less than it appears to — third-party hosts never had it. Conditional attach deferred |
 
 ## 3. Where to pick up
 
@@ -106,12 +108,20 @@ Small, self-contained presenter logic over the existing measure pass, and the
 machinery exists on both sides already (`cyMax` scrolling landed in `a3431df`;
 NSS `column` maps to `MFT_MENUBREAK`). Nothing blocks it.
 
-### 3.5 CoCI policy compile and conditional attach (§01.9)
+### 3.5 CoCI: the router de-dup, and conditional attach if it earns itself (§01.9)
 
-`Include/ComActivationPolicy.h` already exists — it landed with the Alt-held
-blocklist fix (`f2975f9`). What remains is compiling the policy at config
-publish time, attaching the detour only when the policy is non-empty, and the
-router de-dup of the Win11 suppression.
+The policy compile and the hook's fast path landed in `5e44534`. Two things are
+left, and one of them shrank on inspection — see §01.9a:
+
+- **Conditional attach is deferred, not pending.** The detour is already
+  installed only inside `if(rt.loader.explorer)`, so third-party hosts never get
+  it, and the policy does not exist yet at the point `BootstrapOnce` would
+  decide. Doing it means installing the detour later from a config-publish
+  thread, which now includes the watcher's. Revisit alongside `TakeoverRouter`,
+  where the decision has somewhere natural to live.
+- **The router de-dup of the Win11 suppression is still open**: TreatAs
+  authoritative when healthy, CoCI override only as a fallback, never both by
+  default.
 
 ### 3.6 Then
 
@@ -163,7 +173,7 @@ counters) · targeted moveto (§04.6) · favorites and the rule inspector
 .\src\bin\x64\hostprobe.exe --verify .\src\tests\hostprobe\fixtures
 ```
 
-At the time of writing: 26,303 checks / 0 failures on x64 and x86, arm64 builds
+At the time of writing: 26,327 checks / 0 failures on x64 and x86, arm64 builds
 and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)`,
 23 harness scenarios / 0 failures.
 
