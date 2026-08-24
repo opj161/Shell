@@ -298,6 +298,65 @@ replacing the `is_prop(UxSubclass)`/`_map[hWnd]` checks in `OnMenuCreate`
 (`ContextMenu.cpp:5487`) and `WinEventProc` (`:6715`). Small, testable pure-logic core
 (`PopupLifecycle` transitions) → new unit suite.
 
+### 6a. As implemented (2026-08-24) — the six states were measured for and declined; the real defect was next door
+
+The reentrancy hazard above is real and documented. What this section never did
+was establish **which** shape of it the code is exposed to, so that was probed
+before anything was built — a four-level cascade driven by posted keystrokes,
+reproducing the calls `OnMenuCreate` makes that can pump a message queue
+(`SetWindowLongPtr`, `SetClassLongPtr`, `DwmSetWindowAttribute`, `PostMessage`).
+Windows 11 26200.8875 x64:
+
+| Shape | escape-out | select-deep | sibling walk |
+|---|---|---|---|
+| `EVENT_OBJECT_CREATE` twice for one HWND | 0 | 0 | 0 |
+| `EVENT_OBJECT_SHOW` delivered inside a CREATE handler | no | no | no |
+| a positional `pop_back()` removed the closing window | yes | yes | yes |
+
+The sibling walk is the shape most likely to desynchronise a positional stack —
+it interleaves creation and destruction (create B, destroy B, create C, …) — and
+it did not. **So the six-state machine is not built.** There is no measured
+defect behind it, and `Created`/`Prepared`/`Closing` would be states nothing
+drives.
+
+One methodological note, because it cost an attempt and is the same family as
+`AGENTS.md`'s "two ways an experiment can test something other than what you
+think": the first version of the checker compared the destruction order against
+the whole creation *history* rather than simulating the stack in event order, so
+the sibling walk failed a test it should have passed and read as a discovery
+about Windows. It was a bug in the checker.
+
+**What was built is the part that is unsound whether or not the events
+misbehave.** `MenuSubClassProc`'s `WM_NCDESTROY` erased the `WND` from `_map`
+**by handle** and then popped the **last** entry off `_level` — two different
+keys for one removal. While they agree the code is fine; the first time they
+disagree, `_level` keeps a pointer to a `WND` that `_map` has already destroyed,
+and the next submenu placement dereferences it at `_level[_level.size() - 2]->x`.
+Nothing would report it: it reads as a misplaced submenu, or a crash somewhere
+else entirely.
+
+`Include/PopupLifecycle.h` is `PopupStack<T>` — an ordered stack that appends on
+create and removes **by handle** on destroy, which for a well-behaved cascade is
+the last entry and for a misbehaving one is still the right one. `_level` is one
+of these instead of a `std::vector<WND *>`, and three call sites got clearer as
+a side effect:
+
+- `ctx->_level.size() == 1` became `parent_of_top() == nullptr`. It said the
+  same thing only while the stack was exactly in step, which is the property
+  that was in question.
+- the duplicate-CREATE and unknown-window guards are cheap and the documentation
+  says the events may do it, so they are there even though this machine did not
+  produce one.
+- the screenshot composite iterates payloads root-first through `for_each`,
+  which is the order it always depended on and never stated.
+
+`test_popup_lifecycle.cpp` pins it. Both defects were checked to be caught:
+restoring the positional pop fails
+`an_out_of_order_destroy_removes_the_window_it_names` and
+`an_out_of_order_destroy_never_strands_an_entry` and nothing else; removing the
+duplicate guard fails `a_second_create_for_the_same_window_is_ignored` and
+nothing else.
+
 ## 7. Circuit breaker and one-shot bypass
 
 Per-process breaker keyed on `(host exe, windows build, config generation)`:

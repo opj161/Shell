@@ -5952,7 +5952,16 @@ namespace Nilesoft
 			//	map_menu_wnd[hMenu] = { hMenu, hWnd };
 
 			current.hWnd = hWnd;
-			_level.push_back(wnd);
+
+			// A second EVENT_OBJECT_CREATE for a popup already on the stack is
+			// ignored rather than pushed again: a duplicate entry would make the
+			// root stop answering "I am the root" and be positioned against
+			// itself, and the single removal that eventually arrives would leave
+			// the other entry dangling. Not observed on this machine, but
+			// SetWinEventHook documents that callbacks may reenter -
+			// Include/PopupLifecycle.h has the measurement and the citation.
+			if(PopupAction::Track != _level.on_create(hWnd, wnd))
+				return wnd;
 
 			Flag<ULONG_PTR> cs_style = ::GetClassLongPtrW(hWnd, GCL_STYLE);
 			Flag<LONG_PTR> style = ::GetWindowLongPtrW(hWnd, GWL_STYLE);
@@ -6017,6 +6026,13 @@ namespace Nilesoft
 
 		void ContextMenu::OnMenuShow(HWND hWnd, WND *wnd)
 		{
+			// Only for a popup this session is tracking, and only the first
+			// time. show_layers() is idempotent on its own, so this is the
+			// stack being the one place that answers "is this window ours?"
+			// rather than a second, independent opinion drifting from it.
+			if(PopupAction::Show != _level.on_show(hWnd))
+				return;
+
 			if(wnd == nullptr)
 				wnd = WND::get_prop(hWnd);
 
@@ -6059,7 +6075,9 @@ namespace Nilesoft
 				Point pt0 = { sz.cx, sz.cy };
 				Point pt1 = { 0, 0 };
 
-				for(auto &l : _level)
+				// Root first, which is the order the stack keeps: the composite
+				// is painted from the outermost popup inwards.
+				_level.for_each([&](WND *l)
 				{
 					Rect rc = l->handle;
 					if(l->layer.hbitmap)
@@ -6080,7 +6098,7 @@ namespace Nilesoft
 					pt0.y = std::min<long>(rc.top, pt0.y);
 					pt1.x = std::max<long>(rc.right, pt1.x);
 					pt1.y = std::max<long>(rc.bottom, pt1.y);
-				}
+				});
 				
 				pt0.x = std::max<long>(0, pt0.x);
 				pt0.y = std::max<long>(0, pt0.y);
@@ -6678,9 +6696,15 @@ namespace Nilesoft
 				case WM_NCDESTROY:
 				{
 					wnd->destroy();
+
+					// By handle, and before the map erases the object it points
+					// at. These used to be two different keys for one removal -
+					// erase by handle, pop by position - and the first time they
+					// disagreed the stack would keep a pointer to a WND the map
+					// had already destroyed, which the next submenu placement
+					// dereferences. Include/PopupLifecycle.h.
+					ctx->_level.on_destroy(hWnd);
 					ctx->_map.erase(hWnd);
-					if(!ctx->_level.empty())
-						ctx->_level.pop_back();
 					ctx->current.zero();
 					break;
 				}
@@ -6818,7 +6842,13 @@ namespace Nilesoft
 						}
 						else if(!flags.has(SWP_NOMOVE))
 						{
-							if(ctx->_level.size() == 1)
+							// The popup that opened this one, which is what a
+							// submenu is placed against. Null means there is no
+							// such thing - this is the root - which used to be
+							// spelled `_level.size() == 1` and so was only right
+							// while the stack was exactly in step.
+							auto prev_window = ctx->_level.parent_of_top();
+							if(prev_window == nullptr)
 							{
 								wp->x += 1;
 								wp->y += 1;
@@ -6827,7 +6857,6 @@ namespace Nilesoft
 							{
 								auto border = &theme->border;
 								auto align = theme->layout.popup.align != 0x7F;
-								auto prev_window = ctx->_level[ctx->_level.size() - 2];
 								auto swap_popup = wp->x < prev_window->x;
 								auto fr = FixedFrame.cx / 2;
 								auto x = bz + theme->border.padding.width();

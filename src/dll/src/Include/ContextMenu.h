@@ -17,6 +17,7 @@ constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 #include "Include/NativeMenuLazy.h"
 #include "Include/NativeMenuTargets.h"
 #include "Include/OneShotMarshal.h"
+#include "Include/PopupLifecycle.h"
 
 struct IExplorerCommand;
 struct IShellItemArray;
@@ -736,7 +737,12 @@ plutovg_move_to(pluto, start.x, start.y);
 			DWORD ProcessId{};
 			DWORD ThreadId{};
 
-			std::vector<WND *> _level;
+			// The popups this session has open, innermost last. Entries are
+			// removed by handle rather than by position, so this can never
+			// disagree with _map about which window went away - see
+			// Include/PopupLifecycle.h for the defect that made it a stack of
+			// pointers into a map that erases by key.
+			PopupStack<WND> _level;
 			std::unordered_map<HWND, WND> _map;
 			// Owns every MenuItemInfo; the vector stores unique_ptr, so pointee addresses stay stable across growth.
 			std::vector<std::unique_ptr<MenuItemInfo>> _gc;
