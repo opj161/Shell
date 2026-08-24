@@ -12,7 +12,8 @@ namespace hostprobe
 	// cancelled one.
 	enum class MenuShape { Flat, WithSubmenu, WithOwnerDraw, Invalid };
 
-	enum class ScriptKind { SelectSecond, SelectInSubmenu, Cancel, UnmatchedChar };
+	enum class ScriptKind { SelectSecond, SelectInSubmenu, Cancel, UnmatchedChar,
+							UnmatchedCharAfterNavigating };
 
 	// What a question scenario asserts. Matrix scenarios use Record and assert
 	// nothing - their output is the baseline, not a verdict.

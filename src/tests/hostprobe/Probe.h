@@ -398,6 +398,26 @@ namespace hostprobe
 			return ::DefWindowProcW(hwnd, msg, wp, lp);
 		}
 
+		// Which item the menu says is highlighted, or -1. MFS_HILITE is where
+		// that fact lives - there is nowhere else to ask.
+		// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuiteminfow
+		static int highlighted_position(HMENU menu)
+		{
+			if(!menu)
+				return -1;
+			auto count = ::GetMenuItemCount(menu);
+			for(int i = 0; i < count; i++)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_STATE;
+				if(::GetMenuItemInfoW(menu, static_cast<UINT>(i), TRUE, &mii) &&
+				   (mii.fState & MFS_HILITE))
+					return i;
+			}
+			return -1;
+		}
+
 		void record(const wchar_t *name, UINT msg, WPARAM wp, LPARAM lp)
 		{
 			wchar_t buf[320];
@@ -437,11 +457,19 @@ namespace hostprobe
 				break;
 
 			case WM_MENUCHAR:
-				::swprintf_s(buf, L"%-20s char=%u type=%s menu=%s", name,
+			{
+				// The highlighted position, read back from the menu the way
+				// Shell's own handler has to read it. Two things depend on that
+				// working: knowing where the highlight is at all, and whether it
+				// is legible for an *owner-drawn* item, which is the only kind
+				// Shell ever renders.
+				::swprintf_s(buf, L"%-20s char=%u type=%s menu=%s hilite=%d", name,
 							 static_cast<unsigned>(LOWORD(wp)),
 							 HIWORD(wp) == MF_SYSMENU ? L"SYSMENU" : L"POPUP",
-							 _trace.menu_alias(reinterpret_cast<HMENU>(lp)).c_str());
+							 _trace.menu_alias(reinterpret_cast<HMENU>(lp)).c_str(),
+							 highlighted_position(reinterpret_cast<HMENU>(lp)));
 				break;
+			}
 
 			case WM_COMMAND:
 				::swprintf_s(buf, L"%-20s id=%u notify=%u from=%s", name,

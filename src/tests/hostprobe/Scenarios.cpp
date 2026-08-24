@@ -142,6 +142,17 @@ namespace hostprobe
 			s.keys = { Key::ch(L'Z') };
 			return s;
 		}
+
+		// The same, but with the highlight already somewhere - the state a
+		// *second* press of a duplicated mnemonic starts from, and the one where
+		// the reply has to depend on where the highlight currently is.
+		Probe::Script unmatched_character_after_navigating()
+		{
+			Probe::Script s;
+			s.root = Target::command(FIRST_ID + 1);		// position 1
+			s.keys = { Key::ch(L'Z') };
+			return s;
+		}
 	}
 
 	std::wstring flag_names(UINT flags)
@@ -180,6 +191,8 @@ namespace hostprobe
 		case ScriptKind::SelectInSubmenu: script = select_in_submenu(); break;
 		case ScriptKind::Cancel:          script = cancel(); break;
 		case ScriptKind::UnmatchedChar:   script = unmatched_character(); break;
+		case ScriptKind::UnmatchedCharAfterNavigating:
+			script = unmatched_character_after_navigating(); break;
 		}
 
 		probe.clear_navigation_failure();
@@ -394,6 +407,63 @@ namespace hostprobe
 				v.push_back(s);
 			}
 
+			{
+				// Q6. The same MNC_EXECUTE reply, but against an *owner-drawn*
+				// item - which is the only kind Shell ever renders, and the
+				// reason WM_MENUCHAR reaches the owner at all. An owner-drawn
+				// item has no text in the HMENU, so this asks whether Windows
+				// still honours a position-based reply when it cannot itself see
+				// what is at that position. Gates Include/Mnemonics.h.
+				//
+				// Position 2 is the owner-drawn item in this shape, so a correct
+				// answer is identifier 5003.
+				Scenario s;
+				s.name = L"question.menuchar_executes_an_ownerdrawn_item";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
+				s.shape = MenuShape::WithOwnerDraw;
+				s.script = ScriptKind::UnmatchedChar;
+				s.handle_menuchar = true;
+				s.menuchar_action = MNC_EXECUTE;
+				s.menuchar_operand = 2;
+				s.expectation = Expect::ReturnEquals;
+				s.expected = FIRST_ID + 2;
+				s.why = L"Shell renders every item owner-drawn, so this is the "
+						L"configuration mnemonics actually run in";
+				v.push_back(s);
+			}
+			{
+				// Q7. MNC_SELECT moves the highlight instead of committing,
+				// which is what a duplicated mnemonic does on the first press.
+				// The trace records where the highlight ended up.
+				Scenario s;
+				s.name = L"question.menuchar_select_moves_the_highlight";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
+				s.script = ScriptKind::UnmatchedChar;
+				s.handle_menuchar = true;
+				s.menuchar_action = MNC_SELECT;
+				s.menuchar_operand = 3;
+				s.expectation = Expect::Record;
+				s.why = L"MNC_SELECT is what a duplicated mnemonic returns on its "
+						L"first press; the menu must stay open";
+				v.push_back(s);
+			}
+			{
+				// Q8. Can the owner see where the highlight is when it is asked?
+				// Include/Mnemonics.h cycles through duplicated mnemonics by
+				// starting from the current selection, and MFS_HILITE is the only
+				// place that fact lives. Every other scenario types with nothing
+				// highlighted, so this is the one that says the readback works.
+				Scenario s;
+				s.name = L"question.menuchar_sees_the_current_highlight";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
+				s.script = ScriptKind::UnmatchedCharAfterNavigating;
+				s.handle_menuchar = true;
+				s.menuchar_action = MNC_IGNORE;
+				s.expectation = Expect::Record;
+				s.why = L"the reply for a duplicated mnemonic depends on where the "
+						L"highlight already is";
+				v.push_back(s);
+			}
 			{
 				// Q5. "If the user cancels the menu without making a selection,
 				// or if an error occurs, the return value is zero" - so under

@@ -81,6 +81,8 @@ in each is stated below rather than in a separate tracker.
 | ⬜ | Cold-start measurement, then the persistence decision for §02.1 step 3 | 1.5 |
 | ✅ | TPM normalization — `TPM_RETURNCMD` always added, native replay posted, synthetic identifiers no longer reach the host | 2.3 |
 | ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B | 2 |
+| ✅ | Mnemonics (§05.4 Stage 1) — `WM_MENUCHAR` was unanswered, so a typed letter beeped | 5 |
+| ✅ | Packaged verbs no longer leak a GDI bitmap per right-click (§02.2a-ii) | 1 |
 | ⬜ | `shell.exe -check`, circuit breaker, bypass gesture, taskbar Stage 2 | 3 |
 
 ### What the harness settled (2026-08-24)

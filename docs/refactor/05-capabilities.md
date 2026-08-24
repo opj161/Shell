@@ -141,6 +141,28 @@ One incidental behaviour to expect when implementing: the `WM_MENUSELECT` that
 follows an `MNC_EXECUTE` reply carries `MF_MOUSESELECT`, although nothing was
 clicked. Anything keying off that flag to distinguish mouse from keyboard will
 be wrong for mnemonics.
+
+**Stage 1 landed (2026-08-24)** as `Include/Mnemonics.h` plus
+`ContextMenu::OnMenuChar`, with three further harness scenarios recorded because
+the unit tests could only pin the decision, not the environment it runs in:
+
+| Scenario | What it establishes |
+|---|---|
+| `question.menuchar_executes_an_ownerdrawn_item` | An index reply is honoured for an **owner-drawn** item — the only kind Shell renders, and one Windows cannot itself read. Returns 5003 for position 2, `WM_MENUSELECT` shows `HILITE\|OWNERDRAW` |
+| `question.menuchar_select_moves_the_highlight` | `MNC_SELECT` moves the highlight and leaves the menu open, which is what a duplicated mnemonic needs on its first press |
+| `question.menuchar_sees_the_current_highlight` | `MFS_HILITE` reads back correctly at `WM_MENUCHAR` time (`hilite=1` after navigating to position 1) — the cycling rule depends on it and nothing else records that fact |
+
+Two decisions worth stating because they are not forced by the documentation:
+
+- **An unmatched key returns `MNC_IGNORE`, not `MNC_CLOSE`.** A mistyped letter
+  should not dismiss the menu the user was reading. This also makes handling the
+  message free when there is nothing to match — the reply is byte-identical to
+  what `DefWindowProc` returned before.
+- **A disabled item does not swallow the keystroke.** It still draws its
+  underline, but choosing it would do nothing, so an enabled duplicate below it
+  gets the key instead of the press appearing to be ignored.
+
+Stage 2 (prefix type-ahead) is unchanged and still open.
 Stage 2 — prefix type-ahead: buffer chars for 1 s; select first visible match
 (composed items + materialized natives); no lazy-tree violation: unmatched-deep search
 stays out; optional "Search deeper…" item defers to a later phase (A2§20 caution).

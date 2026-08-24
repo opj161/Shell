@@ -3,6 +3,7 @@
 #include "Include/ContextMenu.h"
 #include "Include/stb_image_write.h"
 #include "Include/Diagnostics/MenuPerf.h"
+#include "Include/Mnemonics.h"
 #include "RegistryConfig.h"
 
 using namespace Nilesoft::Diagnostics;
@@ -1624,6 +1625,89 @@ namespace Nilesoft
 			current.hMenu = hMenu;
 			_tip.hide();
 			return msg.invoke();
+		}
+
+		/*
+			A typed character, for a menu whose items Windows cannot read.
+
+			The popup is asked for its own state rather than the composed model
+			being consulted, for two reasons. Positions are what the reply is
+			denominated in and the HMENU is the only place they are authoritative
+			- separators occupy them, and a moveto rule can have reordered
+			everything. And the highlight lives in the menu, not in the model:
+			MFS_HILITE is where "which item is the user on" actually is, and it
+			is what decides whether a second press of a duplicated mnemonic moves
+			on or sits still.
+		*/
+		LRESULT ContextMenu::OnMenuChar(HMENU hMenu, wchar_t pressed)
+		{
+			if(!hMenu || !pressed)
+				return MnemonicReply{}.to_lresult();
+
+			auto count = ::GetMenuItemCount(hMenu);
+			if(count <= 0)
+				return MnemonicReply{}.to_lresult();
+
+			std::vector<MnemonicItem> candidates;
+			candidates.reserve(static_cast<size_t>(count));
+			int current = -1;
+
+			for(int i = 0; i < count; i++)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_DATA | MIIM_STATE | MIIM_FTYPE;
+				// fByPosition TRUE: uiItem is an index, which is the whole point.
+				// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuiteminfow
+				if(!::GetMenuItemInfoW(hMenu, static_cast<UINT>(i), TRUE, &mii))
+					continue;
+
+				if(mii.fState & MFS_HILITE)
+					current = i;
+
+				if(mii.fType & MFT_SEPARATOR)
+					continue;
+
+				auto item = reinterpret_cast<MenuItemInfo *>(mii.dwItemData);
+				if(!owns_item(item))
+					continue;
+
+				MnemonicItem candidate;
+				candidate.position = i;
+				candidate.mnemonic = mnemonic_of(item->title.text.c_str());
+				// A disabled item is still drawn and still has a mnemonic, but
+				// choosing it would do nothing - so it is skipped rather than
+				// swallowing a keystroke a later duplicate could have used.
+				candidate.selectable = (mii.fState & (MFS_DISABLED | MFS_GRAYED)) == 0;
+				if(candidate.mnemonic)
+					candidates.push_back(candidate);
+			}
+
+			auto reply = choose_mnemonic(pressed, candidates.data(), candidates.size(), current);
+			return reply.to_lresult();
+		}
+
+		// dwItemData on Shell's own composed menu is a MenuItemInfo this object
+		// created - but a borrowed host popup can carry the host's own layout
+		// there, and MenuItem.h already reads foreign ones under SEH for exactly
+		// that reason. Dereferencing whatever is in the field would be reading a
+		// pointer somebody else defined, so it is checked against what this menu
+		// actually owns first.
+		bool ContextMenu::owns_item(const MenuItemInfo *item) const
+		{
+			if(!item)
+				return false;
+			for(auto known : _items_command)
+			{
+				if(known == item)
+					return true;
+			}
+			for(auto known : _items_popup)
+			{
+				if(known == item)
+					return true;
+			}
+			return false;
 		}
 
 		//
@@ -6920,6 +7004,18 @@ namespace Nilesoft
 					}
 					case WM_MENUSELECT:
 						return ctx->OnMenuSelect(reinterpret_cast<HMENU>(lParam), LOWORD(wParam), HIWORD(wParam));
+					case WM_MENUCHAR:
+					{
+						// Owner-drawn items carry no text for Windows to match,
+						// so this is the only route by which a typed letter can
+						// reach anything. Nothing answered it before, which meant
+						// a beep.
+						// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menuchar
+						if(HIWORD(wParam) == MF_SYSMENU)
+							break;
+						return ctx->OnMenuChar(reinterpret_cast<HMENU>(lParam),
+											   static_cast<wchar_t>(LOWORD(wParam)));
+					}
 					case WM_ENTERIDLE:
 						if(wParam == MSGF_MENU)
 						{

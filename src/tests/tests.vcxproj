@@ -87,6 +87,7 @@
     <ClInclude Include="..\dll\src\Include\HostContract.h" />
     <ClInclude Include="..\dll\src\Include\ProviderHealth.h" />
     <ClInclude Include="..\dll\src\Include\IconResource.h" />
+    <ClInclude Include="..\dll\src\Include\Mnemonics.h" />
     <ClInclude Include="..\dll\src\Include\Diagnostics\DiagnosticsRing.h" />
     <ClInclude Include="..\dll\src\Include\PackageCatalogService.h" />
     <ClInclude Include="..\dll\src\Include\MenuText.h" />
@@ -143,6 +144,7 @@
     <ClCompile Include="test_diagnostics_ring.cpp" />
     <ClCompile Include="test_provider_health.cpp" />
     <ClCompile Include="test_icon_resource.cpp" />
+    <ClCompile Include="test_mnemonics.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression
        tests exercise the real evaluator instead of a copy of it. The closure is

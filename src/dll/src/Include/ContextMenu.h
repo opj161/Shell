@@ -774,6 +774,12 @@ plutovg_move_to(pluto, start.x, start.y);
 			LRESULT OnInitMenuPopup(HMENU hMenu, uint32_t uPosition);
 			LRESULT OnUninitMenuPopup(HMENU hMenu);
 			LRESULT OnMenuSelect(HMENU hMenu, uint32_t id, uint32_t flags);
+
+			// A character typed while a popup is open. Owner-drawn items give
+			// Windows nothing to match, so this is the only route a mnemonic has.
+			// See Include/Mnemonics.h.
+			LRESULT OnMenuChar(HMENU hMenu, wchar_t pressed);
+			bool owns_item(const MenuItemInfo *item) const;
 			LRESULT OnDrawItem(DRAWITEMSTRUCT *di);
 			LRESULT OnMeasureItem(MEASUREITEMSTRUCT *mi);
 
