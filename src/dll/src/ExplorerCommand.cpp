@@ -5,6 +5,7 @@
 #include "Include/ProviderQuarantineStore.h"
 #include "Include/IconResource.h"
 #include "Include/Diagnostics/DiagnosticsRing.h"
+#include "Include/Diagnostics/MenuPerf.h"
 #include "Include/ContextMenu.h"
 
 #include <shobjidl.h>
@@ -280,6 +281,27 @@ namespace Nilesoft
 			if(Selected.ItemArray)
 				return Selected.ItemArray;
 
+			/*
+				The rebuild, and it gets a phase of its own.
+
+				docs/refactor/02-first-paint-latency.md section 3: "add an
+				assertion/log when the SHParseDisplayName fallback path runs -
+				it should be rare after capture-first selection. Any occurrence
+				on the menu thread is a diagnostics event, not silence."
+
+				It was silence, and it was not rare. Both selection providers
+				are handed an IShellItemArray by the host, and only one of them
+				kept it, so every Explorer menu rebuilt one path at a time -
+				measured at ~420 ms of a ~450 ms menu over 200 files, hidden
+				inside `explorer.commands` because nothing named it.
+
+				Now it is named. A report showing `selection.rebuild_array` is a
+				host whose view gave Shell no array, which is a real case
+				(a background click has no selection to reuse) but should never
+				again be the common one without somebody noticing.
+			*/
+			Diagnostics::MenuPerfScope perf(L"selection.rebuild_array");
+
 			std::vector<std::wstring> paths;
 			if(Selected.Background && !Selected.Directory.empty())
 				paths.emplace_back(Selected.Directory.c_str());
@@ -291,6 +313,8 @@ namespace Nilesoft
 						paths.emplace_back(item->Path.c_str());
 				}
 			}
+
+			perf.annotate(static_cast<long>(paths.size()));
 
 			Selected.ItemArray = create_shell_item_array_from_paths(paths);
 			Selected.ItemArrayOwned = Selected.ItemArray != nullptr;
@@ -411,6 +435,13 @@ namespace Nilesoft
 			auto budget = ProviderBudget::begin();
 			auto &health = ProviderHealth::instance();
 
+			// How much selection these handlers are about to be asked about.
+			// A provider's remembered cost is keyed by this as well as by its
+			// CLSID, because a time measured against one file predicts nothing
+			// about two hundred - measured at 209 ms for one handler and 634 ms
+			// for the menu on 2026-08-25. Include/ProviderHealth.h.
+			auto shape = selection_shape(Selected.Count());
+
 			for(const auto &reg : regs)
 			{
 				if(!explorer_command_matches_any(reg, kinds))
@@ -445,7 +476,7 @@ namespace Nilesoft
 					continue;
 				}
 
-				auto verdict = health.consider(hash, budget.remaining_us());
+				auto verdict = health.consider(hash, shape, budget.remaining_us());
 				if(verdict != ProviderVerdict::Try)
 				{
 					// Omitted from this menu, not forgotten: the next menu asks
@@ -461,7 +492,7 @@ namespace Nilesoft
 				auto cmd = acquire_explorer_command(reg.clsid);
 				if(!cmd)
 				{
-					health.record(hash, budget.spent_us() - spent_before, false);
+					health.record(hash, shape, budget.spent_us() - spent_before, false);
 					Diagnostics::session_provider(hash, budget.spent_us() - spent_before,
 												  Diagnostics::ProviderResult::Failed);
 					continue;
@@ -474,7 +505,7 @@ namespace Nilesoft
 				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd, selection);
 
 				auto cost = budget.spent_us() - spent_before;
-				health.record(hash, cost, filled != FillResult::Failed);
+				health.record(hash, shape, cost, filled != FillResult::Failed);
 				Diagnostics::session_provider(hash, cost,
 					filled == FillResult::Failed ? Diagnostics::ProviderResult::Failed
 												 : Diagnostics::ProviderResult::Ok);

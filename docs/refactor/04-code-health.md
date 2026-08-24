@@ -318,6 +318,18 @@ assertion made where it matters.
 - Lazy large-selection metadata (A2§21): defer until `selection.preparing` shows up in
   ring-buffer p95s; verbs guidance (first item + count) supports the eventual design.
 
+  **Measured and declined (2026-08-25).** The gate this item set for itself has
+  now been run: 200 files selected in a real Explorer, three menus.
+  `selection.preparing` is **0.0 ms** and `selection.items.metadata` is
+  **1.2–1.6 ms for 200 items** — about 7 µs each. It does not appear in the
+  p95s at two hundred files and would not at two thousand.
+
+  The measurement was worth taking anyway, because the menu it came from cost
+  **645 ms**. None of it was selection metadata: ~616 ms was an
+  `IShellItemArray` being rebuilt one path at a time (§02.3a) and ~27 ms was the
+  handlers. So the item this section proposed would have optimised 0.3 % of the
+  problem, and finding that out is what located the other 99 %.
+
 ## 9. `CoCreateInstanceHook`: diagnostics and policy share a branch (§07 A8)
 
 Verified defect, not previously in this plan. `CoCreateInstanceHook`

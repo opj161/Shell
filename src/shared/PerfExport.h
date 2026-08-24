@@ -117,7 +117,9 @@ namespace Nilesoft
 			// 6: the block gained `interception` - which of the two popup
 			//    mechanisms is carrying this host, and whether its thunk still
 			//    pointed at Shell when it last published.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 6;
+			// 7: PERF_EXPORT_PROVIDERS 8 -> 32. Eight could not describe a
+			//    27-handler menu, which is exactly the slow one.
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 7;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -142,7 +144,20 @@ namespace Nilesoft
 			//
 			// Costs 8 more phases per record: 704 bytes a record, 11 KB a host.
 			inline constexpr uint8_t PERF_EXPORT_PHASES = 24;
-			inline constexpr uint8_t PERF_EXPORT_PROVIDERS = 8;
+			/*
+				Was 8, and 8 was too few for the menu that matters most.
+
+				Measured 2026-08-25: a right-click over 200 selected files in a
+				real Explorer asks 27 handlers and costs ~450 ms. The report
+				showed eight of them, summing to about 9 ms, and said nothing
+				about the other nineteen - so the slowest menu on the machine
+				was also the one the instrument could least explain. Same shape
+				as the phases cap two fields up, and found the same way.
+
+				32 covers this machine's 23 registered handlers with room, and
+				costs 288 bytes a record - about 4.6 KB across a host's block.
+			*/
+			inline constexpr uint8_t PERF_EXPORT_PROVIDERS = 32;
 
 			// 16 sessions, ~24 KB of shared commit. This is mapped into every
 			// process that raises a context menu - two dozen on a normal

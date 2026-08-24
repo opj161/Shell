@@ -1141,9 +1141,32 @@ static int BuildPerfReport(bool detailed, string &out)
 				report.append_format(L"                 provider %-38s %u.%u ms  %s",
 									 identity.c_str(), ms, tenth,
 									 perf_export_result_name(record.providers[v].result));
+				// (name appended below when the host knows it)
 				if(known)
 					report.append_format(L"  %s", known);
 				report.append(L"\r\n");
+			}
+
+			/*
+				Providers that did not fit, said out loud.
+
+				`dropped_providers` has been carried through the export since it
+				was written and printed by nobody, which cost a real diagnosis:
+				a menu over 200 selected files asks 27 handlers and takes
+				~450 ms, and the report showed eight of them summing to about
+				9 ms with no hint that nineteen were missing. It read as an
+				explained menu when it was a 30%-visible one.
+
+				The caps were raised at the same time, so this should now be
+				rare - but a silent cap is what made it invisible, not the cap
+				itself, and the same mistake next time deserves to be loud.
+			*/
+			if(record.dropped_providers)
+			{
+				report.append_format(L"                 (%u provider%s did not fit - "
+									 L"this menu is not fully described)\r\n",
+									 record.dropped_providers,
+									 record.dropped_providers == 1 ? L"" : L"s");
 			}
 		};
 

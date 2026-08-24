@@ -1151,6 +1151,37 @@ namespace Nilesoft
 					}
 					if(got_selection)
 					{
+						/*
+							Keep the array the view just handed us.
+
+							docs/refactor/02-first-paint-latency.md section 3 asks
+							for exactly this and it was never wired up: the
+							packaged-verb path needs an IShellItemArray, and when
+							it does not find one it rebuilds it from the item
+							*paths* - one SHParseDisplayName per file, on the
+							thread between the right-click and the first pixel
+							(ContextMenu::ensure_selection_array).
+
+							Section 3 assumed that fallback would be rare. It was
+							not: the capture path stored its array and this one
+							did not, so every Explorer menu rebuilt an array the
+							view had already built. Measured 2026-08-25 with 200
+							files selected - the rebuild is ~420 ms of a ~450 ms
+							menu, and the 27 handlers it exists to feed account
+							for 27 ms of it.
+
+							GetSelection returns a reference this function owns,
+							and the IComPtr drops it at the end of the scope, so
+							one is taken for the field - the same shape as the
+							capture path in QuerySelectedFromHandler.
+						*/
+						if(!ItemArray && sia.pointer)
+						{
+							ItemArray = sia.pointer;
+							ItemArray->AddRef();
+							ItemArrayOwned = true;
+						}
+
 						DWORD sel_count = 0;
 						if(S_OK != sia->GetCount(&sel_count))
 							return false;

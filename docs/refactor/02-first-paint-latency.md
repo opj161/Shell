@@ -228,6 +228,33 @@ be without taking the call off the UI thread. What is met is that it delays
 exactly one menu and is then skipped, with a re-probe every 200 menus so the
 exclusion is not permanent.
 
+### 2a-iii. The key really does need the selection shape — measured 2026-08-25
+
+This section specifies the key as `(clsid, selection_shape)` and says so twice.
+`Include/ProviderHealth.h` shipped keyed on the CLSID alone, and the shape was
+dropped quietly enough that nothing recorded the decision.
+
+It matters, and the number that shows it is a 200-file selection: one handler
+("Convert to Adobe PDF") cost **209 ms** where its single-file best was a couple
+of milliseconds. Nothing deferred it, because judgement is on a provider's *best
+ever* time and its best had been measured against one file. A cost measured
+against one file is not a prediction about two hundred, so a single slot per
+CLSID means the budget keeps admitting providers it cannot afford.
+
+Four buckets — background, one, 2–16, more — rather than an exact count, because
+an exact key would remember every selection size separately and learn nothing
+about any of them. Measured effect on its own, before §3a landed: **645 ms →
+~460 ms**, converging after about four large-selection menus, because each shape
+has to be sampled twice before it can be judged.
+
+That 460 ms is also what led to §3a: with the worst two handlers correctly
+deferred and the rest costing ~27 ms between them, the phase was still 443 ms,
+and the gap is what pointed at the selection array.
+
+`test_provider_health.cpp` pins both directions — a cost learned on one file
+does not condemn the many-file case, and being slow over many does not condemn
+the single-file menu, which is the common one.
+
 **One trap worth recording, because the design was one line from having it.**
 On the first menu everything is cold and therefore looks pathological. A policy
 that condemned a provider on one slow sample would defer whatever the budget let
@@ -283,6 +310,65 @@ Keep current preference order but add an assertion/log when the
 `SHParseDisplayName` fallback path runs (`ExplorerCommand.cpp:271-274`) — it should be
 rare after capture-first selection (§04.5). Any occurrence on the menu thread is a
 diagnostics event, not silence.
+
+### 3a. It was silence, and it was not rare — measured and fixed 2026-08-25
+
+This is the largest first-paint defect found on this branch, and it was found
+by *doing what this section says* four sessions after the section was written.
+
+**The measurement.** 200 files selected in a real Explorer, three menus, on the
+reference machine:
+
+| | |
+|---|---|
+| right-click to menu | **645 ms** |
+| of which `explorer.commands` | **643 ms** |
+| of which the 27 handlers it exists to run | **27 ms** |
+
+The 27 packaged verb handlers accounted for four per cent of the phase named
+after them. The other **~616 ms** was `ensure_selection_array()` rebuilding an
+`IShellItemArray` **one `SHParseDisplayName` at a time, 200 times**, on the
+thread between the right-click and the first pixel.
+
+**Why it was invisible.** Two things, and both are the point of this section:
+
+1. **Nothing named it.** The rebuild ran inside `explorer.commands`, so every
+   report ever taken attributed it to third-party handlers. This section asked
+   for a diagnostics event and there was none, so for four sessions the obvious
+   reading of every report was "packaged verbs are slow".
+2. **The export capped provider records at 8.** A 27-handler menu showed eight
+   of them, summing to ~9 ms, with no indication nineteen were missing —
+   `dropped_providers` was carried through the export and printed by nobody.
+   Raised to 32, and the report says when any are dropped.
+
+**Why it happened.** Both selection providers (§04.4b) are handed an
+`IShellItemArray` by the host, and **only one of them kept it**.
+`QuerySelectedFromHandler` stores the captured array; the `IShellBrowser` path
+takes `fv->GetSelection(FALSE, sia)`, iterates it to build `Items`, and lets the
+`IComPtr` drop it at the end of the scope. So the array was rebuilt from path
+strings on **every Explorer menu** — cheap enough to hide with one file, and
+quadratic-feeling with two hundred.
+
+This section's own assumption is what let it hide: "it should be rare after
+capture-first selection". It was not rare. It was the common path, because
+capture-first is what a *third-party* host produces and Explorer is not one.
+
+**The fix** is four lines: keep the array the view already handed us.
+
+| | before | after |
+|---|---|---|
+| menu over 200 files | **645 ms** | **30 ms** |
+| `explorer.commands` | 643 ms | 28 ms |
+
+Twenty-one times faster on the same machine, same selection, same 27 handlers,
+with the desktop menu unchanged at 27 items. `selection.rebuild_array` is now a
+phase of its own, annotated with how many paths it converted, so the next time
+this path is taken somebody sees it — which is what §3 asked for in the first
+place.
+
+**The remaining fallback is legitimate and stays.** A background click has no
+selection to reuse, and a host that answers nothing still needs an array built.
+The change is that taking that path is now reported rather than assumed rare.
 
 ## 4. Point removals from the menu path (each verified)
 

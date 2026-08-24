@@ -94,6 +94,8 @@ Thirty-six commits, `940ff6a`..`6b26e61`.
 | `e49eac6` | **Interception status** — backlog item 8, settled. The interface declined, the `intercept` line built. §01.9c |
 | `294d471` | **Selection providers** — `QuerySelected` split in two, 271 lines verified byte-identical |
 | `20e061e` | **Selection routing** — a host whose window class looks like Explorer's no longer loses the selection it already gave us. §04.4b |
+| `c76c2e9` | **Reliability Center window** — `shell.exe -reliability`. §05.1d |
+| *(this session)* | **Selection array reuse** — a menu over 200 files went from **645 ms to 30 ms**. §02.3a |
 
 ### The measurements that changed decisions
 
@@ -124,6 +126,10 @@ Thirty-six commits, `940ff6a`..`6b26e61`.
 | A quarantined provider costs **0.0 ms**, and the menu loses exactly that item (29 against 30, read through MSAA) | Skipping beats refusing the activation: surgical, and the only version that saves the cost |
 | Bare `shell.exe -check` answered "no configuration file was found" **on a machine whose config was fine** | The export skips `BootstrapOnce`, so the paths it needs were never set up. The bare form had never worked |
 | A broken config, an Explorer restart, and the menu **still came back at 213 × 680 — identical to baseline** | §03.5's last outstanding acceptance criterion, met in a real Explorer for the first time |
+| **A menu over 200 selected files costs 645 ms, of which the 27 packaged handlers are 27 ms** | The phase named `explorer.commands` was 96 % something else: an `IShellItemArray` rebuilt one `SHParseDisplayName` at a time. 645 ms → **30 ms**. §02.3a |
+| The export kept **8 provider records** for a 27-provider menu, and `dropped_providers` was printed by nobody | The slowest menu on the machine was the one the instrument could least explain. Raised to 32, and drops are now reported |
+| A handler costing **209 ms** over 200 files had a single-file best of ~2 ms | `ProviderHealth` keyed on CLSID alone, so nothing could defer it. §02.2a specified `(clsid, selection_shape)`; it does now. 645 ms → ~460 ms on its own |
+| `selection.preparing` **0.0 ms** and metadata **1.3 ms for 200 items** | §04.7's lazy large-selection item declined on its own stated gate |
 
 ## 3. Where to pick up
 

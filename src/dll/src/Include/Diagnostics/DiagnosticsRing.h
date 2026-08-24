@@ -119,7 +119,10 @@ namespace Nilesoft
 			// the menu path currently names eleven, plus three SEH-safe marks in
 			// the hook, and a nested session folds its own in on top.
 			inline constexpr uint8_t MAX_PHASES = 24;
-			inline constexpr uint8_t MAX_PROVIDERS = 16;
+			// 16 was fewer than this machine's 23 registered handlers, so a
+			// menu that asked them all dropped the tail before the export
+			// even saw it. Measured on a 200-file selection, 2026-08-25.
+			inline constexpr uint8_t MAX_PROVIDERS = 32;
 			inline constexpr size_t RING_CAPACITY = 50;
 
 			struct MenuSessionRecord

@@ -71,9 +71,57 @@ namespace Nilesoft
 			DeferBudget,	// this menu has spent what it is allowed to
 		};
 
+		/*
+			How much selection a provider was asked about.
+
+			docs/refactor/02-first-paint-latency.md section 2a specifies the
+			key for a provider's remembered cost as `(clsid, selection_shape)`.
+			The first implementation dropped the shape and keyed on the CLSID
+			alone, and that was measured to matter on 2026-08-25: with 200 files
+			selected in a real Explorer, one handler ("Convert to Adobe PDF")
+			cost **209 ms** and the whole menu **634 ms**, three times running -
+			against ~10 ms for the same menu over a single file.
+
+			Nothing condemned that handler, because judgement is on a provider's
+			*best ever* time and its best was measured on a one-file selection.
+			A cost measured against one file is not a prediction about two
+			hundred, so remembering them in the same slot means the budget
+			admits providers it cannot afford and the deferral rule never fires.
+
+			Four buckets rather than an exact count, because the question is
+			"roughly how much work is this" and an exact key would remember
+			every selection size separately and so learn nothing about any of
+			them. The boundaries are where behaviour changes rather than round
+			numbers: a background click has no items at all, one item is the
+			overwhelmingly common case and the one every handler is optimised
+			for, and past a dozen or so a handler that inspects each item starts
+			to dominate.
+		*/
+		enum class SelectionShape : uint8_t
+		{
+			Background,		// no items - a right-click on the view's background
+			Single,			// exactly one
+			Few,			// 2..16
+			Many,			// more than 16
+		};
+
+		inline SelectionShape selection_shape(size_t count) noexcept
+		{
+			if(count == 0)
+				return SelectionShape::Background;
+			if(count == 1)
+				return SelectionShape::Single;
+			return count <= 16 ? SelectionShape::Few : SelectionShape::Many;
+		}
+
 		struct ProviderTiming
 		{
 			uint32_t clsid_hash{};
+
+			// Part of the key, not of the payload: one provider has one entry
+			// per shape it has been asked about.
+			SelectionShape shape{ SelectionShape::Single };
+
 			uint32_t best_us{ UINT32_MAX };	// the fastest it has ever answered
 			uint32_t last_us{};
 			uint32_t worst_us{};
@@ -151,10 +199,11 @@ namespace Nilesoft
 			// twice. Both rules exist for the same reason: the first menu in a
 			// process is cold and makes every provider look pathological. See
 			// the note on MIN_SAMPLES_TO_JUDGE.
-			ProviderVerdict consider(uint32_t clsid_hash, uint32_t budget_remaining_us)
+			ProviderVerdict consider(uint32_t clsid_hash, SelectionShape shape,
+									 uint32_t budget_remaining_us)
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
-				auto *timing = find(clsid_hash);
+				auto *timing = find(clsid_hash, shape);
 
 				// Not enough evidence to condemn it. Trying is the only way to
 				// get any, and the whole-menu budget still contains the damage.
@@ -197,10 +246,11 @@ namespace Nilesoft
 				return ProviderVerdict::Try;
 			}
 
-			void record(uint32_t clsid_hash, uint32_t microseconds, bool succeeded)
+			void record(uint32_t clsid_hash, SelectionShape shape,
+						uint32_t microseconds, bool succeeded)
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
-				auto *timing = find(clsid_hash);
+				auto *timing = find(clsid_hash, shape);
 				if(!timing)
 				{
 					if(_timings.size() >= MAX_TRACKED)
@@ -208,6 +258,7 @@ namespace Nilesoft
 					_timings.push_back(ProviderTiming{});
 					timing = &_timings.back();
 					timing->clsid_hash = clsid_hash;
+					timing->shape = shape;
 				}
 
 				timing->last_us = microseconds;
@@ -223,12 +274,12 @@ namespace Nilesoft
 					timing->failures++;
 			}
 
-			bool lookup(uint32_t clsid_hash, ProviderTiming *out) const
+			bool lookup(uint32_t clsid_hash, SelectionShape shape, ProviderTiming *out) const
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				for(const auto &t : _timings)
 				{
-					if(t.clsid_hash == clsid_hash)
+					if(t.clsid_hash == clsid_hash && t.shape == shape)
 					{
 						if(out)
 							*out = t;
@@ -251,15 +302,17 @@ namespace Nilesoft
 			}
 
 		private:
-			// One entry per registered handler. This machine has 23; the cap is
-			// a bound on a list nothing else bounds, not a considered limit.
+			// One entry per registered handler *per selection shape*. This
+			// machine has 23 handlers and there are four shapes, so 92 in the
+			// worst case; the cap is a bound on a list nothing else bounds,
+			// not a considered limit.
 			static constexpr size_t MAX_TRACKED = 256;
 
-			ProviderTiming *find(uint32_t clsid_hash)
+			ProviderTiming *find(uint32_t clsid_hash, SelectionShape shape)
 			{
 				for(auto &t : _timings)
 				{
-					if(t.clsid_hash == clsid_hash)
+					if(t.clsid_hash == clsid_hash && t.shape == shape)
 						return &t;
 				}
 				return nullptr;
