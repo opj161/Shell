@@ -49,13 +49,17 @@ true:
 7. **Check what the experiment is actually testing.** Two separate mechanisms
    were found this session that made a real-Explorer experiment silently
    measure something else — a deploy that landed one restart late, and registry
-   values Explorer could not see. Both are now in `AGENTS.md` under "Two ways an
-   experiment can test something other than what you think", because both
-   produced results that read as findings about Windows.
+   values Explorer could not see. A third arrived on 2026-08-25 — a menu read
+   seconds after an Explorer restart measures Explorer settling, and made a
+   no-op change look like it had rewritten the menu. All three are in
+   `AGENTS.md` under "Three ways an experiment can test something other than
+   what you think", because each produced a result that read as a finding
+   about Windows or as a regression.
 
 ## 2. What has landed on this branch
 
-Forty-three commits, `940ff6a`..`3723e78`.
+Forty-seven commits, `940ff6a`..HEAD. The table lists the ones that changed a
+decision or fixed something; pure documentation commits are omitted.
 
 | Commit | What |
 |---|---|
@@ -134,9 +138,11 @@ Forty-three commits, `940ff6a`..`3723e78`.
 ## 3. Where to pick up
 
 Ordered by user value, with what is known about each. Everything above §3.6 has
-now landed. What is left is one large item, one presentation item, one decision
-that was being made by omission, and — found by an audit of this section against
-the master plan's backlog — one small defect in the flagship feature (§3.6a).
+now landed, and so has everything §3.6 listed as remaining except one item.
+
+**If you read nothing else: §3.6 is the tally, §3.8 is what to do next.** The
+only large thing left is seam steps 6–7, and §3.8 says concretely what has to
+exist before they are safe to move.
 
 ### 3.1 A real *file* context menu in a third-party host — smaller than it looks
 
@@ -360,10 +366,12 @@ neither blocking:
   fails verification being refused, and a fresh machine with a corrupt stock
   config reaching the clean never-loaded refusal.
 
-### 3.6a The flagship's loop does not close for the provider that matters most
+### 3.6a The flagship's loop did not close for the provider that mattered most — fixed
 
 Found 2026-08-24 by reading `shell.exe -report perf` on this desktop rather than
-by reading the code that produces it. The report as it stands:
+by reading the code that produces it, and fixed the same day (§05.1c). Kept here
+because how it was found is more reusable than what it was. The report as it
+stood:
 
 ```text
 provider {CAE3F1D4-7765-4D98-A060-52CD14D56EAB}  5.0 ms  ok  NanaZip
@@ -410,6 +418,97 @@ hand:
   what Shell decided, and which flags the host passed.
 - A per-user `HKCU\Software\Classes\CLSID\…\InprocServer32` override points COM
   at a build without touching HKLM or restarting Explorer.
+- `shell.exe -reliability` is now the fastest way to see every provider a
+  machine's menus asked, merged across hosts and sorted slowest first. Faster
+  than reading a `-report perf` when the question is "which extension".
+
+Added 2026-08-25, because the largest defect on this branch was found with them:
+
+- **Driving a real multi-file selection needs no input injection.**
+  `New-Object -ComObject Shell.Application`, `.Open($dir)`, find the window by
+  `$w.Document.Folder.Self.Path`, then `$w.Document.SelectItem($item, 1)` per
+  item (`SVSI_SELECT`). Then post `WM_CONTEXTMENU` to the `SHELLDLL_DefView`
+  *inside that frame* — `$w.HWND` is the frame, not the view. This is what made
+  §02.3a measurable; the desktop background menu never produces a selection and
+  so never showed the defect.
+- **Read a menu back before and after any change to the menu path.** Item count
+  plus names through `AccessibleObjectFromWindow` takes seconds and is the only
+  cheap regression check that exists for composition. Wait for two identical
+  readings first — see `AGENTS.md` on why a menu read during Explorer's startup
+  measures Explorer.
+
+Four PowerShell traps, each of which cost an attempt this session and none of
+which announces itself:
+
+- **A callback's writes need `$script:`.** `EnumWindows`/`EnumChildWindows`
+  delegates run outside the enclosing function's scope, so a plain local
+  accumulator is written by nobody and comes back empty. It looks exactly like
+  "no such window exists".
+- **`$null` to a P/Invoke `string` marshals as `""`, not `NULL`.** So
+  `FindWindowW('Progman', $null)` searches for a window whose title is the empty
+  string. Enumerate rather than guess a parent chain — the desktop view sits
+  under `Progman` or a `WorkerW` depending on the moment.
+- **`0xFFFFFFFC` parses as Int32 `-4`.** `OBJID_CLIENT` has to be written
+  `[uint32]4294967292` or the call refuses to convert.
+- **`GetWindowText` cannot read another process's `EDIT` or `LISTBOX`.** It
+  returns the window *caption*, which those controls do not have, so you get an
+  empty string from a control that is full. Use the marshalled messages —
+  `WM_GETTEXTLENGTH`, `EM_GETLINECOUNT`, `LB_GETCOUNT`, `LB_GETTEXT`. This
+  briefly looked like the Reliability Center's details pane was broken when it
+  held 2,030 characters.
+
+### 3.8 The next real piece of work, concretely
+
+Seam steps 6–7 are gated on harness coverage of composed-menu **rendering**,
+and that phrase has been repeated for three sessions without anyone saying what
+it would be. Here is what it looks like, from what already exists.
+
+**The pieces are all present; none of them is joined up.**
+
+- `hostprobe --takeover` already raises **Shell's own composed menu** — the four
+  `takeover.*` scenarios build a real shell menu through
+  `SHParseDisplayName` → `GetUIObjectOf` → `QueryContextMenu` and track it
+  through the hook.
+- Reading a live menu back is solved and done twice: §05.3 walked Shell's menu
+  in a real Explorer through `AccessibleObjectFromWindow` on the `#32768`
+  window, and §05.5a measured the popup's rectangle to prove smart columns.
+- What is missing is a scenario that does both and **asserts**.
+
+**The shape it has to take.** The owner thread is blocked inside the tracking
+call while the menu is up, so the reading happens on a second thread — exactly
+as the MSAA probe did. That thread waits for the `#32768` to appear, reads what
+it needs, and posts `WM_CANCELMODE` to the owner to end the menu.
+
+**Assert properties, not traces.** A composed menu's *contents* depend on which
+handlers the machine has installed, so recorded fixtures are impossible — the
+same constraint the `takeover.*` scenarios already live under, and they solve it
+by asserting properties. The properties worth pinning before moving paint code:
+
+- every item Shell composed is readable through MSAA, with separators unnamed
+  and `role=separator` (this is §05.3's result, currently proved by a probe that
+  no longer exists);
+- item **order** matches the composition order, which is what `MenuModel` in
+  step 6 is most likely to disturb;
+- a submenu reports `STATE_SYSTEM_HASPOPUP`, and a disabled item
+  `STATE_SYSTEM_UNAVAILABLE`;
+- the popup's rectangle for a known item count, which is what catches a measure
+  pass that silently changed — §05.5a's 239×1031 versus 938×990 is the precedent;
+- a submenu is placed against its **parent**, not the root — the property
+  `parent_of_top()` exists for, verified once by hand in §3.3 and pinned
+  nowhere.
+
+**Why this order.** Every one of those is a regression that step 7 could
+introduce and that no current test would notice: they look like a menu that
+draws slightly wrong. Get them asserting first, then move `MenuModel`, then the
+presenter. §04.4's rule — move code, don't improve it in the same commit — is
+what made step 5 safe, and step 5 is the proof it works: the extraction was
+verified byte-identical and the behaviour change landed separately.
+
+**One caution.** `hostprobe` shows real popups on screen and the reading thread
+must always arm a watchdog; a menu left standing blocks its tracking call
+forever. `EndMenu` ends "the calling thread's active menu" and the reader is not
+that thread, so the documented alternative — posting `WM_CANCELMODE` to the
+owner — is the one to use.
 
 ## 4. Things that will bite
 
@@ -514,9 +613,25 @@ hand:
 - Re-record fixtures with `--record` and *always* re-run `--verify` twice
   afterwards. Two scenarios were non-reproducible once (`WM_DRAWITEM` is a paint,
   not a contract) and the fix was to stop recording it inline.
+- **An instrument that truncates silently is worse than no instrument.** Twice
+  now: `PERF_EXPORT_PHASES` at 16 dropped exactly the late phases, and
+  `PERF_EXPORT_PROVIDERS` at 8 described a 27-provider menu with eight lines
+  summing to 9 ms of 450. Both had a `dropped_*` counter; the second one was
+  carried through the export and **printed by nobody**, so it may as well not
+  have existed. When adding a cap, print its overflow in the same commit.
+- **`src/exe/src/Main.cpp` has three collisions worth knowing before editing
+  it.** `std::max(` expands through windows.h's `max` macro to `std::(` — write
+  `std::max<int>(`, as the rest of the tree does. `ID_CLOSE` is already
+  `#define`d at the top of the file, so a new control id by that name silently
+  redefines a button. And there is a global `p`, so any local of that name is a
+  C4459 the test project treats as an error.
+- **`MenuPerfScope` needs `Include/Diagnostics/MenuPerf.h` included explicitly.**
+  `DiagnosticsRing.h` does not pull it in, and the error — "is not a member of
+  `Nilesoft::Shell::Diagnostics`" — reads as a namespace problem rather than a
+  missing include.
 - Traps that cost real time are in `AGENTS.md`: a variadic template call inside
   an SEH function (C2712, reported at the `__try`), heredoc'd patch scripts
-  eating a backslash level in **both** directions, and the two ways an
+  eating a backslash level in **both** directions, and the three ways an
   experiment can test something other than what you think.
 
 ## 5. Verifying the tree
