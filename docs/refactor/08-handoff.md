@@ -90,6 +90,10 @@ Thirty-six commits, `940ff6a`..`6b26e61`.
 | `2e662c3` | **Quarantine** — `-quarantine:add {clsid}` and Shell stops asking that handler. Verified through MSAA: 29 items against 30 |
 | `898c680` | **Takeover status** — the report says whether takeover is set up, which matters most when it has measured nothing |
 | `6b26e61` | **`-check` with no argument** — could never find a configuration on any machine. Unblocked §03.5's last acceptance criterion |
+| `029b9f8` | **Provider identity** — the 70 ms extension on this machine printed a hash, and `-quarantine:add` takes a CLSID. §05.1c |
+| `e49eac6` | **Interception status** — backlog item 8, settled. The interface declined, the `intercept` line built. §01.9c |
+| `294d471` | **Selection providers** — `QuerySelected` split in two, 271 lines verified byte-identical |
+| `20e061e` | **Selection routing** — a host whose window class looks like Explorer's no longer loses the selection it already gave us. §04.4b |
 
 ### The measurements that changed decisions
 
@@ -299,13 +303,15 @@ each seam lands with its unit suite where pure or harness coverage where
 hosted") is the right one, and satisfying it needs the harness to grow coverage
 of composed-menu *rendering* first.
 
-**Step 5 is not blocked by that, and saying it was is the second correction.**
-Step 5 is selection layering, and the code it moves is not in
-`ContextMenu.cpp`: `Selections::QueryShellWindow` is `Selections.cpp:1308`, and
-`tests.vcxproj` **already links `..\dll\src\Selections.cpp`** — which is how
-`test_selection_path_resolver.cpp` exists at all. So step 5 can land with a unit
-suite today, on this machine, with no rendering harness in front of it. It is
-the cheapest of the three and it shrinks what 6–7 have to move.
+**Step 5 was not blocked by that, and saying it was is the second correction —
+it has now landed.** Step 5 is selection layering, and the code it moves is not
+in `ContextMenu.cpp`: it is in `Selections.cpp`, which `tests.vcxproj` **already
+links**. It shipped as a byte-identical extraction followed by a behaviour
+commit, and the split exposed a real defect — `Window.has_IShellBrowser` is set
+from a window *class hash*, so a third-party host that embeds the real shell
+view is classified as Explorer, sent to the browser provider, finds no
+`IShellBrowser`, and had its `IShellExtInit` selection discarded. §04.4b has the
+rule and why it is narrow.
 
 **Two judgements that need a person at the machine**, both already measured and
 neither blocking:
