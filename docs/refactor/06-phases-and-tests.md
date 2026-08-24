@@ -99,6 +99,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | `priority` versus the `TreatAs` redirect (§01.9b) — measured four ways; de-duplicated, and `shell.exe -check` now says when the setting is inert | 3 |
 | ✅ | Host tracking flags in the report — which half of `complete_host_contract` a real host exercises. Explorer and Everything both set `TPM_RETURNCMD` | 2 |
 | ✅ | Flicker A/B (§02.4a) — 7.0 ms per menu, landing *after* `popup.total_pre_display` stops. Gated on `flicker`, reported as its own phase | 2 |
+| ✅ | Targeted moveto (§04.6) — a location-bearing moveto rule opens the submenu it named, not all of them. Measured on a real Explorer: 85.5 ms → 20.2 ms, same menu | 4 |
 | ◐ | Third-party hosts (§3.1) — Everything driven and the breaker fix confirmed there; a *file* menu in Everything or Opus still open | 5 |
 
 ### What the harness settled (2026-08-24)

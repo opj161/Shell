@@ -1,4 +1,4 @@
-# 08 — Handoff
+﻿# 08 — Handoff
 
 **Updated 2026-08-24, branch `refactor/takeover-master-plan`.**
 Read this first, then `06-phases-and-tests.md` for the per-item status table.
@@ -46,7 +46,7 @@ Six rules have held throughout and are worth keeping:
 
 ## 2. What has landed on this branch
 
-Twenty-four commits, `940ff6a`..`b71a082`.
+Twenty-seven commits, `940ff6a`..`4f574d1`.
 
 | Commit | What |
 |---|---|
@@ -73,6 +73,9 @@ Twenty-four commits, `940ff6a`..`b71a082`.
 | `3b3dc25` | **`priority = 0` on a `-treat` machine** — measured four ways, de-duplicated, and `-check` now says it is inert |
 | `64f17b6` | **Host tracking flags in the report** — which half of `complete_host_contract` a real host exercises |
 | `b71a082` | **Flicker wait** — 7 ms on every menu, after the phase everybody was measuring; now gated and reported |
+| `6658371` | **Two ways an experiment lied** — the deploy ordering and the registry visibility, both now in `AGENTS.md` |
+| `d2216c3` | **Catalog persistence declined** — `catalog.first_wait` never fires, so §02.1 step 3 would buy nothing |
+| `4f574d1` | **Targeted moveto** — a moveto rule opens the submenu it named, not all of them. 85.5 ms → 20.2 ms |
 
 ### The measurements that changed decisions
 
@@ -180,10 +183,12 @@ different name.
 
 ### 3.6 Then
 
-Targeted moveto (§04.6) · favorites and the rule inspector (§05.6–7) · seam
-steps 5–7 of §04.4 · the cold-start measurement that gates §02.1's persistence
-decision (Phase 1.5) · a *visual* judgement on the flicker wait now that its
-cost is known (§02.4a).
+Favorites and the rule inspector (§05.6–7) · seam steps 5–7 of §04.4 · a
+*visual* judgement on the flicker wait now that its cost is known (§02.4a).
+
+Two items that were on this list are done: targeted moveto (§04.6a, 85.5 ms →
+20.2 ms on a real Explorer) and the cold-start measurement that gated §02.1's
+persistence decision (Phase 1.5, declined with numbers).
 
 ### 3.7 The tools this branch has accumulated
 

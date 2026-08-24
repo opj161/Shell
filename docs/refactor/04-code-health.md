@@ -1,4 +1,4 @@
-# 04 — Code health: verified fixes, deletions, seams, targeted moveto
+﻿# 04 — Code health: verified fixes, deletions, seams, targeted moveto
 
 Everything here is behavior-preserving except the listed bug fixes. This doc absorbs
 the P0/P2 items from `architecture-assessment-2026-08-22.md` §5 that are not covered by
@@ -137,6 +137,85 @@ already takes).
 Tests: pure classifier suite (rule text → class) + real-window test mirroring
 `test_native_menu_lazy.cpp` asserting unrelated popups never receive INIT under
 TargetedDiscovery.
+
+### 6a. As implemented (2026-08-24) — measured first, and two departures
+
+**The prize was measured before anything was built**, because this section
+asserted a "whole-tree cost when triggered" without a number. Forced through the
+existing `modify.native_eager` override on a real Explorer (Windows 11
+26200.8875 x64, six menus each):
+
+| | pre-display |
+|---|---|
+| `Lazy` | ~13 ms warm, ~60 ms on the first menu in a process |
+| `LegacyEager` | **95.1 ms average**, 31.7 – 359.6 ms |
+
+One third-party submenu accounted for 22.2 ms of a 33.7 ms menu. So the cost is
+real and this section was right to want it gone.
+
+Then the same comparison with an actual rule —
+`modify(in="View" find="Large icons" menu="")` in the installed `shell.nss` —
+rather than through the override:
+
+| | `popup_init` per menu | pre-display average | max |
+|---|---|---|---|
+| `LegacyEager` | 4 | 85.5 ms | 322.1 ms |
+| `TargetedDiscovery` | 2 | **20.2 ms** | 59.1 ms |
+
+Four times faster, and the menus are identical: "Large icons" moves out of View
+to the root under both policies, read back through `IAccessible`.
+
+**Departure 1: classification happens at menu time, not at config publish.**
+This section proposed classifying each rule's `location` when the configuration
+is parsed. That needs a way to ask an `Expression` whether it is constant, and it
+throws away the selection — which the rule's own `where` and `fso` already depend
+on. By the time `choose_native_tree_policy` runs, `Initialize()` has the context,
+the selection and the rule list in front of it, so the locations are simply
+*evaluated*, with `_this` cleared because no native item exists yet. A rule that
+will not evaluate, or that names the wildcard, falls the whole menu back to
+`LegacyEager` — this section's own "conservative default; costs latency, not
+correctness".
+
+**Departure 2: both ends of a move are targets.** The sketch collects `location`.
+But `moveto` names the submenu an item is moved *into*, and that destination is
+resolved through `__map_system_menu`, which only holds levels that were
+enumerated. Collecting sources alone would have sent moved items to
+`__movable_system_items` instead — a silent behaviour change rather than a slow
+menu, which is exactly the class of failure QA-11 is about.
+
+**The miss semantics turned out simpler than QA-11 expected.** There is no
+separate targeted *walk* to abort: the decision is made during the ordinary root
+enumeration, one submenu at a time, and a target naming a submenu that does not
+exist simply never matches. Nothing is opened for it and the rule matches
+nothing — the same outcome `LegacyEager` reaches. So no "abort and fall back for
+the session" state is needed, and none exists.
+
+**Two things written as failures first**, both corrected before they shipped and
+both found by asking what a real configuration looks like rather than by a test:
+
+- An empty value is not "unknown". For a `location` it means the root level; for
+  a `moveto` it means the item moves to the root — which is where `menu=""`, the
+  commonest rule shape there is, moves things. Treating it as unknown sent
+  exactly that case back to the eager walk.
+- An empty target *set* is a legitimate answer, meaning every applicable rule
+  turned out to be root-only. It means "descend into nothing", which is correct
+  and strictly better than eager.
+
+**The wildcard set is exactly one string**, read off `is_location` rather than
+assumed: it returns true for a location of exactly `*`, strips one asterisk from
+a `**` pair, and compares everything else for equality — so `*foo` would only
+match a submenu genuinely called that. Treating any leading asterisk as a
+wildcard would be safe, and would give up the optimisation on literal locations.
+
+Tests: `test_native_menu_targets.cpp` pins the path arithmetic, and each rule was
+checked to catch its defect — a character-wise prefix test (so "open" counts as
+an ancestor of "open with", handing most of the saving back), an empty location
+becoming a target that is a prefix of everything, and any leading asterisk
+counting as a wildcard. The real-window half of this section's test plan is
+covered by the measurement above rather than by a unit test: `TargetedDiscovery`
+lives in `ContextMenu.cpp`, which the test project does not link, and
+`native.popup_init` appearing twice per menu instead of four times is the same
+assertion made where it matters.
 
 ## 7. Caches & memoization (after measurement)
 
