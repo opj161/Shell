@@ -100,6 +100,11 @@ $rules = @(
        Regex = 'WideCharToMultiByte\s*\([^;]*\bMB_(PRECOMPOSED|COMPOSITE|ERR_INVALID_CHARS|USEGLYPHCHARS)\b'
        Why   = 'WideCharToMultiByte takes WC_*; an MB_* flag with CP_UTF8 fails outright with ERROR_INVALID_FLAGS' },
 
+    @{ Name  = 'MIIM_STRING must not be cleared from a menu item (docs/refactor/05 section 3)'
+       Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
+       Regex = 'fMask\s*&=\s*~\s*\(?\s*MIIM_STRING'
+       Why   = 'measured: an owner-drawn item is read by a screen reader only because MIIM_STRING carries its title alongside MFT_OWNERDRAW - dropping it silently makes the menu unreadable' },
+
     @{ Name  = "Shell's composed menu must not carry MNS_NOTIFYBYPOS (docs/refactor/01 section 3a)"
        Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
        Regex = 'MNS_NOTIFYBYPOS'

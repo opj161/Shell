@@ -68,7 +68,50 @@ live with (A2§26B). Scope S. Default gesture: `Ctrl+Alt+right-click` — delibe
 Ctrl+Shift, which is the live config-reload combo (`Initializer.cpp:840-845`, evaluated
 in the same hook body; see §01.7); documented in README + Reliability Center.
 
-## 3. Accessibility: expose owner-drawn items via `MSAAMENUINFO`
+## 3. Accessibility: expose owner-drawn items
+
+> **Measured 2026-08-24, and the premise below is wrong: this is very probably
+> already working, and `MSAAMENUINFO` must not be adopted.** Read this box before
+> the section it heads.
+>
+> The claim was that owner-drawn items leave screen readers with nothing. A probe
+> built four menus and asked each what a reader is told — from another thread,
+> while the owner was blocked inside `TrackPopupMenu`, via
+> `AccessibleObjectFromWindow(menu, OBJID_CLIENT, IID_IAccessible)` and
+> `get_accName` per child. Windows 11 26200.8875 x64:
+>
+> | Menu shape | Names reported |
+> |---|---|
+> | plain `MFT_STRING` items (control) | Alpha / Bravo / Charlie |
+> | owner-drawn, nothing else | `<no name>` ×3 |
+> | owner-drawn + `MSAAMENUINFO` in `dwItemData` | Alpha / Bravo / Charlie |
+> | **owner-drawn + `MIIM_STRING`** | **Alpha / Bravo / Charlie** |
+>
+> `MIIM_STRING` and `MFT_OWNERDRAW` are not exclusive in the modern
+> `MENUITEMINFO`: the text lives in `dwTypeData` and the owner data in
+> `dwItemData`, and they are separate mask bits. Windows exposes the string to
+> accessibility and still sends `WM_MEASUREITEM`/`WM_DRAWITEM`.
+>
+> **And Shell already does that.** `ContextMenu.cpp:846` sets `MIIM_STRING`
+> whenever an item has a title, `MenuItemInfo::set_title` fills `dwTypeData` and
+> `cch`, `add_ownerdraw()` only ORs `MFT_OWNERDRAW` into `fType`, and nothing
+> anywhere clears `MIIM_STRING` (`rg MIIM_STRING` over `src/dll/src` finds no
+> clearing site). The same object is what `InsertMenuItemW` receives.
+>
+> So the fourth row is the configuration Shell ships, and the work below would be
+> spent on a solved problem — while carrying real risk, because `MSAAMENUINFO`
+> claims the first four bytes of `dwItemData` and that is exactly where
+> `MenuItemInfo::Signed()` looks for `cbSize` to recognise Shell's *own* item
+> data, in the draw and teardown paths. `MenuItem.h:918` separately reads
+> *foreign* `dwItemData` by checking that same offset for `MSAA_MENU_SIG`, so
+> adopting it would make Shell's items indistinguishable from a host's by the
+> discriminator the code already relies on.
+>
+> **Not done, and it is the only part this machine cannot do:** confirming it
+> with a real screen reader against a deployed Shell. The probe proves the
+> mechanism on a menu built the same way; it does not prove Shell's composed
+> menu reaches Narrator. That is a §06.5 machine-matrix item, now with a
+> specific expectation rather than an open question.
 
 Every rendered item is owner-drawn today; screen readers currently rely on fallbacks.
 Microsoft's mechanism (page fetched): put `MSAAMENUINFO` **first** in the structure

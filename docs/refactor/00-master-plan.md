@@ -148,6 +148,7 @@ Invariants enforced by review checklist + trace harness (§06):
 | `06-phases-and-tests.md` | Phase sequencing with acceptance criteria, trace harness spec, regression gates, measurement protocol |
 | `07-plan-audit.md` | Critical audit of this plan and of Phase 0 as implemented. **Amendments from it are folded into 00–06 in place**; 07 is kept as the reasoning and evidence record, including the probes run against this machine |
 
+| `08-handoff.md` | Where the work actually stands, why it is sequenced the way it is, and what to pick up next. **Start here.** |
 ## 6. Amendments applied from the §07 audit
 
 | # | Change | Where |
