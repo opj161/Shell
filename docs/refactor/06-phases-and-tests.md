@@ -110,8 +110,8 @@ in each is stated below rather than in a separate tracker.
 | ⬜ | Reliability Center **window** (§05.1) — every row it would show exists in text; this is presentation over data that is already actionable | 5 |
 | ⬜ | Seam step 5 (§04.4a) — selection layering. **Not** blocked by the rendering harness: it lives in `Selections.cpp`, which `tests.vcxproj` already links | 4 |
 | ⬜ | Seam steps 6–7 (§04.4a) — `MenuModel` and the presenter, the gate for favorites (§05.6) and the rule inspector (§05.7). Not started deliberately: these two are the paint and window-message halves of a 7,559-line file the test project does not link | 4 |
-| ⬜ | Interception backend abstraction (§01.9, backlog item 8) — **found missing by the 2026-08-24 audit**, having been absent from the handoff's own list of remaining work. It is the master plan's R2 | 3 |
-| ⬜ | Provider identity in the report (§05.1c) — the slowest provider on the reference machine prints a hash, so the flagship's diagnosis cannot be handed to its own treatment | 5 |
+| ✅ | Interception backend (§01.9c, backlog item 8) — **found missing by the 2026-08-24 audit**, having been absent from the handoff's own list of remaining work. The interface is declined (the two mechanisms are not interchangeable — the PE format makes an import table per-image) and so is the per-hook-entry health check (it cannot fail). What was built is the `intercept` line: which mechanism is live, per host | 3 |
+| ✅ | Provider identity in the report (§05.1c) — the slowest provider on the reference machine printed a hash, so the flagship's diagnosis could not be handed to its own treatment. Verified in a real Explorer | 5 |
 
 ### The 2026-08-24 backlog audit
 
@@ -120,6 +120,9 @@ backlog it tracks. Reconciled item by item against `00-master-plan.md` §3:
 **fourteen closed** (built, or measured and declined with numbers recorded),
 **three partial** (item 9 conditional attach, item 14 the window, item 20
 memoization and lazy selection), **three open** (items 8, 17, 19).
+
+Item 8 was closed the same day (§01.9c), which takes the tally to **fifteen
+closed, two open** — the seams (17) and what they gate (19).
 
 Two of those had been invisible for several sessions because every individual
 update to the table was itself accurate — the failure was that nothing was

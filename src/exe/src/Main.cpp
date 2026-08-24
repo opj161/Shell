@@ -858,9 +858,8 @@ static int CheckConfig(const wchar_t *config_path)
 
 	Machine state only, and deliberately: the two facts here are registry, so
 	shell.exe reads them directly rather than asking a host through the export.
-	Whether the popup hook is installed *inside* a given host is already
-	answered better by that host's own decision counts - nine takeovers is a
-	working hook, and a fail-open is a broken one with a reason attached.
+	Which mechanism is intercepting popups *inside* a given host is per-host and
+	is printed on that host's own `intercept` line instead.
 */
 static void AppendTakeoverStatus(string &out)
 {
@@ -1014,6 +1013,33 @@ static int ReportPerf(bool detailed)
 			}
 		}
 		report.append_format(L"    host flags %s\r\n", flag_sets.c_str());
+
+		/*
+			Which of the two popup mechanisms is carrying this host.
+
+			Per-host and therefore here rather than in the machine-state block
+			at the top. The two are not equivalent: the primary patches one
+			thunk in user32 and sees every caller that reaches a popup through
+			it, while the fallback patches each loaded module's own import
+			table and so misses, by construction, modules loaded later, calls
+			made through GetProcAddress, delay-loaded imports, and modules that
+			import the API-set name instead. So "per-module imports" on this
+			line means a host where Shell's coverage has holes, and it is the
+			only place that could ever say so.
+			docs/refactor/01-takeover-contract.md section 9c.
+
+			A host whose interception is gone altogether does not appear here
+			at all - it stops publishing - so the absence of a host, and the
+			age of its last menu, remain the signals for that case.
+		*/
+		if(source.interception != PERF_EXPORT_INTERCEPTION_NONE)
+		{
+			report.append_format(L"    intercept  %s%s\r\n",
+								 perf_export_interception_name(source.interception),
+								 (source.interception & PERF_EXPORT_INTERCEPTION_HEALTHY)
+									 ? L""
+									 : L"  - DISPLACED, this host's menus are no longer Shell's");
+		}
 
 		auto emit_session = [&](size_t index, const wchar_t *label)
 		{

@@ -135,6 +135,7 @@
     <ClCompile Include="test_treatas_plan.cpp" />
     <ClCompile Include="test_oneshot_marshal.cpp" />
     <ClCompile Include="test_popup_lifecycle.cpp" />
+    <ClCompile Include="test_interception_status.cpp" />
     <ClCompile Include="test_provider_quarantine.cpp" />
     <ClCompile Include="test_loadstring.cpp" />
     <ClCompile Include="..\dll\src\Packages.cpp" />

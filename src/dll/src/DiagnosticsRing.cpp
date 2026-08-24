@@ -1,6 +1,7 @@
 ﻿#include <pch.h>
 #include "Include/Diagnostics/DiagnosticsRing.h"
 #include "Include/Diagnostics/MenuPerf.h"
+#include "Include/InterceptionStatus.h"
 #include <PerfExport.h>
 
 namespace Nilesoft
@@ -89,6 +90,13 @@ namespace Nilesoft
 				}
 
 				PerfExportWriter::instance().store(out);
+
+				// Refreshed alongside every published session rather than
+				// fixed when the block was created, because a displacement can
+				// happen at any point in a process's life. The value itself is
+				// maintained by the hook - this only copies it out.
+				// Include/InterceptionStatus.h.
+				PerfExportWriter::instance().note_interception(Interception::current());
 			}
 
 			void session_begin(uint32_t host_hash, uint32_t host_flags) noexcept

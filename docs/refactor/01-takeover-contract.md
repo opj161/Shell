@@ -642,6 +642,110 @@ switched on. The hook next door is correct by accident, because it assigns to a
 `test_expression.an_objects_truth_is_to_bool_not_a_cast` fails if that is ever
 "simplified" back into a cast.
 
+### 9c. The interception backend — decided 2026-08-24, and the interface is declined
+
+Backlog item 8 of `00-master-plan.md` §3, and the master plan's **R2**: "one
+unsupported boundary, made explicit". It had been **absent from
+`08-handoff.md`'s list of remaining work for several sessions**, which is how a
+governing rule came to be decided by nobody; §08.1 rule 6 now exists so that
+does not recur.
+
+#### What is actually in the tree
+
+Both mechanisms §9 names already exist, and there is already a selection
+between them (`Main.cpp`, `BootstrapOnce`):
+
+| | What it patches | Installed when |
+|---|---|---|
+| primary | `user32.dll`'s own import of `win32u.dll!NtUserTrackPopupMenuEx` — **one thunk, in one module** | always attempted first |
+| fallback | every loaded module's import of `user32.dll!TrackPopupMenu` and `TrackPopupMenuEx` — **one thunk per module** | only when the primary fails to install |
+
+`IATHook::installed()` is already the "cheap thunk compare" §9 asks for:
+`_thunk->u1.Function == _detour`.
+
+#### Why the interface is declined
+
+**The two are not interchangeable implementations of one contract, and an
+interface asserting that they are would be a falsehood the type system
+enforces.** The PE specification is explicit that an import table is per-image:
+"The import directory table consists of an array of import directory entries,
+**one entry for each DLL to which the image refers**", and the addresses live in
+that image's own IAT — "during binding, the entries in the import address table
+are overwritten with the … addresses of the symbols that are being imported"
+(<https://learn.microsoft.com/windows/win32/debug/pe-format#the-idata-section>).
+`IATHook::get_thunk` matches an entry by the DLL-name string that image
+recorded (`_stricmp(dll_import, "user32.dll")`).
+
+Four coverage gaps follow **by construction** for the fallback, and none of them
+applies to the primary:
+
+1. **Modules loaded after bootstrap.** The enumeration runs once.
+2. **`GetProcAddress`.** A resolved call has no IAT entry to patch.
+3. **Delay-loaded imports**, which live in a different directory entirely.
+   `Hooker.h` has a `get_delay_thunk`, and nothing calls it.
+4. **API-set importers.** `TrackPopupMenuEx` documents itself as living in both
+   `User32.dll` and API set `ext-ms-win-ntuser-menu-l1-1-1`
+   (<https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex>).
+   A module that imports the API-set name does not match `"user32.dll"`.
+
+So the fallback is **strictly weaker**, and *which mechanism is live* is a fact
+worth reporting rather than an implementation detail worth hiding behind
+`install()`/`healthy()`/`uninstall()`. The selection logic it would wrap is four
+lines and already correct; a vtable would add indirection and subtract
+information.
+
+#### Why the per-hook-entry health check is declined
+
+It cannot fail. `installed()` compares the thunk against Shell's detour — and if
+that comparison were false, the thunk would not have routed the call into
+Shell, so the hook body would not be running to make it. **A health check on
+hook entry can only ever answer "healthy".** This is the same shape of flaw as
+§7a's non-interference proof, which also could not have established the property
+it was scheduled to test.
+
+#### What was built instead
+
+`Include/InterceptionStatus.h` — a process-global word holding the live backend
+and whether its thunk still points at Shell — refreshed from the hook, published
+into the export block on every session, and printed by `shell.exe -report perf`:
+
+```text
+Explorer.EXE  pid 51020  x64  -  3 menus, 3 held
+    host flags RETURNCMD|RIGHTBUTTON
+    intercept  win32u import
+```
+
+The question the hook *can* usefully answer is not "am I installed" but "**which
+of the two is live**", and the primary's thunk can perfectly well have gone
+while the fallback keeps delivering. `per-module imports` on that line means a
+host where the four gaps above are real, and nothing could say so before.
+
+**What this cannot tell you, stated rather than implied.** A host whose
+interception is displaced outright stops publishing sessions, so it does not
+appear in the report at all. The honest signals for that case are the host's
+absence and the age of its last menu, both of which the report already prints.
+The `DISPLACED` wording is reachable only for the narrower case of a patch that
+was made and is no longer Shell's while the process is still publishing.
+
+Measured in a real Explorer on the day: `win32u import`, healthy. **The fallback
+branch has not been observed in a real host here and probably cannot be** — the
+primary installs on every Windows since 10 1607, so producing the fallback would
+mean breaking the primary deliberately. It is covered by unit tests
+(`test_interception_status.cpp`) and by reading, and that is said plainly rather
+than implied.
+
+#### What stays declined, with its reason
+
+- **`PublicTrackPopupDetour`** (an inline Detours hook on the documented
+  `TrackPopupMenu`/`Ex`). What it would add over the IAT fallback is exactly the
+  four gaps above — but every one of them is *already* covered by the primary
+  whenever the primary installs, which is always. It would be a third mechanism
+  earning its keep only in a configuration nothing has produced. Revisit if the
+  new `intercept` line is ever seen reading `per-module imports` in the field:
+  that is now a cheap thing to find out, and it was not before.
+- **Conditional attach for the CoCI detour** stays deferred with the reasons in
+  §9a; nothing here changes them.
+
 ## 10. Acceptance criteria for this doc
 
 - [ ] Every hook exit maps to a logged `TakeoverDecision`.

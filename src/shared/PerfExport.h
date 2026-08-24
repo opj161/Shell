@@ -114,7 +114,10 @@ namespace Nilesoft
 			// 5: a directory entry carries the provider's CLSID as well as its
 			//    hash, so the report prints the identity `-quarantine:add`
 			//    takes. A hash is not something a user can act on.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 5;
+			// 6: the block gained `interception` - which of the two popup
+			//    mechanisms is carrying this host, and whether its thunk still
+			//    pointed at Shell when it last published.
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 6;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -175,6 +178,48 @@ namespace Nilesoft
 			*/
 			inline constexpr uint32_t PERF_EXPORT_DIRECTORY = 32;
 			inline constexpr size_t PERF_EXPORT_PROVIDER_NAME = 40;
+
+			/*
+				How a host is intercepting popup menus.
+
+				Part of the wire format rather than of the DLL, because the
+				reader has to name it in a report and the two live in different
+				binaries. The live value is in
+				src/dll/src/Include/InterceptionStatus.h.
+
+				Shell has exactly two mechanisms and they are *not*
+				interchangeable - the primary sees strictly more than the
+				fallback does, for reasons that follow from the PE format and
+				are set out in docs/refactor/01-takeover-contract.md section 9c.
+				That difference is the whole reason this is worth reporting:
+				"the fallback is carrying this process" is a real and
+				actionable statement, and nothing could make it before.
+			*/
+			inline constexpr uint32_t PERF_EXPORT_INTERCEPTION_NONE = 0;
+
+			// user32's own import of win32u!NtUserTrackPopupMenuEx: one thunk,
+			// in one module, covering every caller in the process that reaches
+			// a popup through user32.
+			inline constexpr uint32_t PERF_EXPORT_INTERCEPTION_WIN32U = 1;
+
+			// Every loaded module's import of user32!TrackPopupMenu(Ex),
+			// patched one module at a time. Strictly weaker; see section 9c.
+			inline constexpr uint32_t PERF_EXPORT_INTERCEPTION_PERMODULE = 2;
+
+			// The thunk still pointed at Shell when this was last refreshed.
+			inline constexpr uint32_t PERF_EXPORT_INTERCEPTION_HEALTHY = 0x8000u;
+
+			inline constexpr uint32_t PERF_EXPORT_INTERCEPTION_BACKEND_MASK = 0x00FFu;
+
+			inline const wchar_t *perf_export_interception_name(uint32_t interception)
+			{
+				switch(interception & PERF_EXPORT_INTERCEPTION_BACKEND_MASK)
+				{
+					case PERF_EXPORT_INTERCEPTION_WIN32U: return L"win32u import";
+					case PERF_EXPORT_INTERCEPTION_PERMODULE: return L"per-module imports";
+					default: return L"none";
+				}
+			}
 
 			// Deliberately not "%s%u" at every call site: the prefix contains a
 			// backslash and the remainder must not, which is a rule worth
@@ -278,6 +323,28 @@ namespace Nilesoft
 				// quietly showing a hash and letting somebody wonder why one
 				// extension has a name and another does not.
 				uint32_t directory_dropped;
+
+				/*
+					How this host is intercepting popups, and whether that was
+					still true when it last published.
+
+					One of PERF_EXPORT_INTERCEPTION_*, optionally with
+					_HEALTHY. Refreshed on every session publish rather than
+					fixed at creation, because a displacement can happen at any
+					point in a process's life.
+
+					In the block rather than the header for two reasons: a
+					header field here would sit between `directory_count` and a
+					uint64, costing four bytes of padding, and this is a value
+					that is rewritten like the tables are rather than a fact
+					settled when the block was made.
+
+					docs/refactor/01-takeover-contract.md section 9c has what
+					this can and cannot tell you - in particular that a host
+					whose interception is gone entirely stops publishing, so
+					the honest signal there is the menu count, not this word.
+				*/
+				uint32_t interception;
 			};
 
 #pragma pack(pop)
@@ -889,6 +956,24 @@ namespace Nilesoft
 					perf_export_note_provider(*_block, clsid_hash, clsid, name);
 				}
 
+				/*
+					Which mechanism is carrying this host's popups, refreshed.
+
+					A plain word-sized store of a value that is almost always
+					the same one, so it is deliberately not under the writer
+					lock: there is nothing to tear, and a reader that catches
+					the moment it changes sees either the old value or the new
+					one. Taking the lock here would put a menu thread behind
+					another menu thread's publish for no gain.
+				*/
+				void note_interception(uint32_t interception)
+				{
+					if(!open())
+						return;
+
+					_block->interception = interception;
+				}
+
 			private:
 				// The image file name, not the whole path: this is a label in a
 				// report, and the full path of every host on the machine is
@@ -930,6 +1015,10 @@ namespace Nilesoft
 				uint32_t architecture{};
 				uint64_t published{};
 				wchar_t host[PERF_EXPORT_HOST]{};
+
+				// One of PERF_EXPORT_INTERCEPTION_*, optionally _HEALTHY, as
+				// of this host's last publish.
+				uint32_t interception{};
 
 				// Copied out rather than pointed at: the view is unmapped
 				// before perf_export_read returns, so a pointer into the
@@ -1045,6 +1134,12 @@ namespace Nilesoft
 						directory = PERF_EXPORT_DIRECTORY;
 					source.directory_count = directory;
 					source.directory_dropped = block.directory_dropped;
+
+					// Word-sized and written without the sequence counter, for
+					// the same reason it is read without one: there is nothing
+					// to tear, so a reader sees the value from before or after
+					// a refresh and both are true statements about this host.
+					source.interception = block.interception;
 					for(uint32_t i = 0; i < directory; i++)
 					{
 						source.directory[i].clsid_hash = block.directory[i].clsid_hash;

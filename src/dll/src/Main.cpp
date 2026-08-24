@@ -10,6 +10,7 @@
 #include "Include/TaskbarHitCache.h"
 #include "Include/TaskbarHitStats.h"
 #include "Include/TakeoverBreaker.h"
+#include "Include/InterceptionStatus.h"
 #include "Include/TaskbarOrigin.h"
 #include "Library/detours.h"
 #include "RegistryConfig.h"
@@ -231,6 +232,52 @@ inline const Windows::Version* Ver() { return &Windows::Version::Instance(); }
 #define _CoCreateInstance (Runtime().co_create_instance_hook)
 
 void BootstrapOnce();
+
+/*
+	Re-read which mechanism is carrying this process's popups.
+
+	Two pointer compares and one relaxed store, which is what lets this be
+	called from the hook body - an SEH function that cannot hold anything
+	needing unwinding, so this deliberately touches no object with a
+	destructor.
+
+	Calling it from the hook is not the tautology docs/refactor/01 section 9
+	proposed. That section wanted the *entered* hook to check whether it was
+	installed, which cannot answer no: if the thunk did not point here, this
+	code would not be running. What is asked here is a different question -
+	which of the two mechanisms is live at this moment - and the primary's
+	thunk can perfectly well have gone while the fallback keeps delivering.
+	Include/InterceptionStatus.h.
+*/
+inline void refresh_interception_status() noexcept
+{
+	auto &rt = Runtime();
+
+	if(rt.ntuser_popup_hook.installed())
+	{
+		Interception::publish(Interception::Win32uImport, true);
+		return;
+	}
+
+	// The fallback is a vector of per-module patches. One surviving patch is
+	// enough for this process to still see popups from that module, so the
+	// health question is "is any of them still ours", not "are all of them".
+	for(const auto &h : rt.popup_hooks)
+	{
+		if(h.installed())
+		{
+			Interception::publish(Interception::PerModuleImports, true);
+			return;
+		}
+	}
+
+	// Patches were made and none is still ours, or none was ever made. The
+	// first is a displacement, the second is a process Shell never hooked;
+	// they are distinguished by whether the vector is empty.
+	Interception::publish(rt.popup_hooks.empty() ? Interception::None
+												 : Interception::PerModuleImports,
+						  false);
+}
 
 inline bool PinModule()
 {
@@ -1092,6 +1139,11 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	// TPM_RETURNCMD, and this is the only place the original value exists.
 	perf::session_begin(host_identity_hash(), uFlags);
 
+	// Two pointer compares and a relaxed store, so it can live on this path
+	// and give the report an answer that is current as of the last menu rather
+	// than as of bootstrap. Plain data only - this is an SEH function.
+	refresh_interception_status();
+
 	// SEH function: cannot hold an object that requires unwinding.
 	auto perf_pre_display = perf::menu_perf_begin();
 
@@ -1787,6 +1839,16 @@ void BootstrapOnce()
 				{
 					hook();
 				}
+
+				// Record which of the two mechanisms ended up carrying this
+				// process, so `shell.exe -report perf` can say so. They are not
+				// equivalent - the fallback is per-image and therefore misses
+				// late-loaded modules, GetProcAddress calls, delay-loaded
+				// imports and API-set importers - so "the fallback is carrying
+				// this host" is an actionable statement rather than trivia.
+				// Include/InterceptionStatus.h and
+				// docs/refactor/01-takeover-contract.md section 9c.
+				refresh_interception_status();
 
 				// Start the packaged-verb scan now, on its own thread. It is
 				// registry and manifest I/O - 244 files and ~111 ms cold on the

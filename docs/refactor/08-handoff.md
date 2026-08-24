@@ -268,15 +268,20 @@ open**.
 **The Reliability Center window (§05.1).** Additive, no risk to the menu path,
 and verifiable by launching it. It is presentation over data that all exists.
 
-**Interception backend abstraction (§01.9, backlog item 8).** *This section used
-to omit it altogether.* `rg 'PopupInterceptionBackend|Win32uIatBackend|PerModuleIatFallback'`
-over the tree returns nothing: both mechanisms exist — `rt.ntuser_popup_hook`
-and the per-module `rt.popup_hooks` fallback — but not behind the interface, and
-there is no per-entry health probe or unhealthy-implies-fail-open path. It is
-the master plan's **R2**, the one governing rule with no implementation, so
-silence about it is the single option this branch's own rules forbid. It needs a
-decision on its merits and that decision written down; see §01.9c, where it has
-now been taken.
+**Interception backend abstraction (§01.9, backlog item 8) — settled, and mostly
+declined.** *This section used to omit it altogether*, which is how the master
+plan's **R2** came to be decided by nobody. Settled 2026-08-24 in §01.9c: the
+interface is declined because the two mechanisms are **not** interchangeable —
+the PE format makes an import table per-image, so the per-module fallback misses
+late-loaded modules, `GetProcAddress` calls, delay-loaded imports and API-set
+importers, all of which the one-thunk primary catches. An interface would assert
+a substitutability the format denies. The per-hook-entry health check is declined
+for the §7a reason: it cannot fail, because a displaced thunk would not have
+routed the call into the hook that asks.
+
+What was built is the part that was genuinely missing — *which* mechanism is
+live, published per host and printed as an `intercept` line by
+`shell.exe -report perf`. Measured in a real Explorer: `win32u import`.
 
 **Seam steps 5–7 of §04.4** — selection layering, `MenuModel`,
 `Win32MenuPresenter`. This is the one large item on the branch, and it is the
@@ -446,6 +451,15 @@ hand:
 - **`hostprobe.exe` is built but never run by `build.ps1`.** It creates a window
   and shows real menus. It does not inject desktop-wide input — keys are posted
   to its own thread queue — but it will put popups on screen.
+- **Run the harness on a quiet desktop.** Observed once on 2026-08-24: a native
+  run started seconds after `backup-and-upgrade.ps1` restarted Explorer, and
+  while a script was posting `WM_CONTEXTMENU` at the desktop, reported
+  `23 scenario(s), 1 failure(s)`. Five consecutive runs afterwards were clean,
+  and which scenario failed was not captured. So this is recorded as an
+  observation rather than a diagnosis: a run that overlaps an Explorer restart
+  or another menu on the same desktop is not a run to trust. Re-run before
+  believing a single harness failure — and capture the output when you do,
+  which is what was not done here.
 - **`--takeover` is one-way within a run.** Shell pins its own module once its
   hooks are installed, so a process cannot go back to native afterwards. Never
   mix takeover and native scenarios in one invocation.
