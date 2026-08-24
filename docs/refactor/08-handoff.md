@@ -38,7 +38,7 @@ Five rules have held throughout and are worth keeping:
 
 ## 2. What has landed on this branch
 
-Fourteen commits, `940ff6a`..`5e44534`.
+Fifteen commits, `940ff6a`..`6ff63c8`.
 
 | Commit | What |
 |---|---|
@@ -55,6 +55,7 @@ Fourteen commits, `940ff6a`..`5e44534`.
 | `46c7a06` | **Config watcher** — save `shell.nss` and the menu follows, with no key combination |
 | `cc5550d` | **Type-ahead** — typing a name selects it; mnemonics keep precedence |
 | `5e44534` | **CoCI policy compile** — the COM detour stops walking the rule list for CLSIDs no rule names |
+| `6ff63c8` | **Takeover harness + last-error fix** — the hook was handing hosts the wrong `GetLastError` after a failed track |
 
 ### The measurements that changed decisions
 
@@ -71,29 +72,47 @@ Fourteen commits, `940ff6a`..`5e44534`.
 | A rectangle model of the taskbar agrees with `ElementFromPoint` **49.6 %** of the time (84.2 % scoped to the XAML frame) | §02.5's Stage 2 as written would claim the system tray as background. Declined |
 | `ElementFromPointBuildCache` matches the four-call form at **1440 / 1440** points | Taken, for the call count rather than the 0.5 ms — a wedged provider now has one call to hang in, not four |
 | The COM detour is installed only inside `if(rt.loader.explorer)` | §01.9's "attach only if needed" buys less than it appears to — third-party hosts never had it. Conditional attach deferred |
+| `DllGetClassObject` is where `BootstrapOnce` is called from | The takeover harness needs **no** injected or deployed build — asking Shell for a class object installs the hook in the asking process |
+| 22 of 23 takeover traces byte-identical; the 23rd was Shell's bug | The hook destroyed the host's last-error code. Fixed, and the native fixtures became the takeover gate |
+| Shell's composed menu in real Explorer reports 22 named items and 6 separators through `IAccessible` | §05.3 closed as already satisfied; the `MSAAMENUINFO` design deleted rather than deferred |
 
 ## 3. Where to pick up
 
 Ordered by user value, with what is known about each.
 
-### 3.1 Confirm MSAA with a real screen reader — *blocked on a deployed build*
+### 3.1 The replay half of the harness (§06.2 probe 3)
 
-The oldest loose end. §05.3's box records that Shell's items go in with
-`MIIM_STRING` and that the mechanism demonstrably works, but **nothing has
-confirmed Shell's own composed menu reaching Narrator**. Deploy
-(`.\scripts\backup-and-upgrade.ps1`, asks before restarting Explorer) and check.
-If it works, close §05.3 as already-satisfied and delete the `MSAAMENUINFO`
-design. If it does not, find out *why* before reaching for `MSAAMENUINFO` — the
-mechanism is proven, so a failure means something else is interfering.
+The takeover half is built and green — `hostprobe --takeover` runs every
+scenario through Shell's hook, and all 23 come back byte-identical to the native
+baselines. But that verifies the **fail-open and breaker paths**, not the
+replay: `QueryShellWindow` does not recognise the probe's own window class, so
+Shell declines all of them and the breaker opens after three.
 
-### 3.2 The takeover half of the harness — *blocked on a deployed build*
+What is left is a scenario that makes Shell *take over* — one that builds its
+menu the way a file manager does, `IShellFolder::GetUIObjectOf` →
+`IContextMenu::QueryContextMenu` → track, which is what sets
+`loader.contextmenuhandler` and takes the `goto ui` branch in
+`Selections::QueryShellWindow`. That is the path `b63fdc2` fixed, and it is what
+probe 3 (UNINIT tolerance) is waiting for.
 
-Everything in `src/tests/hostprobe/` records **untouched Windows**. Running the
-same scenarios through Shell's hook and diffing needs a deployed, injected build.
-That is what would verify `b63fdc2`'s replay and `a634ab6`'s INIT/UNINIT pairing
-against something other than reasoning. Harness probe 3 (UNINIT tolerance) is
-still waiting on it; **probe 4 no longer is** — see §01.7a, the gesture rules
-became a pure function and the property is now structural.
+Its traces cannot be fixtures — the items depend on which handlers a machine has
+installed — so it asserts properties instead: the tracked menu is Shell's rather
+than the host's, a native item chosen in a non-`RETURNCMD` host produces exactly
+one `WM_COMMAND` carrying the original wID, and every borrowed popup that
+received an INIT receives exactly one UNINIT.
+
+### 3.2 Directory Opus and Everything are on this machine
+
+This document used to end by naming Total Commander and Directory Opus as
+"exactly the hosts these changes are for and exactly the ones this machine
+cannot test". That was wrong. **Directory Opus 13 and Everything 1.5a are both
+installed and running here**, and both hold `shell.dll` — they show up in
+`backup-and-upgrade.ps1`'s list of processes pinning the module, along with
+forty-five others. Restarting either picks up a freshly deployed build.
+
+Nothing has been driven through them yet. They are the natural place to check
+the `TPM_RETURNCMD` replay against a host Shell did not write, once §3.1's
+shell-item scenario says what to look for.
 
 ### 3.3 `TakeoverSession` and the WinEvent lifecycle (§01.1, §01.6)
 
@@ -159,6 +178,13 @@ counters) · targeted moveto (§04.6) · favorites and the rule inspector
 - **`hostprobe.exe` is built but never run by `build.ps1`.** It creates a window
   and shows real menus. It does not inject desktop-wide input — keys are posted
   to its own thread queue — but it will put popups on screen.
+- **`--takeover` is one-way within a run.** Shell pins its own module once its
+  hooks are installed, so a process cannot go back to native afterwards. Never
+  mix takeover and native scenarios in one invocation.
+- **Which Shell `--takeover` loads decides which configuration it runs.**
+  `Initializer` derives `shell.nss` from the directory of the module it was
+  given, so the build output means no configuration at all (the identity config
+  §06.2 asks for) and the installed copy means the user's real rules.
 - Re-record fixtures with `--record` and *always* re-run `--verify` twice
   afterwards. Two scenarios were non-reproducible once (`WM_DRAWITEM` is a paint,
   not a contract) and the fix was to stop recording it inline.
@@ -175,7 +201,11 @@ counters) · targeted moveto (§04.6) · favorites and the rule inspector
 
 At the time of writing: 26,327 checks / 0 failures on x64 and x86, arm64 builds
 and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)`,
-23 harness scenarios / 0 failures.
+23 harness scenarios / 0 failures **native and through takeover**:
+
+```powershell
+.\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
+```
 
 `shell.exe -check` is worth running by hand as well — it is the one piece of
 this branch a user drives directly:
@@ -188,9 +218,18 @@ Note that neither `cmd` nor PowerShell waits for a Windows-subsystem process, so
 read the exit code with `Start-Process -Wait -PassThru`. §03.1b records why that
 is not being fixed yet.
 
-**Nothing in this branch has run inside a real Explorer.** All of it is
-unit-verified or probe-verified. The provider reuse, the INIT/UNINIT pairing, the
-`TPM_RETURNCMD` replay, the bypass gesture, the watcher's off-thread parse and
-the MSAA question all want a deployed build and, for the replay in particular, a
-third-party host — Total Commander or Directory Opus, which are exactly the hosts
-these changes are for and exactly the ones this machine cannot test.
+**Some of this branch has now run inside a real Explorer.** Deployed 2026-08-24
+and driven by posting `WM_CONTEXTMENU` to `SHELLDLL_DefView`, which raises a real
+Shell menu without touching the mouse. What that confirmed: the composed menu
+appears, and every item in it is readable through MSAA (§05.3).
+
+What is still unverified there: the provider reuse and the watcher's off-thread
+parse have no observation channel from outside the process. The `perf` registry
+value is supposed to be one, and **it produced no output from Explorer even
+though the value reads back correctly through the same code the DLL runs**
+(checked with a probe linking `Registry.cpp`). Unresolved; the honest reading is
+that the in-memory ring needs an export — `shell.exe -report perf` is named in
+§06.4 and does not exist — rather than that the log sink should be made to work.
+
+The `TPM_RETURNCMD` replay is unverified in a host that did not come from this
+tree, but the reason is no longer the machine: see §3.2.

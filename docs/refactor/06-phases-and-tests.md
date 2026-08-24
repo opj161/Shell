@@ -88,6 +88,9 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Taskbar (§02.5) — one cached UIA round trip instead of four, and the bounded wait is now counted. The rectangle model was measured and declined | 3 |
 | ✅ | Circuit breaker and one-shot bypass gesture (§01.7, §05.2) — one gesture classifier, so reload and bypass cannot both fire | 3 |
 | ◐ | CoCI policy compile (§01.9) — the fast path landed; conditional attach deferred with reasons in §01.9a | 3 |
+| ✅ | **Takeover half of the harness** — `--takeover` loads Shell into the probe process; all 23 scenarios byte-identical, and the one that was not found a real defect | 0 |
+| ✅ | The hook no longer destroys the host's last-error code (found by the above) | 2 |
+| ✅ | MSAA (§05.3) — confirmed against Shell's own composed menu in a real `explorer.exe`; closed as already satisfied | 5 |
 
 ### What the harness settled (2026-08-24)
 
@@ -271,8 +274,10 @@ Dedicated probes added from QA validation:
    duplicate-`WM_COMMAND` question the same table was gating.
 3. ⬜ **UNINIT tolerance** — host receives `WM_UNINITMENUPOPUP` for a popup it never
    really tracked (LegacyEager descendants, §01.5 divergence note); must be non-fatal
-   for representative handlers. Needs a Shell-side scenario, not a native one, so it
-   lands with the takeover half of the harness.
+   for representative handlers. Still open, and now blocked on something narrower
+   than "the takeover half": that exists, but Shell *declines* the probe's own
+   menus, so no borrowed popup is ever initialised. It needs the shell-item
+   scenario described below.
 4. ✅ **Gesture non-interference** — bypass (`Ctrl+Alt+RClick`) and config-reload
    (`Shift+Ctrl+RClick`) can never both fire from one click (QA-04). **Answered
    without the harness, and better.** A harness run could only have shown that
@@ -288,10 +293,48 @@ Dedicated probes added from QA validation:
    synchronous, and delivery-before-destroy is Windows' problem rather than one
    Shell introduces.
 
-**Still to build: the takeover half.** Everything above records what *untouched
-Windows* does, which is the baseline and was the blocking half. Running the same
-scenarios through Shell's hook and diffing needs a deployed, injected build, so
-it is scheduled with the Phase 2.3 replay work rather than here.
+### The takeover half — built 2026-08-24, and it needed no deployed build
+
+This section used to say the takeover half was "scheduled with the Phase 2.3
+replay work" because "running the same scenarios through Shell's hook and
+diffing needs a deployed, injected build". That prerequisite was wrong. Shell is
+a COM in-process server and `BootstrapOnce()` is called from
+`DllGetClassObject`, so **any process that asks Shell for a class object gets
+the popup hook installed in itself** — no injection, no deployment, no Explorer
+restart. `src/tests/hostprobe/Takeover.h` does exactly that:
+
+```powershell
+src\bin\x64\hostprobe.exe --takeover --verify src\tests\hostprobe\fixtures
+src\bin\x64\hostprobe.exe --takeover --shell <path> ...   # which Shell to load
+```
+
+There is no second fixture set, because the result is stronger than one: **all
+23 scenarios are byte-identical through the hook**, so the native baselines are
+the takeover gate.
+
+What that verifies is the **fail-open and circuit-breaker paths**, exercised in
+a real host for the first time — not the replay. `QueryShellWindow` does not
+recognise the probe's window class, so Shell declines every one of these menus
+and the breaker opens after three; the traces prove the decline is
+host-observably invisible, which is §01.2's safety property and was previously
+supported only by reading.
+
+**It found a defect on its first run.** One scenario in twenty-three came back
+different: the hook was handing the host whatever last-error value teardown
+happened to leave, destroying the failed-versus-cancelled distinction that
+`Include/HostContract.h` itself consumes. Fixed; re-introducing it fails that
+scenario and no other.
+
+**Still to build: the replay half.** Verifying that Shell's composed menu
+reproduces the baseline needs Shell to actually take over, which needs a
+scenario that builds its menu the way a file manager does —
+`IShellFolder::GetUIObjectOf` → `IContextMenu::QueryContextMenu` → track. That
+is the path `b63fdc2` fixed and the one probe 3 above is waiting for. Its traces
+cannot be fixtures (the items depend on which handlers a machine has installed),
+so it asserts properties instead: that the tracked menu is Shell's rather than
+the host's, that a native item selected in a non-`RETURNCMD` host produces
+exactly one `WM_COMMAND` carrying the original wID, and that every borrowed
+popup that received an INIT receives exactly one UNINIT.
 
 CI role: builds the probe on all platforms but *execution* requires an interactive
 desktop — run in the scheduled VM job (below), not PR CI.
@@ -344,7 +387,10 @@ Per release of Phases 1–3:
   QuickAccess/RecycleBin/third-party host (Total Commander or Everything at minimum).
 - Lifecycle: install/upgrade/uninstall/repair incl. TreatAs foreign-state preservation
   (existing validator covers tables; VM covers behavior).
-- Accessibility: Narrator over owner-drawn menus before/after MSAA change.
+- ~~Accessibility: Narrator over owner-drawn menus before/after MSAA change.~~
+  **Done 2026-08-24** — read back through `IAccessible` against Shell's own
+  composed menu in a real `explorer.exe`, which is the surface Narrator reads.
+  22 named items, 6 correctly-unnamed separators, states right. See §05.3.
 - Config: LKG typo scenario; watcher live-edit; reload-during-open-menu.
 
 ## 6. Risk register deltas (vs master plan §2 sources)

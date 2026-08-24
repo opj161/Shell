@@ -70,9 +70,9 @@ in the same hook body; see §01.7); documented in README + Reliability Center.
 
 ## 3. Accessibility: expose owner-drawn items
 
-> **Measured 2026-08-24, and the premise below is wrong: this is very probably
-> already working, and `MSAAMENUINFO` must not be adopted.** Read this box before
-> the section it heads.
+> **Closed 2026-08-24: this already works, and `MSAAMENUINFO` must not be
+> adopted.** The section's premise was wrong. What follows is the evidence, in
+> the order it was gathered; the design it replaced has been deleted.
 >
 > The claim was that owner-drawn items leave screen readers with nothing. A probe
 > built four menus and asked each what a reader is told — from another thread,
@@ -107,55 +107,36 @@ in the same hook body; see §01.7); documented in README + Reliability Center.
 > adopting it would make Shell's items indistinguishable from a host's by the
 > discriminator the code already relies on.
 >
-> **Not done, and it is the only part this machine cannot do:** confirming it
-> with a real screen reader against a deployed Shell. The probe proves the
-> mechanism on a menu built the same way; it does not prove Shell's composed
-> menu reaches Narrator. That is a §06.5 machine-matrix item, now with a
-> specific expectation rather than an open question.
-
-Every rendered item is owner-drawn today; screen readers currently rely on fallbacks.
-Microsoft's mechanism (page fetched): put `MSAAMENUINFO` **first** in the structure
-pointed to by `dwItemData`; no IAccessible tree needed.
-
-```cpp
-struct OwnerDrawItemData {          // MenuItemInfo stays as-is; wrap at insert time
-    MSAAMENUINFO msaa;              // must be first member
-    MenuItemInfo* item;
-};
-```
-
-Integration points:
-- insertion sites that today do `set_data(this)` (`add_ownerdraw` paths) switch to
-  handing out `OwnerDrawItemData*`;
-- all internal `dwItemData` consumers switch to the two-field layout (grep set:
-  measure/draw paths, `MenuItem.h` helpers);
-- precedent for reading foreign MSAA layouts already exists (`MenuItem.h:918-924`),
-  so the reverse-direction parsing is proven safe under SEH.
-Constraint honored: no virtual functions in the wrapper struct (documented requirement:
-"The MSAAMENUINFO structure cannot be a member in a class that contains virtual
-functions … create an item data structure that contains MSAAMENUINFO as the first
-member", <https://learn.microsoft.com/windows/win32/winauto/exposing-owner-drawn-menu-items>).
-
-Two additions from the §07 audit:
-
-- **Mirrored native items must not be rewrapped.** Shell already *reads* foreign
-  `dwItemData` as `AASHELLMENUITEM` (`MenuItem.h:918-924`), and a mirrored native item
-  may still carry the host's own layout. Only items Shell owns get the
-  `OwnerDrawItemData` wrapper; anything whose `dwItemData` came from the host is
-  passed through untouched. Getting this backwards would corrupt Explorer's own
-  accessibility data, which is worse than the gap being fixed.
-- **Record the documented fallback.** The same guidance offers a second sanctioned
-  route: "Provide an option to replace graphic menus with standard text menus when an
-  accessibility aid is active … If SystemParametersInfo returns TRUE with its uiAction
-  parameter set to SPI_GETSCREENREADER, use standard menus"
-  (<https://learn.microsoft.com/windows/win32/tablet/using-owner-drawn-menus>).
-  That is the escape hatch if MSAAMENUINFO proves insufficient in the Narrator/NVDA
-  pass (§06.5) — not a replacement for it, but the thing to reach for rather than
-  inventing an `IAccessible` tree.
-Tests: hosted test inserting items into a real popup and reading names back via
-`IAccessible`/`AccExplorer`-style lookup is out of scope for CI; instead assert layout
-invariants + `MSAA_MENU_SIG` presence at offset 0. Manual Narrator pass listed in §06
-machine-matrix. Scope S-M; disproportionate usability win (A2§16).
+> **Confirmed against a deployed Shell in a real `explorer.exe`, 2026-08-24.**
+> The remaining doubt was that the probe proved the *mechanism* on a menu built
+> the same way, not that Shell's own composed menu reaches a screen reader. A
+> second probe asked that question directly: raise Shell's menu in Explorer by
+> posting `WM_CONTEXTMENU` to `SHELLDLL_DefView`, then from a separate process
+> — while Explorer's thread is blocked inside its tracking call, which is the
+> situation a screen reader is in — walk the `#32768` window with
+> `AccessibleObjectFromWindow` and `get_accName`.
+>
+> All 28 children reported correctly: 22 named menu items and 6 separators
+> (unnamed, `role=separator`, which is right). `STATE_SYSTEM_HASPOPUP` on every
+> submenu and `STATE_SYSTEM_UNAVAILABLE` on the greyed Paste. Names came through
+> for all three item origins at once — mirrored natives (`View`, `Sort by`,
+> `Properties`), NSS customs (`Terminal`, `File manage`, `Develop`, `Go To`) and
+> packaged verbs (`Search Everything 1.5a...`, `Rename with PowerRename`).
+>
+> **§05.3 is closed as already satisfied.** Narrator reads menus through this
+> same MSAA surface, so a separate Narrator pass would be confirming the
+> transport rather than the product; the §06.5 matrix row is satisfied by the
+> reading above. The `MSAAMENUINFO` design that used to occupy the rest of this
+> section is deleted rather than deferred — it would spend real risk on a solved
+> problem, for the `dwItemData` reason two paragraphs up.
+>
+> The documented fallback is worth keeping on record even so, because it is the
+> sanctioned escape hatch if some future host does defeat this: "Provide an
+> option to replace graphic menus with standard text menus when an accessibility
+> aid is active ... If SystemParametersInfo returns TRUE with its uiAction
+> parameter set to SPI_GETSCREENREADER, use standard menus"
+> (<https://learn.microsoft.com/windows/win32/tablet/using-owner-drawn-menus>).
+> Reach for that before inventing an `IAccessible` tree.
 
 ## 4. Keyboard completeness: mnemonics then type-ahead
 
@@ -283,7 +264,7 @@ A2§28, master plan §2.
 |---|---|---|---|
 | Reliability Center | diagnose/slow-quarantine extensions | M-L | §02.6, §01.9 |
 | Bypass gesture | instant native escape hatch | S | none |
-| MSAA exposure | screen-reader usable menus | S-M | none |
+| MSAA exposure | screen-reader usable menus | — | **already satisfied**, see §3 |
 | Mnemonics/type-ahead | keyboard-complete menus | S | none — **both stages landed** |
 | Smart columns | giant menus stay usable | S | none |
 | Favorites/recents | personal muscle-memory layer | M | MenuModel |
