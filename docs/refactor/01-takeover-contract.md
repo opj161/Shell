@@ -499,6 +499,53 @@ Not worth it in that trade. Revisit if the ring ever shows the empty-policy
 Explorer case mattering, or alongside the `TakeoverRouter` work, where the
 decision has somewhere natural to live.
 
+### 9b. The router de-dup, traced but not changed (2026-08-24)
+
+§9's last bullet - "TreatAs is authoritative when healthy; CoCI override only as
+fallback, never both by default" - is still open, and tracing it turned the
+problem into something more specific than tidiness.
+
+**Both mechanisms are live on a `-treat` machine, and they reach the same
+outcome by different routes.**
+
+- `CoCreateInstanceHook` returns `E_NOINTERFACE` for
+  `IID_FileExplorerContextMenu` whenever `settings.priority` evaluates truthy
+  (`Main.cpp`, the first branch). Explorer cannot create the modern menu and
+  falls back to the classic one, which Shell then takes over.
+- The `TreatAs` redirect on `{86ca1aa0-…}` makes COM substitute Shell's own
+  CLSID. `DllGetClassObject` accepts it - `rclsid` *is* `IID_ContextMenu` - and
+  hands back a class factory whose object does not implement whatever interface
+  the modern menu asked for, so the activation fails there instead. Same
+  outcome, one COM round trip and a DLL load later.
+
+**The user-visible consequence is that `priority = 0` does nothing on a machine
+registered with `-treat`.** The setting exists to let the modern menu win; the
+redirect overrules it silently, and nothing says so. That is the defect hiding
+behind the de-dup, and it is the reverse of what §9's bullet implies: making
+TreatAs unconditionally authoritative would make `priority` permanently
+meaningless rather than fixing it.
+
+**Not changed here, deliberately.** This is the single most user-visible
+behaviour on Windows 11, the two mechanisms are registered at different times
+(install versus config publish), and the experiment that would settle it needs
+writing to the installed `shell.nss` - which sits in `Program Files` and is not
+writable by the user account whose Explorer would have to reload it. Guessing
+at it at the end of a session is how the Win11 menu gets broken for everyone.
+
+The experiment, for whoever picks this up:
+
+1. On a `-treat`-registered machine, set `priority = 0` and confirm the
+   modern menu still does not appear. That is the defect, reproduced.
+2. Make the CoCI branch conditional on the redirect *not* being ours -
+   the check already exists as a shape in `RegistryConfig.h`, the
+   `RegGetValueW` on `CLSID\{86ca1aa0-…}\TreatAs` compared against
+   `CLS_ContextMenu` - cached like `IsRegisteredCached`.
+3. Confirm `priority = 0` now shows the modern menu, `priority = 1` does not,
+   and an unregistered-`TreatAs` machine is unchanged in both.
+
+Step 2 is small. Steps 1 and 3 are the work, and they need a machine whose
+`shell.nss` can be edited and whose Explorer can be restarted repeatedly.
+
 ## 10. Acceptance criteria for this doc
 
 - [ ] Every hook exit maps to a logged `TakeoverDecision`.

@@ -93,6 +93,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | **Replay half of the harness** — four shell-namespace scenarios; `b63fdc2` and `a634ab6` verified against a real borrowed menu | 0 |
 | ✅ | The circuit breaker no longer counts deliberate declines, which had switched takeover off after three popups in any non-Explorer host | 3 |
 | ✅ | MSAA (§05.3) — confirmed against Shell's own composed menu in a real `explorer.exe`; closed as already satisfied | 5 |
+| ✅ | Smart columns (§05.5) — `settings columns = N`; measured on a real menu, 239×1031 scrolling → 938×990 in four columns | 5 |
 
 ### What the harness settled (2026-08-24)
 

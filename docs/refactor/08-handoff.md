@@ -38,7 +38,7 @@ Five rules have held throughout and are worth keeping:
 
 ## 2. What has landed on this branch
 
-Seventeen commits, `940ff6a`..`5085b93`.
+Nineteen commits, `940ff6a`..`00d9e21`.
 
 | Commit | What |
 |---|---|
@@ -58,6 +58,8 @@ Seventeen commits, `940ff6a`..`5085b93`.
 | `6ff63c8` | **Takeover harness + last-error fix** — the hook was handing hosts the wrong `GetLastError` after a failed track |
 | `2142525` | **MSAA closed** — confirmed against Shell's own menu in a real Explorer; the `MSAAMENUINFO` design deleted |
 | `5085b93` | **Replay harness + breaker fix** — three menus Shell does not handle no longer switch takeover off for the process |
+| `b0d9ec6` | **Harness navigation** — the driver no longer walks past the item it was steering to |
+| `00d9e21` | **Smart columns** — a menu taller than the screen can use columns; measured, 239×1031 scrolling → 938×990 |
 
 ### The measurements that changed decisions
 
@@ -80,6 +82,7 @@ Seventeen commits, `940ff6a`..`5085b93`.
 | Three declined popups open the circuit breaker, and a host that is not Explorer produces them constantly | The breaker was counting decisions as failures. Only real failures count now, and the ring gained a `Declined` decision |
 | A shell-namespace menu **is** taken over, and its native identifiers survive the round trip intact | `b63fdc2`'s replay and `a634ab6`'s INIT/UNINIT pairing verified against a real borrowed menu rather than a fake |
 | COM activates Shell by the path in the registry, not by whichever copy is already mapped | Two knowingly broken builds passed every takeover assertion through `--shell`. The harness now refuses that configuration |
+| A 100-item menu measures 239×1031 and scrolls; with `columns = 4` it measures 938×990 and does not | Smart columns works — and getting there needed two fixes the unit suite had not thought to ask for. §05.5a |
 
 ## 3. Where to pick up
 
@@ -144,33 +147,57 @@ it is the last structural item before the seam work. The hook body has grown
 three more decisions this session (gesture, breaker, decision-preservation in
 the `__finally`) and is the right size to be consolidated now rather than later.
 
-### 3.4 Smart columns (§05.5)
+### 3.4 Smart columns — **landed**, see §05.5a
 
-Small, self-contained presenter logic over the existing measure pass, and the
-machinery exists on both sides already (`cyMax` scrolling landed in `a3431df`;
-NSS `column` maps to `MFT_MENUBREAK`). Nothing blocks it.
+Left here only for the lesson: it was unit-green and visibly wrong twice, and
+both defects came out of measuring one real menu. A presenter change that has
+never rendered is worth the deploy.
 
-### 3.5 CoCI: the router de-dup, and conditional attach if it earns itself (§01.9)
+### 3.5 CoCI: the router de-dup — traced, and it is a real defect (§01.9b)
 
-The policy compile and the hook's fast path landed in `5e44534`. Two things are
-left, and one of them shrank on inspection — see §01.9a:
+The policy compile and the hook's fast path landed in `5e44534`. Conditional
+attach stays deferred for the reasons in §01.9a. The router de-dup was traced
+this session and turned out to be more than tidiness:
 
-- **Conditional attach is deferred, not pending.** The detour is already
-  installed only inside `if(rt.loader.explorer)`, so third-party hosts never get
-  it, and the policy does not exist yet at the point `BootstrapOnce` would
-  decide. Doing it means installing the detour later from a config-publish
-  thread, which now includes the watcher's. Revisit alongside `TakeoverRouter`,
-  where the decision has somewhere natural to live.
-- **The router de-dup of the Win11 suppression is still open**: TreatAs
-  authoritative when healthy, CoCI override only as a fallback, never both by
-  default.
+**`settings { priority = 0 }` does nothing on a machine registered with
+`-treat`.** Two mechanisms suppress the Windows 11 modern menu and only one of
+them is a setting. `CoCreateInstanceHook` refuses `IID_FileExplorerContextMenu`
+when `priority` is truthy; the `TreatAs` redirect makes COM resolve the same
+class to Shell, whose object does not implement the interface, so the
+activation fails anyway. Turning the setting off leaves the redirect in charge,
+silently.
+
+Not changed here on purpose — this is the most user-visible behaviour on
+Windows 11, and the experiment needs a machine whose installed `shell.nss` can
+be edited and whose Explorer can be restarted repeatedly. §01.9b has the fix
+sketch and the three steps that would confirm it.
 
 ### 3.6 Then
 
-Flicker-hack A/B (§02.4 — note the *visible* half needs eyes on a real menu) ·
-Reliability Center UI (§05.1; its telemetry now exists, including the taskbar
-counters) · targeted moveto (§04.6) · favorites and the rule inspector
-(§05.6–7) · seam steps 5–7 of §04.4.
+Flicker-hack A/B (§02.4 — the *visible* half needs eyes on a real menu, but the
+tooling for that now exists: post `WM_CONTEXTMENU` to Explorer's
+`SHELLDLL_DefView` and read the `#32768` window back, which is how smart columns
+was measured) · Reliability Center UI (§05.1; its telemetry now exists,
+including the taskbar counters, and §3.2's export is its prerequisite) ·
+targeted moveto (§04.6) · favorites and the rule inspector (§05.6–7) · seam
+steps 5–7 of §04.4.
+
+### 3.7 A note on how the last two sessions found things
+
+Every defect found this session came from running the code, not from reading
+it: the last-error one from the harness, the circuit-breaker one from running
+all the scenarios in one process rather than filtered, both column ones from
+measuring one real menu. The unit suites were green throughout — 26,327 checks
+at the start and 32,180 at the end, and none of them was going to notice any of
+it.
+
+The cheap tools that made that possible are worth keeping to hand. `hostprobe
+--takeover` puts Shell into a process you own with no deployment. Posting
+`WM_CONTEXTMENU` to `SHELLDLL_DefView` raises a real Explorer menu without
+touching the mouse. A per-user `HKCU\Software\Classes\CLSID\…\InprocServer32`
+override points COM at a build without touching HKLM or restarting Explorer,
+which is what made it possible to check that the new assertions fail when their
+defects are put back.
 
 ## 4. Things that will bite
 
