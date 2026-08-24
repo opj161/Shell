@@ -56,7 +56,11 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- oleacc for the rendering scenarios, which read the live menu back the
+           way a screen reader does; ole32/oleaut32 for the apartment that
+           AccessibleObjectFromWindow unmarshals into and for the BSTRs it
+           returns. See MenuReader.h. -->
+      <AdditionalDependencies>user32.lib;gdi32.lib;oleacc.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

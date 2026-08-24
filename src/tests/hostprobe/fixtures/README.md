@@ -183,3 +183,93 @@ site and pinned by this scenario.
 `position=3`, the child's `WM_UNINITMENUPOPUP` arrives before the root's, and
 both precede the closing `WM_MENUSELECT`/`WM_EXITMENULOOP` pair. That is the
 ordering `docs/refactor/01-takeover-contract.md` §5 rule 4 has to match.
+
+## The rendering scenarios have no fixture, and cannot have one
+
+`render.*` are four scenarios that read the menu **off the screen** rather than
+off the message stream, through `AccessibleObjectFromWindow` on the live
+`#32768` window while the owner thread is still blocked inside its tracking
+call. `../MenuReader.h` has the design.
+
+They exist because of what seam steps 6 and 7 of `docs/refactor/04-code-health.md`
+are about to move: `MenuModel` and then the presenter, out of a 7,559-line
+`ContextMenu.cpp` that the unit test project does not link. Those two seams
+break things that no message stream shows — an item in the wrong order, a
+submenu against the wrong edge, a measure pass that silently changed. Every
+other scenario in this directory would stay green through all of it.
+
+Like the `takeover.*` cases they store no trace: the items come from whichever
+handlers the machine has installed, so they assert properties.
+
+| Scenario | Property |
+| --- | --- |
+| `render.every_composed_item_is_readable` | every non-separator item reports a name; every separator reports `ROLE_SYSTEM_SEPARATOR` and none |
+| `render.the_composed_order_reaches_the_screen` | MSAA child *i* is the composed HMENU's position *i-1*, for separator-ness, submenu-ness, disabled-ness and title |
+| `render.the_popup_contains_the_items_it_measured` | every item rectangle lies inside the popup's, and items advance down a column without overlapping |
+| `render.a_submenu_opens_against_its_parent` | the child popup is adjacent to one of its parent's vertical edges and overlaps the row that opened it |
+
+### What had to be measured first
+
+Four things the documentation does not state, all on Windows 11 26200.8875 x64,
+2026-08-25. Two of them would each have produced a test that passed for the
+wrong reason.
+
+- **`get_accName` strips the mnemonic marker and keeps the accelerator.**
+  `&Alpha` reads back as `Alpha`; `&Bravo\tCtrl+B` as `Bravo\tCtrl+B`, tab
+  intact. The access key moves to `get_accKeyboardShortcut` (`a`). So comparing
+  an MSAA name with an HMENU title means stripping `&` from the title and
+  touching nothing else.
+- **A separator answers `get_accName` with `S_FALSE` and a null BSTR** — not
+  `S_OK` and an empty string. `S_FALSE` is a success code, so a reader that
+  tests only `FAILED(hr)` records an empty name for a separator and cannot tell
+  it from an item that has none.
+- **A menu item's `get_accChild` gives the submenu popup, but with no
+  geometry.** The Menu Item page says it "Retrieves the IDispatch interface to
+  the pop-up menu object for this item", and it does — role `MENUPOPUP`, right
+  child count. Its `accLocation` is `(0,0 0x0)` whether or not the submenu is
+  open. A placement assertion built on that documented descent would have
+  compared a rectangle at the origin against its parent and reported whichever
+  way the comparison happened to be written. Geometry comes from each popup's
+  own `#32768` window instead, and parent and child are told apart by which
+  window was not there a moment ago.
+- **A popup's `accLocation` is exactly the union of its items'**, with no
+  border: measured `(503,303)` `217x107` against six items summing to 107. That
+  is what makes "every item is inside the popup" a real constraint rather than
+  one satisfied by a generous frame.
+
+Two of the assertions rest on documented contracts rather than measurement, and
+they are the load-bearing ones. Child IDs "are numbered sequentially from top to
+bottom starting with one" and the count "is the number of menu items in the
+menu, including menu separators"
+(<https://learn.microsoft.com/windows/win32/winauto/pop-up-menu>) — which is
+what makes MSAA child *i* equal HMENU position *i-1* with nothing left to
+interpret. And `accLocation` returns an origin plus a size: "right = left +
+width, and bottom = top + height"
+(<https://learn.microsoft.com/windows/win32/api/oleacc/nf-oleacc-iaccessible-acclocation>).
+
+### What they deliberately do not pin
+
+The multi-level property behind `PopupStack::parent_of_top()` — that a
+*third*-level popup is placed against its own parent rather than against the
+root. With a single level the parent is the root and the two are
+indistinguishable, and a composed menu on an arbitrary machine is not guaranteed
+to have a three-level cascade. That stays where `docs/refactor/01-takeover-contract.md`
+§6a left it: verified by hand once, and structural in `PopupStack` rather than
+tested for.
+
+The placement rule is also deliberately loose about *which* edge. Windows flips
+a submenu to the left of its parent when there is no room on the right, and this
+harness places its popup in whichever screen corner is furthest from the cursor
+— so "adjacent to one of the parent's vertical edges" is the strongest rule that
+does not depend on where the menu happened to open.
+
+### One trap, because it cost a run
+
+The driver must wait for the popup **window**, not for the harness's own
+"menu is up" event. That event is set by the earliest of several messages, and
+under takeover the earliest is a `WM_INITMENUPOPUP` that Shell *synthesises* for
+the borrowed host menu — sent before Shell has composed anything, let alone
+shown it. Reading then finds no `#32768` at all, which reads as "Shell drew
+nothing" rather than as "we looked too early". `Probe::wait_for_popups` polls
+until two consecutive readings agree, which is the same settling rule
+`AGENTS.md` states for reading a menu after an Explorer restart.

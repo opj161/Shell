@@ -20,7 +20,10 @@ namespace hostprobe
 							UnmatchedCharAfterNavigating,
 							// For ShellItem, whose item identifiers are not
 							// known until the handlers have filled the menu.
-							SelectDrivableCommand, CancelWhatever };
+							SelectDrivableCommand, CancelWhatever,
+							// Reads the menu back through MSAA instead of
+							// choosing anything from it. See MenuReader.h.
+							ReadComposedMenu };
 
 	// Whether a scenario needs Shell in the process. Requiring the flag rather
 	// than detecting the mode is deliberate: QueryContextMenu loads Shell
@@ -45,6 +48,15 @@ namespace hostprobe
 		ShellTrackedItsOwnMenu,
 		EveryInitPopupHasOneUninit,
 		CommandCarriesTheNativeIdentifier,
+
+		// Rendering, read back off the live menu through MSAA. These are the
+		// properties docs/refactor/08-handoff.md section 3.8 asks for before
+		// paint code moves out of ContextMenu.cpp, and none of them is
+		// reachable from the message stream the other expectations read.
+		EveryComposedItemIsReadable,
+		ComposedOrderSurvivesToTheScreen,
+		ThePopupContainsTheItemsItMeasured,
+		ASubmenuOpensAgainstItsParent,
 	};
 
 	struct Scenario
@@ -113,6 +125,27 @@ namespace hostprobe
 		// The identifier the host was told to run, and whether the menu it
 		// created actually contains it.
 		bool command_is_native{};
+
+		// ---- rendering, read through MSAA while the menu was up ----------
+		//
+		// Each verdict is computed where the snapshot is still in hand, and
+		// carries its own detail string, because "the order did not match" is
+		// useless without saying at which position and with what on each side.
+		bool render_attempted{};
+		size_t render_popups_seen{};
+		size_t render_items{};
+		std::wstring render_detail;
+
+		bool render_readable{};
+		bool render_order_matches{};
+		bool render_geometry_ok{};
+
+		// A composed menu only has a submenu if this machine's handlers gave it
+		// one, so "was not attempted" is a legitimate outcome and is reported
+		// rather than counted as a pass.
+		bool render_submenu_attempted{};
+		bool render_submenu_opened{};
+		bool render_submenu_placed{};
 	};
 
 	const std::vector<Scenario> &scenarios();

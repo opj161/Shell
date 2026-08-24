@@ -45,6 +45,7 @@
 #include "ShellMenu.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 
 namespace hostprobe
@@ -178,6 +179,18 @@ namespace hostprobe
 			return s;
 		}
 
+		// Chooses nothing. The driver reads the menu back through MSAA and
+		// opens whichever item turns out to have a submenu, so the destination
+		// is discovered on the machine rather than written down here.
+		Probe::Script read_composed_menu()
+		{
+			Probe::Script s;
+			s.root = Target::none();
+			s.read_menu = true;
+			s.keys = { Key::vk(VK_ESCAPE) };
+			return s;
+		}
+
 		// Does every popup the owner was told about get told it is finished
 		// with? WM_INITMENUPOPUP and WM_UNINITMENUPOPUP both carry the HMENU in
 		// wParam, so the pairing is readable straight off the trace.
@@ -223,6 +236,277 @@ namespace hostprobe
 					return true;
 			}
 			return false;
+		}
+
+		// ---- rendering verdicts ------------------------------------------
+		//
+		// Computed here, where the snapshot is still in hand, so main.cpp only
+		// has to report. Each fills a detail string on failure: "the order did
+		// not match" is not actionable without saying at which position and
+		// with what on either side.
+
+		// Every item Shell composed is legible to a screen reader, and a
+		// separator is legible as a separator rather than as a nameless item.
+		// This is section 05.3's result, which until now was proved by a probe
+		// that no longer exists.
+		void judge_readable(const MenuSnapshot &snap, Result *out)
+		{
+			for(size_t i = 0; i < snap.root.items.size(); i++)
+			{
+				auto &item = snap.root.items[i];
+				wchar_t detail[256];
+
+				if(item.is_separator())
+				{
+					if(item.has_name)
+					{
+						::swprintf_s(detail, L"position %zu is a separator and "
+									 L"reports the name [%s]", i, item.name.c_str());
+						out->render_detail = detail;
+						return;
+					}
+					continue;
+				}
+
+				if(!item.has_name)
+				{
+					::swprintf_s(detail, L"position %zu has no name and is not a "
+								 L"separator (role %ld)", i, item.role);
+					out->render_detail = detail;
+					return;
+				}
+			}
+			out->render_readable = true;
+		}
+
+		// What MSAA reports, position by position, is what the composed HMENU
+		// holds. The popup-menu page is what makes this a contract: child IDs
+		// are "numbered sequentially from top to bottom starting with one" and
+		// the count includes separators, so MSAA child i is HMENU position
+		// i - 1 with nothing left to interpret.
+		//
+		// This is the assertion `MenuModel` is most likely to disturb, because
+		// a reordering is invisible to every other test in the tree.
+		void judge_order(const MenuSnapshot &snap, Result *out)
+		{
+			wchar_t detail[512];
+
+			if(snap.rows.size() != snap.root.items.size())
+			{
+				::swprintf_s(detail, L"the composed menu holds %zu item(s) and "
+							 L"MSAA reports %zu", snap.rows.size(),
+							 snap.root.items.size());
+				out->render_detail = detail;
+				return;
+			}
+
+			for(size_t i = 0; i < snap.rows.size(); i++)
+			{
+				auto &row = snap.rows[i];
+				auto &item = snap.root.items[i];
+
+				if(row.separator != item.is_separator())
+				{
+					::swprintf_s(detail, L"position %zu: the menu says %s, MSAA "
+								 L"says %s", i,
+								 row.separator ? L"separator" : L"item",
+								 item.is_separator() ? L"separator" : L"item");
+					out->render_detail = detail;
+					return;
+				}
+
+				if(row.submenu != item.has_popup())
+				{
+					::swprintf_s(detail, L"position %zu [%s]: the menu %s a "
+								 L"submenu, MSAA %s HASPOPUP", i, row.title.c_str(),
+								 row.submenu ? L"has" : L"has no",
+								 item.has_popup() ? L"reports" : L"does not report");
+					out->render_detail = detail;
+					return;
+				}
+
+				// Separators are skipped: measured, a separator reports
+				// STATE_SYSTEM_UNAVAILABLE whatever the HMENU says about it, so
+				// comparing the two there would assert a fact about Windows'
+				// rendering rather than about Shell's composition.
+				if(!row.separator && row.disabled != item.unavailable())
+				{
+					::swprintf_s(detail, L"position %zu [%s]: the menu says %s, "
+								 L"MSAA says %s", i, row.title.c_str(),
+								 row.disabled ? L"disabled" : L"enabled",
+								 item.unavailable() ? L"unavailable" : L"available");
+					out->render_detail = detail;
+					return;
+				}
+
+				// The one check that catches a pure reorder of plain items,
+				// where every structural property still agrees. Measured: MSAA
+				// strips the '&' marker and keeps everything after a tab, so
+				// the title is stripped and nothing else is touched.
+				if(!row.separator)
+				{
+					auto expected = strip_mnemonics(row.title);
+					if(expected != item.name)
+					{
+						::swprintf_s(detail, L"position %zu: the menu holds [%s], "
+									 L"MSAA reports [%s]", i, expected.c_str(),
+									 item.name.c_str());
+						out->render_detail = detail;
+						return;
+					}
+				}
+			}
+
+			out->render_order_matches = true;
+		}
+
+		// The measure pass put every item inside the window it sized, and laid
+		// them out in reading order. Deliberately expressed as relationships
+		// rather than as pixel counts: a composed menu's height depends on
+		// which handlers the machine has, so a recorded size would be a fixture
+		// this file has already established it cannot have.
+		//
+		// Column-aware, because `settings columns = N` exists (section 05.5a):
+		// items continue down a column and then start a new one, so the
+		// ordering rule applies within a column and a change of left edge is a
+		// new column rather than a violation.
+		void judge_geometry(const MenuSnapshot &snap, Result *out)
+		{
+			wchar_t detail[512];
+
+			if(!snap.root.has_rect)
+			{
+				out->render_detail = L"the popup reported no rectangle";
+				return;
+			}
+			if(snap.root.items.empty())
+			{
+				out->render_detail = L"the popup reported no items";
+				return;
+			}
+
+			const ReadItem *previous = nullptr;
+			for(size_t i = 0; i < snap.root.items.size(); i++)
+			{
+				auto &item = snap.root.items[i];
+
+				if(!item.has_rect)
+				{
+					::swprintf_s(detail, L"position %zu reported no rectangle", i);
+					out->render_detail = detail;
+					return;
+				}
+
+				if(item.rect.right <= item.rect.left || item.rect.bottom <= item.rect.top)
+				{
+					::swprintf_s(detail, L"position %zu measured empty: (%ld,%ld)-(%ld,%ld)",
+								 i, item.rect.left, item.rect.top,
+								 item.rect.right, item.rect.bottom);
+					out->render_detail = detail;
+					return;
+				}
+
+				if(item.rect.left < snap.root.rect.left
+				   || item.rect.top < snap.root.rect.top
+				   || item.rect.right > snap.root.rect.right
+				   || item.rect.bottom > snap.root.rect.bottom)
+				{
+					::swprintf_s(detail, L"position %zu at (%ld,%ld)-(%ld,%ld) is "
+								 L"outside the popup (%ld,%ld)-(%ld,%ld)", i,
+								 item.rect.left, item.rect.top,
+								 item.rect.right, item.rect.bottom,
+								 snap.root.rect.left, snap.root.rect.top,
+								 snap.root.rect.right, snap.root.rect.bottom);
+					out->render_detail = detail;
+					return;
+				}
+
+				if(previous && previous->rect.left == item.rect.left
+				   && item.rect.top < previous->rect.bottom)
+				{
+					::swprintf_s(detail, L"position %zu starts at y=%ld, above the "
+								 L"bottom of the item before it (y=%ld)", i,
+								 item.rect.top, previous->rect.bottom);
+					out->render_detail = detail;
+					return;
+				}
+
+				previous = &item;
+			}
+
+			out->render_geometry_ok = true;
+		}
+
+		// A submenu is placed against the item it belongs to.
+		//
+		// Two relationships, both chosen so the answer does not depend on where
+		// on the screen the menu happened to open. Windows flips a submenu to
+		// the *left* of its parent when there is no room on the right, and this
+		// harness deliberately places its popup in whichever screen corner is
+		// furthest from the cursor - so a rule that demanded "child.left equals
+		// parent.right" would fail on half of the runs for a reason that has
+		// nothing to do with Shell.
+		//
+		// What this does NOT pin, stated rather than implied: the multi-level
+		// property behind parent_of_top() - that a third-level popup is placed
+		// against its own parent rather than against the root. With one level,
+		// the parent *is* the root and the two are indistinguishable. A
+		// composed menu on an arbitrary machine is not guaranteed to have a
+		// three-level cascade, so that stays where section 01.6a left it:
+		// verified by hand, structural in PopupStack rather than tested for.
+		void judge_placement(const MenuSnapshot &snap, Result *out)
+		{
+			wchar_t detail[512];
+			constexpr long ADJACENT = 8;	// a border's worth of slack
+
+			if(snap.parent_item_index == 0
+			   || snap.parent_item_index > snap.parent.items.size())
+			{
+				out->render_detail = L"the parent item could not be read back";
+				return;
+			}
+			if(!snap.child.has_rect || !snap.parent.has_rect)
+			{
+				out->render_detail = L"a popup reported no rectangle";
+				return;
+			}
+
+			auto &parent_item = snap.parent.items[snap.parent_item_index - 1];
+			if(!parent_item.has_rect)
+			{
+				out->render_detail = L"the parent item reported no rectangle";
+				return;
+			}
+
+			auto rightwards = std::labs(snap.child.rect.left - snap.parent.rect.right);
+			auto leftwards = std::labs(snap.child.rect.right - snap.parent.rect.left);
+			if(rightwards > ADJACENT && leftwards > ADJACENT)
+			{
+				::swprintf_s(detail, L"the submenu at x=(%ld..%ld) sits against "
+							 L"neither edge of its parent (x=%ld..%ld)",
+							 snap.child.rect.left, snap.child.rect.right,
+							 snap.parent.rect.left, snap.parent.rect.right);
+				out->render_detail = detail;
+				return;
+			}
+
+			// Vertical overlap rather than equality, for the same reason:
+			// Windows lifts a submenu that would run off the bottom. What is
+			// being pinned is that it belongs to *this* row - a submenu placed
+			// against the top of the menu while its item is at the bottom does
+			// not overlap it.
+			if(snap.child.rect.top >= parent_item.rect.bottom
+			   || snap.child.rect.bottom <= parent_item.rect.top)
+			{
+				::swprintf_s(detail, L"the submenu at y=(%ld..%ld) does not "
+							 L"overlap the row that opens it (y=%ld..%ld)",
+							 snap.child.rect.top, snap.child.rect.bottom,
+							 parent_item.rect.top, parent_item.rect.bottom);
+				out->render_detail = detail;
+				return;
+			}
+
+			out->render_submenu_placed = true;
 		}
 
 		bool menu_contains(HMENU menu, UINT id)
@@ -306,6 +590,7 @@ namespace hostprobe
 		case ScriptKind::SelectDrivableCommand:
 			script = select_drivable(shell_menu.drivable_command()); break;
 		case ScriptKind::CancelWhatever:  script = cancel_whatever(); break;
+		case ScriptKind::ReadComposedMenu: script = read_composed_menu(); break;
 		}
 
 		probe.clear_navigation_failure();
@@ -347,6 +632,46 @@ namespace hostprobe
 		Event by_pos;
 		if(probe.trace().first(WM_MENUCOMMAND, &by_pos))
 			result.command_position = static_cast<UINT>(by_pos.wparam);
+
+		// The rendering verdicts, while the snapshot the driver took is still
+		// the current one. Every judge_* leaves its own detail behind on
+		// failure; a scenario that did not ask for a read leaves them all
+		// false, and `render_attempted` is what tells the two apart.
+		{
+			auto &snap = probe.snapshot();
+			result.render_attempted = snap.attempted;
+			result.render_popups_seen = snap.popups_before;
+			result.render_items = snap.root.items.size();
+			result.render_submenu_attempted = snap.submenu_attempted;
+			result.render_submenu_opened = snap.submenu_opened;
+
+			// One popup and no more. Two means another menu was open on this
+			// desktop, and then none of these readings is about Shell - see
+			// AGENTS.md on running the harness on a quiet desktop.
+			// Only the judge this scenario asked for. They share one detail
+			// string, so running all four would leave whichever spoke last
+			// explaining a failure reported by another - which is exactly what
+			// the first version did, and it reported the ordering judge's
+			// words under the readability scenario's name.
+			if(snap.attempted && snap.popups_before == 1)
+			{
+				switch(s.expectation)
+				{
+				case Expect::EveryComposedItemIsReadable:
+					judge_readable(snap, &result); break;
+				case Expect::ComposedOrderSurvivesToTheScreen:
+					judge_order(snap, &result); break;
+				case Expect::ThePopupContainsTheItemsItMeasured:
+					judge_geometry(snap, &result); break;
+				case Expect::ASubmenuOpensAgainstItsParent:
+					if(snap.submenu_opened)
+						judge_placement(snap, &result);
+					break;
+				default:
+					break;
+				}
+			}
+		}
 
 		result.unpaired_popups = count_unpaired_popups(probe.trace());
 		result.init_uninit_paired = result.unpaired_popups == 0;
@@ -673,6 +998,69 @@ namespace hostprobe
 				s.expectation = Expect::NoCommandMessage;
 				s.why = L"synthetic identifiers must never reach a host, and a "
 						L"RETURNCMD host is notified by the return value alone";
+				v.push_back(s);
+			}
+
+			// ---- rendering ------------------------------------------------
+			// docs/refactor/08-handoff.md section 3.8. Everything above reads
+			// the message stream; these four read the menu that is on screen.
+			// That is the difference that matters for seam steps 6 and 7,
+			// whose regressions are a menu that draws slightly wrong rather
+			// than a message that stops arriving - and ContextMenu.cpp, where
+			// both of them live, is not linked by the unit test project.
+			//
+			// They share one script and differ only in what they assert, so a
+			// failure names the property rather than the run.
+			{
+				Scenario s;
+				s.name = L"render.every_composed_item_is_readable";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::ReadComposedMenu;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::EveryComposedItemIsReadable;
+				s.why = L"section 05.3's result, which was proved once by a probe "
+						L"that no longer exists";
+				v.push_back(s);
+			}
+			{
+				Scenario s;
+				s.name = L"render.the_composed_order_reaches_the_screen";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::ReadComposedMenu;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::ComposedOrderSurvivesToTheScreen;
+				s.why = L"a reordering is what MenuModel is most likely to "
+						L"disturb, and nothing else in the tree would notice";
+				v.push_back(s);
+			}
+			{
+				Scenario s;
+				s.name = L"render.the_popup_contains_the_items_it_measured";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::ReadComposedMenu;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::ThePopupContainsTheItemsItMeasured;
+				s.why = L"a measure pass that silently changed is what section "
+						L"05.5a's 239x1031 against 938x990 caught by hand";
+				v.push_back(s);
+			}
+			{
+				Scenario s;
+				s.name = L"render.a_submenu_opens_against_its_parent";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::ReadComposedMenu;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::ASubmenuOpensAgainstItsParent;
+				s.why = L"placement is presenter work, and section 07 will move "
+						L"the presenter";
 				v.push_back(s);
 			}
 

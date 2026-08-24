@@ -125,6 +125,28 @@ namespace
 		return true;
 	}
 
+	// Whether a rendering scenario is in a position to assert anything at all.
+	// Both failures are about the run rather than about Shell, so they are
+	// reported in their own words instead of as a property that did not hold.
+	bool rendering_was_readable(const Result &r)
+	{
+		if(!r.render_attempted)
+		{
+			::wprintf(L"    FAIL the driver never read the menu\n");
+			return false;
+		}
+		if(r.render_popups_seen != 1)
+		{
+			// AGENTS.md, "Run the harness on a quiet desktop": a second popup
+			// belongs to something else, and then none of these readings is
+			// about Shell.
+			::wprintf(L"    FAIL %zu popup window(s) were visible, so the "
+					  L"reading is not about this menu\n", r.render_popups_seen);
+			return false;
+		}
+		return true;
+	}
+
 	int check(const Scenario &s, const Result &r)
 	{
 		switch(s.expectation)
@@ -206,6 +228,49 @@ namespace
 					  r.command_ids, r.command_id,
 					  r.command_is_native ? L"which is native"
 										  : L"which the host's menu does not contain");
+			return 1;
+
+		case Expect::EveryComposedItemIsReadable:
+			if(!rendering_was_readable(r)) return 1;
+			if(r.render_readable) return 0;
+			::wprintf(L"    FAIL an item Shell composed is not legible through "
+					  L"MSAA: %s\n", r.render_detail.c_str());
+			return 1;
+
+		case Expect::ComposedOrderSurvivesToTheScreen:
+			if(!rendering_was_readable(r)) return 1;
+			if(r.render_order_matches) return 0;
+			::wprintf(L"    FAIL what is on screen is not what was composed: %s\n",
+					  r.render_detail.c_str());
+			return 1;
+
+		case Expect::ThePopupContainsTheItemsItMeasured:
+			if(!rendering_was_readable(r)) return 1;
+			if(r.render_geometry_ok) return 0;
+			::wprintf(L"    FAIL the popup and its items disagree about layout: "
+					  L"%s\n", r.render_detail.c_str());
+			return 1;
+
+		case Expect::ASubmenuOpensAgainstItsParent:
+			if(!rendering_was_readable(r)) return 1;
+
+			// A composed menu only has a submenu if this machine's handlers
+			// gave it one. Saying so beats passing silently, which would let
+			// the assertion rot into one that never runs.
+			if(!r.render_submenu_attempted)
+			{
+				::wprintf(L"    SKIP the composed menu has no submenu on this "
+						  L"machine\n");
+				return 0;
+			}
+			if(!r.render_submenu_opened)
+			{
+				::wprintf(L"    FAIL the item reporting HASPOPUP never opened a "
+						  L"second popup\n");
+				return 1;
+			}
+			if(r.render_submenu_placed) return 0;
+			::wprintf(L"    FAIL %s\n", r.render_detail.c_str());
 			return 1;
 		}
 		return 0;

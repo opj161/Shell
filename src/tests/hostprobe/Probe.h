@@ -35,11 +35,13 @@
 */
 
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "MenuReader.h"
 #include "Trace.h"
 
 namespace hostprobe
@@ -91,6 +93,36 @@ namespace hostprobe
 		// https://learn.microsoft.com/en-us/windows/win32/menurc/using-menus
 		UINT menuchar_operand{ 0 };
 		bool handle_menuchar{ false };
+	};
+
+	// What the driver read off the live menu, for the scenarios that assert
+	// what was *rendered* rather than what was sent. Filled on the driver
+	// thread while the owner is blocked inside its tracking call, and read
+	// after that call returns - by which time the menu is destroyed, which is
+	// why every field here is plain data rather than a handle to ask later.
+	//
+	// docs/refactor/08-handoff.md section 3.8: this is the coverage seam steps
+	// 6 and 7 are gated on, because their regressions look like a menu that
+	// draws slightly wrong rather than like a test that fails.
+	struct MenuSnapshot
+	{
+		bool attempted{};
+
+		// How many popup windows were visible when the read began. Anything
+		// other than one means another menu was open on the desktop, and no
+		// rendering assertion can be trusted - AGENTS.md, "Run the harness on a
+		// quiet desktop". Recorded rather than worked around, so a run that
+		// could not assert says so instead of passing.
+		size_t popups_before{};
+
+		ReadPopup root;
+		std::vector<MenuRow> rows;		// the composed HMENU, same positions
+
+		bool submenu_attempted{};
+		bool submenu_opened{};
+		size_t parent_item_index{};		// 1-based, into parent.items
+		ReadPopup parent;				// re-read once the child was up
+		ReadPopup child;
 	};
 
 	class Probe
@@ -155,6 +187,11 @@ namespace hostprobe
 			bool open_submenu{};	// then press Right to open it
 			Target child;			// then highlight this in the submenu
 			std::vector<Key> keys;	// then post these
+
+			// Read the live menu back through MSAA instead of navigating. The
+			// two are alternatives rather than additions: the reader does its
+			// own navigation, to whichever item turns out to open a submenu.
+			bool read_menu{};
 		};
 
 		// Runs one tracking call with the given script, and returns whatever the
@@ -170,6 +207,9 @@ namespace hostprobe
 			_selected_is_popup.store(false);
 			_target_armed.store(false);
 			_target_reached.store(false);
+			_tracked_menu.store(menu);
+			_composed_menu.store(nullptr);
+			_snapshot = MenuSnapshot{};
 			::ResetEvent(_menu_up);
 
 			// The alias table assigns numbers in first-seen order, so claiming
@@ -351,6 +391,114 @@ namespace hostprobe
 				_target_reached.store(true);
 		}
 
+		// Polls until a popup window exists, then a little longer, and returns
+		// what is on screen.
+		//
+		// The settling wait is not superstition. A composed menu's window is
+		// created before its items are measured, and this project has already
+		// been caught once reading a menu that had not finished becoming
+		// itself - AGENTS.md, "A context menu read seconds after an Explorer
+		// restart measures Explorer settling, not your change". The cheap
+		// version of that rule here is to wait for the reading to stop
+		// changing: two consecutive polls agreeing on the same window set.
+		std::vector<HWND> wait_for_popups(DWORD budget_ms)
+		{
+			std::vector<HWND> previous;
+			for(DWORD waited = 0; waited < budget_ms; waited += 50)
+			{
+				auto now = visible_popup_windows();
+				if(!now.empty() && now == previous)
+					return now;
+				previous = now;
+				::Sleep(50);
+			}
+			return previous;
+		}
+
+		// Reads the menu that is on screen right now, and then - if the machine's
+		// handlers gave it one - opens a submenu and reads that too.
+		//
+		// Two reads rather than one, and the reason is a measurement. The
+		// documented descent (a menu item's get_accChild "Retrieves the
+		// IDispatch interface to the pop-up menu object for this item") does
+		// return the right object, but its accLocation is (0,0 0x0) whether or
+		// not the submenu is open - so it cannot answer where anything was
+		// placed. Geometry has to come from each popup's own #32768 window, and
+		// parent and child are told apart by which window was not there before.
+		void read_the_menu()
+		{
+			_snapshot.attempted = true;
+
+			// _menu_up is not the signal to read on, and taking it for one is
+			// what the first version of this did. It is set by the earliest of
+			// several messages, and under takeover the earliest is a
+			// WM_INITMENUPOPUP that Shell *synthesises* for the borrowed host
+			// menu - sent before Shell has composed anything, let alone shown
+			// it. Reading then finds no popup window at all, which reads as
+			// "Shell drew nothing" rather than as "we looked too early".
+			//
+			// So the window is what gets waited for, which is also what
+			// section 3.8 of the handoff specifies.
+			auto before = wait_for_popups(4000);
+			_snapshot.popups_before = before.size();
+			if(before.size() != 1)
+				return;
+
+			_snapshot.root = read_popup(before.front());
+
+			auto composed = _composed_menu.load();
+			_snapshot.rows = read_hmenu(composed ? composed : _tracked_menu.load());
+
+			size_t index = 0;
+			for(size_t i = 0; i < _snapshot.root.items.size(); i++)
+			{
+				if(_snapshot.root.items[i].has_popup())
+				{
+					index = i + 1;
+					break;
+				}
+			}
+			if(!index)
+				return;
+
+			_snapshot.submenu_attempted = true;
+			_snapshot.parent_item_index = index;
+
+			// WM_MENUSELECT reports a *position* for an item that opens a
+			// submenu, and an MSAA child id is its position plus one. This is
+			// the one place the two indexings meet, and the popup-menu page is
+			// what makes the conversion a contract rather than an assumption:
+			// "The child IDs for the menu items are numbered sequentially from
+			// top to bottom starting with one."
+			if(!navigate_to(Target::popup(static_cast<UINT>(index - 1))))
+			{
+				_navigation_failed = true;
+				return;
+			}
+
+			for(int attempt = 0; attempt < 12; attempt++)
+			{
+				post(Key::vk(VK_RIGHT));
+				::Sleep(120);
+
+				auto after = visible_popup_windows();
+				for(auto window : after)
+				{
+					if(std::find(before.begin(), before.end(), window) != before.end())
+						continue;
+
+					_snapshot.child = read_popup(window);
+					// The parent is re-read now rather than reused, because
+					// opening a child changes the parent item's state - the
+					// item gains HOTTRACKED and FOCUSED - and an assertion
+					// about placement wants both sides read at the same moment.
+					_snapshot.parent = read_popup(before.front());
+					_snapshot.submenu_opened = true;
+					return;
+				}
+			}
+		}
+
 		void drive()
 		{
 			// A first sign of life, if there is one to wait for. Under
@@ -362,7 +510,20 @@ namespace hostprobe
 			// actually establishes that the menu is up.
 			::WaitForSingleObject(_menu_up, 800);
 
-			if(!navigate_to(_script.root))
+			if(_script.read_menu)
+			{
+				// AccessibleObjectFromWindow unmarshals an interface published
+				// by another thread's window, so this thread needs an
+				// apartment. S_FALSE means somebody already initialised one and
+				// still has to be balanced; RPC_E_CHANGED_MODE means it must
+				// not be.
+				// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex
+				auto com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+				read_the_menu();
+				if(SUCCEEDED(com))
+					::CoUninitialize();
+			}
+			else if(!navigate_to(_script.root))
 				_navigation_failed = true;
 
 			if(_script.open_submenu)
@@ -424,7 +585,21 @@ namespace hostprobe
 				::SetEvent(_menu_up);
 
 			if(msg == WM_INITMENUPOPUP)
+			{
 				_popup_count.fetch_add(1);
+
+				// Which HMENU is actually on screen. Shell tracks a menu it
+				// composed and hands the host's own menu the borrowed-popup
+				// treatment, so the first initialised handle that is not the
+				// one passed to track is the composed root - the same signature
+				// saw_a_menu_other_than uses to tell takeover from a decline.
+				// Captured here rather than derived from the trace afterwards
+				// because the driver needs it *while* the menu is up: by the
+				// time the trace is read the composed menu is destroyed.
+				auto opened = reinterpret_cast<HMENU>(wp);
+				if(opened && opened != _tracked_menu.load() && !_composed_menu.load())
+					_composed_menu.store(opened);
+			}
 
 			if(msg == WM_MENUSELECT && HIWORD(wp) != 0xFFFF)
 			{
@@ -620,9 +795,20 @@ namespace hostprobe
 		std::atomic<bool> _target_reached{ false };
 		bool _navigation_failed{};
 
+		// The handle passed to track, and the first different one Windows
+		// initialised - which is Shell's composed menu when it took over, and
+		// nothing when it declined.
+		std::atomic<HMENU> _tracked_menu{ nullptr };
+		std::atomic<HMENU> _composed_menu{ nullptr };
+
+		// Written by the driver thread before track returns, read by the caller
+		// afterwards. The two never overlap: track waits for the driver.
+		MenuSnapshot _snapshot;
+
 	public:
 		bool navigation_failed() const { return _navigation_failed; }
 		void clear_navigation_failure() { _navigation_failed = false; }
 		size_t draw_items() const { return _draw_items.load(); }
+		const MenuSnapshot &snapshot() const { return _snapshot; }
 	};
 }
