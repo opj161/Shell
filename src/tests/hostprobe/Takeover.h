@@ -39,7 +39,12 @@
 */
 
 #include <windows.h>
+#include <psapi.h>
+
 #include <string>
+#include <vector>
+
+#pragma comment(lib, "psapi.lib")
 
 namespace hostprobe
 {
@@ -49,6 +54,14 @@ namespace hostprobe
 		bool bootstrapped{};
 		std::wstring path;
 		std::wstring detail;
+
+		// Whether `path` is the copy COM will activate. It matters more than it
+		// looks: a scenario that builds its menu through the shell namespace
+		// causes COM to load the *registered* Shell by path, so pointing
+		// --shell somewhere else leaves two Shells mapped in one process and
+		// silently tests the registered one. See `registered` below.
+		bool is_the_registered_copy{};
+		std::wstring registered;
 	};
 
 	namespace detail
@@ -95,11 +108,40 @@ namespace hostprobe
 		}
 	}
 
+	// Every copy of shell.dll currently mapped into this process, by full path.
+	// More than one is not a harness bug but it is a trap, so it gets printed.
+	inline std::vector<std::wstring> loaded_shells()
+	{
+		std::vector<std::wstring> out;
+		HMODULE modules[1024]{};
+		DWORD needed = 0;
+		if(!::EnumProcessModules(::GetCurrentProcess(), modules, sizeof(modules), &needed))
+			return out;
+
+		auto count = needed / sizeof(HMODULE);
+		for(size_t i = 0; i < count; i++)
+		{
+			wchar_t name[MAX_PATH]{};
+			if(!::GetModuleFileNameW(modules[i], name, MAX_PATH))
+				continue;
+
+			auto path = std::wstring(name);
+			auto slash = path.find_last_of(L'\\');
+			auto leaf = slash == std::wstring::npos ? path : path.substr(slash + 1);
+			if(::_wcsicmp(leaf.c_str(), L"shell.dll") == 0)
+				out.push_back(path);
+		}
+		return out;
+	}
+
 	// An empty `dll` means the copy the machine has registered.
 	inline TakeoverLoad load_shell(const std::wstring &dll)
 	{
 		TakeoverLoad out;
-		out.path = dll.empty() ? detail::registered_shell_path() : dll;
+		out.registered = detail::registered_shell_path();
+		out.path = dll.empty() ? out.registered : dll;
+		out.is_the_registered_copy = !out.registered.empty()
+			&& ::_wcsicmp(out.path.c_str(), out.registered.c_str()) == 0;
 
 		if(out.path.empty())
 		{

@@ -793,6 +793,23 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			uint32_t invoke(CommandProperty *cmd_prop);
 			bool is_excluded();
+
+			/*
+				Set when Initialize() returns false because Shell *decided* not
+				to compose a menu here, rather than because something went wrong.
+
+				The two look identical to the caller and must not be counted the
+				same way. Declining is the normal answer for a window Shell does
+				not handle, for a configuration that hides the menu in this
+				context, and for a generation that is not currently serving -
+				all deterministic, all cheap, and none of them evidence that
+				takeover is broken. Only a real failure may feed the circuit
+				breaker, or three of a host's own internal popups would switch
+				Shell off for that process permanently.
+				docs/refactor/01-takeover-contract.md section 7.
+			*/
+			bool init_declined = false;
+
 			bool Initialize();
 			int Uninitialize();
 			int InvokeCommand(int id);	
@@ -899,8 +916,14 @@ plutovg_move_to(pluto, start.x, start.y);
 				return ::RegisterClassW(&wc_Layer);
 			}
 
-			inline static ContextMenu *CreateAndInitialize(HWND hWnd, HMENU hMenu, Point const &pt, bool explorer, bool contextmenuhandler)
+			// `declined`, when given, is set to true if Initialize() refused on
+			// purpose rather than failed - see init_declined above. Nullptr with
+			// declined == false is the only outcome the circuit breaker counts.
+			inline static ContextMenu *CreateAndInitialize(HWND hWnd, HMENU hMenu, Point const &pt, bool explorer, bool contextmenuhandler, bool *declined = nullptr)
 			{
+				if(declined)
+					*declined = false;
+
 				if(!Initializer::Status.Disabled)
 				{
 					auto ctx = new ContextMenu(hWnd, hMenu, pt);
@@ -909,7 +932,16 @@ plutovg_move_to(pluto, start.x, start.y);
 					ctx->Selected.hmenu_original = hMenu;
 					if(ctx->Initialize())
 						return ctx;
+
+					// Read before the object goes: it is the only record of why.
+					if(declined)
+						*declined = ctx->init_declined;
 					delete ctx;
+				}
+				else if(declined)
+				{
+					// Switched off is a decision, not a malfunction.
+					*declined = true;
 				}
 				return nullptr;
 			}

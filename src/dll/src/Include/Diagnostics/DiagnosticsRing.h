@@ -70,6 +70,18 @@ namespace Nilesoft
 				BypassOnce,
 				Degraded,
 				FailOpen,
+
+				// Shell looked and chose not to compose a menu here: not a
+				// window it handles, a configuration that hides the menu in
+				// this context, or no generation currently being served.
+				//
+				// Separate from FailOpen because the two need opposite
+				// responses. A fail-open is evidence that takeover is broken
+				// and feeds the circuit breaker; a decline is the normal
+				// answer for most popups in a host that is not Explorer, and
+				// counting it switched Shell off for the whole process.
+				// docs/refactor/01-takeover-contract.md section 7a.
+				Declined,
 			};
 
 			enum class ProviderResult : uint8_t

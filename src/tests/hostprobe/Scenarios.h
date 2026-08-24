@@ -10,10 +10,23 @@ namespace hostprobe
 	// Invalid is not a shape so much as the absence of one: it tracks a handle
 	// that is not a menu, to find out how a *failed* call differs from a
 	// cancelled one.
-	enum class MenuShape { Flat, WithSubmenu, WithOwnerDraw, Invalid };
+	//
+	// ShellItem is the odd one out and the only shape Shell will take over: the
+	// menu is filled by the shell namespace rather than by AppendMenu, which is
+	// how a file manager builds one. See ShellMenu.h.
+	enum class MenuShape { Flat, WithSubmenu, WithOwnerDraw, Invalid, ShellItem };
 
 	enum class ScriptKind { SelectSecond, SelectInSubmenu, Cancel, UnmatchedChar,
-							UnmatchedCharAfterNavigating };
+							UnmatchedCharAfterNavigating,
+							// For ShellItem, whose item identifiers are not
+							// known until the handlers have filled the menu.
+							SelectDrivableCommand, CancelWhatever };
+
+	// Whether a scenario needs Shell in the process. Requiring the flag rather
+	// than detecting the mode is deliberate: QueryContextMenu loads Shell
+	// through COM whether or not anybody asked for it, so a "native" run of a
+	// ShellItem scenario would quietly be a takeover run.
+	enum class Requires { Any, Takeover };
 
 	// What a question scenario asserts. Matrix scenarios use Record and assert
 	// nothing - their output is the baseline, not a verdict.
@@ -26,6 +39,12 @@ namespace hostprobe
 		OwnerDrawReachesTheOwner,
 		MenuCommandPositionEquals,
 		FailedWithLastError,
+
+		// Takeover-only. Each is a property rather than a recorded stream,
+		// because a shell menu's contents depend on the machine.
+		ShellTrackedItsOwnMenu,
+		EveryInitPopupHasOneUninit,
+		CommandCarriesTheNativeIdentifier,
 	};
 
 	struct Scenario
@@ -44,6 +63,12 @@ namespace hostprobe
 		Expect expectation{ Expect::Record };
 		UINT expected{};
 		const wchar_t *why{};
+
+		Requires needs{ Requires::Any };
+
+		// Its trace depends on what this machine has installed, so --record and
+		// --verify skip it. The expectation is the whole test.
+		bool machine_specific{};
 	};
 
 	struct Result
@@ -68,6 +93,26 @@ namespace hostprobe
 		// a harness fault, never a finding about Windows, so it is reported
 		// separately rather than folded into the scenario's own verdict.
 		bool navigation_failed{};
+
+		// The scenario could not be set up at all - no shell menu, no drivable
+		// item. Reported like a navigation failure, and for the same reason.
+		bool setup_failed{};
+		std::wstring setup_detail;
+
+		// Which menu the host handed over, and whether anything other than that
+		// one was initialised - the difference between Shell tracking the host's
+		// menu and Shell tracking one it composed.
+		bool tracked_a_different_menu{};
+
+		// Every popup that received a WM_INITMENUPOPUP got exactly one
+		// WM_UNINITMENUPOPUP. The pairing commit a634ab6 landed, asserted
+		// against a real borrowed menu rather than against a unit fake.
+		bool init_uninit_paired{};
+		size_t unpaired_popups{};
+
+		// The identifier the host was told to run, and whether the menu it
+		// created actually contains it.
+		bool command_is_native{};
 	};
 
 	const std::vector<Scenario> &scenarios();

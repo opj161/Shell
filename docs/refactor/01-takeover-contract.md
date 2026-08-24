@@ -363,6 +363,31 @@ Shell's menu. An unregistered process, a disabled shell, a bypass gesture and an
 already-open breaker all reach the same fallback deliberately, and counting
 those would open the breaker on a machine where nothing is wrong.
 
+**That list was incomplete, and the gap was a real defect (found 2026-08-24).**
+It stops at the checks the hook itself makes and misses the ones inside
+`ContextMenu::Initialize`, which refuses for several reasons that are equally
+deliberate: `QueryShellWindow` does not recognise the window, the configuration
+hides the menu in this context, or no generation is currently being served.
+All three returned the same `nullptr` as a genuine failure, so all three counted.
+
+Three of them is the threshold. A host that is not Explorer raises plenty of
+popups Shell does not handle — its own toolbar and tree menus — so **three of a
+file manager's internal popups switched takeover off for the rest of that
+process**, including for the file context menus Shell handles perfectly well.
+The recoverable cases are worse still: a configuration error that the watcher
+would have fixed on the next save had already opened the breaker permanently.
+
+Found by running the trace harness through the hook. Twenty-three plain popups
+run first, Shell declines every one of them, and the shell-namespace scenario
+that follows was handed straight back to the host — while passing when run on
+its own. `Initialize` now records *why* it refused (`init_declined`,
+`Include/ContextMenu.h`), the hook counts only real failures, and the ring gets
+a `Declined` decision of its own rather than reporting these as `FailOpen`.
+
+The ordering in `Scenarios.cpp` is load-bearing because of this: the takeover
+scenarios must stay *after* the declining ones and in the same process, or the
+regression walks back in unnoticed.
+
 One implementation trap, and it is the one `AGENTS.md` already names: the first
 version logged the breaker opening directly in the `__finally`, and
 `Logger::write` is a variadic template whose `string::Argument` temporaries

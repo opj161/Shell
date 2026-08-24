@@ -178,6 +178,35 @@ namespace
 					  L"message(s), position %u\n",
 					  s.expected, r.menu_commands, r.command_position);
 			return 1;
+
+		case Expect::ShellTrackedItsOwnMenu:
+			// A decline is indistinguishable from success by return value, so
+			// this is what separates "takeover works" from "takeover was never
+			// attempted" - and every other takeover assertion depends on it.
+			if(r.tracked_a_different_menu)
+				return 0;
+			::wprintf(L"    FAIL the only menu the owner heard about was its own: "
+					  L"Shell declined, or the breaker is open\n");
+			return 1;
+
+		case Expect::EveryInitPopupHasOneUninit:
+			if(r.init_uninit_paired)
+				return 0;
+			::wprintf(L"    FAIL %zu popup(s) received an unbalanced number of "
+					  L"INIT/UNINIT notifications (%zu INIT, %zu UNINIT)\n",
+					  r.unpaired_popups, r.init_popups, r.uninit_popups);
+			return 1;
+
+		case Expect::CommandCarriesTheNativeIdentifier:
+			if(r.command_ids == 1 && r.command_is_native)
+				return 0;
+			::wprintf(L"    FAIL expected one WM_COMMAND carrying an identifier "
+					  L"from the host's own menu, got %zu message(s), id %u, "
+					  L"%s\n",
+					  r.command_ids, r.command_id,
+					  r.command_is_native ? L"which is native"
+										  : L"which the host's menu does not contain");
+			return 1;
 		}
 		return 0;
 	}
@@ -209,6 +238,7 @@ int __cdecl wmain(int argc, wchar_t **argv)
 	// Before the window exists, so nothing this process owns has been shown to
 	// a hook that is about to be installed. Shell pins itself once its hooks
 	// are in, so this is one-way: a run is either native or takeover.
+	bool the_registered_shell = false;
 	if(takeover)
 	{
 		auto load = load_shell(shell_dll);
@@ -218,8 +248,22 @@ int __cdecl wmain(int argc, wchar_t **argv)
 			::wprintf(L"could not put Shell into this process\n");
 			return 124;
 		}
+		the_registered_shell = load.is_the_registered_copy;
 		::wprintf(L"         every trace below is what a host observes through "
 				  L"Shell, not through Windows\n");
+
+		if(!the_registered_shell)
+		{
+			// This was a real false pass before it was caught: two knowingly
+			// broken builds were loaded through --shell and every takeover
+			// assertion still passed, because the scenarios that matter reach
+			// Shell through COM and COM loads the copy named in the registry.
+			::wprintf(L"         NOTE this is not the registered copy (%s),\n"
+					  L"              so the shell-namespace scenarios would "
+					  L"exercise that one instead and are skipped.\n"
+					  L"              Deploy the build you want to test.\n",
+					  load.registered.empty() ? L"none" : load.registered.c_str());
+		}
 	}
 	else if(!shell_dll.empty())
 	{
@@ -236,11 +280,21 @@ int __cdecl wmain(int argc, wchar_t **argv)
 
 	int failures = 0;
 	int ran = 0;
+	int skipped = 0;
 
 	for(auto &s : scenarios())
 	{
 		if(!filter.empty() && s.name.find(filter) == std::wstring::npos)
 			continue;
+
+		// Not a failure and not silence: a run that skipped the scenarios which
+		// exercise takeover should say so, or "23 scenarios, 0 failures" reads
+		// as more coverage than it is.
+		if(s.needs == Requires::Takeover && !(takeover && the_registered_shell))
+		{
+			skipped++;
+			continue;
+		}
 		ran++;
 
 		::wprintf(L"\n[%s]\n", s.name.c_str());
@@ -252,6 +306,17 @@ int __cdecl wmain(int argc, wchar_t **argv)
 		::fflush(stdout);
 
 		auto r = run_scenario(s);
+
+		if(r.setup_failed)
+		{
+			// Same class as a navigation failure: the harness could not put the
+			// system into the state the scenario is about, which is a fault
+			// here rather than a finding about Shell.
+			::wprintf(L"    FAIL could not build the scenario: %s\n",
+					  r.setup_detail.c_str());
+			failures++;
+			continue;
+		}
 
 		::wprintf(L"  returned %d (GetLastError %lu)\n", r.returned, r.last_error);
 		::wprintf(L"%s", r.trace.c_str());
@@ -267,7 +332,10 @@ int __cdecl wmain(int argc, wchar_t **argv)
 
 		failures += check(s, r);
 
-		if(!record_dir.empty())
+		// A machine-specific trace is printed but never stored or compared: its
+		// contents depend on which context-menu handlers are installed, so a
+		// fixture would be a record of one desktop rather than of Windows.
+		if(!record_dir.empty() && !s.machine_specific)
 		{
 			auto path = record_dir + L"\\" + s.name + L".trace";
 			if(!write_file(path, r.trace))
@@ -277,7 +345,7 @@ int __cdecl wmain(int argc, wchar_t **argv)
 			}
 		}
 
-		if(!verify_dir.empty())
+		if(!verify_dir.empty() && !s.machine_specific)
 		{
 			auto path = verify_dir + L"\\" + s.name + L".trace";
 			bool found = false;
@@ -296,6 +364,22 @@ int __cdecl wmain(int argc, wchar_t **argv)
 
 	probe.destroy();
 
-	::wprintf(L"\n%d scenario(s), %d failure(s)\n", ran, failures);
+	if(takeover)
+	{
+		auto shells = loaded_shells();
+		::wprintf(L"\nshell.dll mapped in this process:\n");
+		for(auto &s : shells)
+			::wprintf(L"  %s\n", s.c_str());
+		if(shells.size() > 1)
+			::wprintf(L"  (more than one - the shell-namespace scenarios run "
+					  L"against whichever COM activated)\n");
+	}
+
+	if(skipped)
+		::wprintf(L"\n%d scenario(s), %d failure(s), %d skipped "
+				  L"(need --takeover against the registered copy)\n",
+				  ran, failures, skipped);
+	else
+		::wprintf(L"\n%d scenario(s), %d failure(s)\n", ran, failures);
 	return failures > 125 ? 125 : failures;
 }

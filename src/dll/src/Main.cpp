@@ -1151,9 +1151,28 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				// counts too.
 				attempted_takeover = true;
 
+				// ...but only a failure. Initialize() also refuses on purpose -
+				// for a window Shell does not handle, a configuration that hides
+				// the menu here, or a generation that is not being served - and
+				// counting those opened the breaker on hosts where Shell works.
+				// Found by running the trace harness through the hook: three of
+				// the probe's own plain popups were enough to switch takeover
+				// off for the process, after which a shell-namespace menu that
+				// Shell handles perfectly well was handed straight back.
+				// A third-party file manager raising three of its own internal
+				// popups would lose Shell for the rest of the session.
+				// docs/refactor/01-takeover-contract.md section 7a.
+				bool declined = false;
+
 				auto perf_ctx = perf::menu_perf_begin();
-				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, ShellExtCapture::has(hMenu));
+				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, ShellExtCapture::has(hMenu), &declined);
 				perf::menu_perf_end(perf_ctx, L"popup.context_construct_initialize");
+
+				if(!ctx && declined)
+				{
+					attempted_takeover = false;
+					perf::session_decision(perf::TakeoverDecision::Declined);
+				}
 				if(ctx != nullptr)
 				{
 

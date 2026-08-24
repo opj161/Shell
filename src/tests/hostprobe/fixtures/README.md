@@ -32,9 +32,26 @@ That is worth stating precisely, because two different properties produce it:
 - Verifying that the *replay* reproduces the baseline needs Shell to actually
   compose a menu, which means a scenario that builds its menu the way a file
   manager does — `IShellFolder::GetUIObjectOf` → `QueryContextMenu` → track.
-  Not built yet.
+  Those are the four `takeover.*` scenarios; see `../ShellMenu.h`. They print a
+  trace but store none, because their items come from whichever handlers the
+  machine has installed, and they run only under `--takeover` **against the
+  registered copy** — COM activates Shell by the path in the registry, so
+  pointing `--shell` elsewhere would silently test a different binary.
 
-**One scenario did differ, and it was a defect in Shell.**
+### What the takeover scenarios found
+
+Two defects, both of which only a host that is not Explorer would ever hit.
+
+**The circuit breaker was counting deliberate declines.** Running everything in
+one process is what showed it: the twenty-three plain popups above are all
+declined, three declines open the breaker, and the shell-namespace scenario that
+follows was then handed straight back to the host — while passing on its own. A
+file manager raising three of its own internal popups would have lost Shell for
+the rest of the session. `ContextMenu::Initialize` now says whether it refused
+on purpose, and only real failures count. The scenario ordering here is
+load-bearing: the `takeover.*` cases must stay last.
+
+**One baseline scenario did differ, and it was a defect in Shell.**
 `question.a_failed_track_sets_a_last_error` came back `lasterror none` where
 Windows sets one: everything between the tracking call and the hook's return —
 `InvokeCommand`, `complete_host_contract`, `PostMessage`, `WIC::release`,

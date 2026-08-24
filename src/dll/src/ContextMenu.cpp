@@ -1,4 +1,4 @@
-#include <pch.h>
+﻿#include <pch.h>
 #include "Include/Theme.h"
 #include "Include/ContextMenu.h"
 #include "Include/stb_image_write.h"
@@ -4911,7 +4911,10 @@ namespace Nilesoft
 		{
 			try
 			{
-				if(!Initializer::Inited()) return false;
+				// Every refusal below that sets init_declined is a decision rather
+				// than a malfunction, and must not feed the circuit breaker. See the
+				// comment on init_declined in Include/ContextMenu.h.
+				if(!Initializer::Inited()) { init_declined = true; return false; }
 
 				__trace(L"ContextMenu init");
 
@@ -4930,7 +4933,11 @@ namespace Nilesoft
 					Diagnostics::MenuPerfScope perf(L"selection.query_shell_window");
 					if(!Selected.QueryShellWindow())
 					{
+						// Not a window Shell handles. The commonest refusal there is,
+						// and the one that made a third-party host lose takeover for
+						// good after three of its own internal popups.
 						__trace(L"QueryShellWindow");
+						init_declined = true;
 						return false;
 					}
 				}
@@ -4950,7 +4957,11 @@ namespace Nilesoft
 					Diagnostics::MenuPerfScope perf(L"initializer.query");
 					if(!initializer || !initializer->query())
 					{
+						// No generation is being served - a configuration the watcher or
+						// a reload can still fix. Opening the breaker here would make
+						// the recovery invisible.
 						__trace(L"initializer query");
+						init_declined = true;
 						return false;
 					}
 				}
@@ -4959,6 +4970,7 @@ namespace Nilesoft
 				if(!_cache)
 				{
 					__trace(L"acquire_snapshot failed");
+					init_declined = true;
 					return false;
 				}
 
@@ -4996,8 +5008,12 @@ namespace Nilesoft
 
 				_vis = _context.parse_visibility(_cache->dynamic.visibility);
 
+				// The configuration asked for no menu in this context.
 				if(_vis == Visibility::Hidden)
+				{
+					init_declined = true;
 					return false;
+				}
 
 				{
 					Diagnostics::MenuPerfScope perf(L"selection.preparing");
@@ -5009,7 +5025,10 @@ namespace Nilesoft
 				}
 
 				if(is_excluded())
+				{
+					init_declined = true;
 					return false;
+				}
 
 				hInstance = _window.instance();
 

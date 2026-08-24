@@ -42,8 +42,10 @@
 */
 
 #include "Scenarios.h"
+#include "ShellMenu.h"
 
 #include <cstdio>
+#include <map>
 
 namespace hostprobe
 {
@@ -153,6 +155,96 @@ namespace hostprobe
 			s.keys = { Key::ch(L'Z') };
 			return s;
 		}
+
+		// A shell menu's identifiers are whatever QueryContextMenu assigned, so
+		// the destination is discovered rather than written down. Shell mirrors
+		// a native item's wID unchanged (docs/refactor/01 section 4, "native
+		// wID (identity preserved today)"), which is exactly why steering to one
+		// through Shell's composed menu is a test of that claim and not just of
+		// the driver.
+		Probe::Script select_drivable(UINT id)
+		{
+			Probe::Script s;
+			s.root = Target::command(id);
+			s.keys = { Key::vk(VK_RETURN) };
+			return s;
+		}
+
+		Probe::Script cancel_whatever()
+		{
+			Probe::Script s;
+			s.root = Target::none();
+			s.keys = { Key::vk(VK_ESCAPE) };
+			return s;
+		}
+
+		// Does every popup the owner was told about get told it is finished
+		// with? WM_INITMENUPOPUP and WM_UNINITMENUPOPUP both carry the HMENU in
+		// wParam, so the pairing is readable straight off the trace.
+		//
+		// "If an application receives WM_INITMENUPOPUP, it will receive
+		// WM_UNINITMENUPOPUP."
+		// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-uninitmenupopup
+		size_t count_unpaired_popups(const Trace &trace)
+		{
+			std::map<HMENU, int> balance;
+			for(auto &e : trace.events())
+			{
+				if(e.message == WM_INITMENUPOPUP)
+					balance[reinterpret_cast<HMENU>(e.wparam)]++;
+				else if(e.message == WM_UNINITMENUPOPUP)
+					balance[reinterpret_cast<HMENU>(e.wparam)]--;
+			}
+
+			size_t unpaired = 0;
+			for(auto &entry : balance)
+			{
+				if(entry.second != 0)
+					unpaired++;
+			}
+			return unpaired;
+		}
+
+		// Whether anything other than the handle the host created was
+		// initialised. That is the visible signature of takeover: Shell tracks a
+		// menu it composed, and the host's own menu becomes the borrowed one.
+		bool saw_a_menu_other_than(const Trace &trace, HMENU host_menu)
+		{
+			for(auto &e : trace.events())
+			{
+				if(e.message != WM_INITMENUPOPUP && e.message != WM_MENUSELECT)
+					continue;
+
+				auto handle = e.message == WM_INITMENUPOPUP
+					? reinterpret_cast<HMENU>(e.wparam)
+					: reinterpret_cast<HMENU>(e.lparam);
+
+				if(handle && handle != host_menu)
+					return true;
+			}
+			return false;
+		}
+
+		bool menu_contains(HMENU menu, UINT id)
+		{
+			if(!menu || !id)
+				return false;
+
+			auto count = ::GetMenuItemCount(menu);
+			for(int i = 0; i < count; i++)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_ID | MIIM_SUBMENU;
+				if(!::GetMenuItemInfoW(menu, static_cast<UINT>(i), TRUE, &mii))
+					continue;
+				if(!mii.hSubMenu && mii.wID == id)
+					return true;
+				if(mii.hSubMenu && menu_contains(mii.hSubMenu, id))
+					return true;
+			}
+			return false;
+		}
 	}
 
 	std::wstring flag_names(UINT flags)
@@ -182,7 +274,25 @@ namespace hostprobe
 		probe.policy().menuchar_action = s.menuchar_action;
 		probe.policy().menuchar_operand = s.menuchar_operand;
 
-		auto menu = build(s.shape, s.notify_by_pos);
+		// Lives until the end of the function: the handlers that filled it may
+		// hold state keyed on the HMENU, and Shell certainly does.
+		ShellMenu shell_menu;
+
+		HMENU menu = nullptr;
+		if(s.shape == MenuShape::ShellItem)
+		{
+			if(!shell_menu.create(probe.owner()))
+			{
+				Result failed;
+				failed.name = s.name;
+				failed.setup_failed = true;
+				failed.setup_detail = shell_menu.why();
+				return failed;
+			}
+			menu = shell_menu.menu();
+		}
+		else
+			menu = build(s.shape, s.notify_by_pos);
 
 		Probe::Script script;
 		switch(s.script)
@@ -193,6 +303,9 @@ namespace hostprobe
 		case ScriptKind::UnmatchedChar:   script = unmatched_character(); break;
 		case ScriptKind::UnmatchedCharAfterNavigating:
 			script = unmatched_character_after_navigating(); break;
+		case ScriptKind::SelectDrivableCommand:
+			script = select_drivable(shell_menu.drivable_command()); break;
+		case ScriptKind::CancelWhatever:  script = cancel_whatever(); break;
 		}
 
 		probe.clear_navigation_failure();
@@ -235,7 +348,16 @@ namespace hostprobe
 		if(probe.trace().first(WM_MENUCOMMAND, &by_pos))
 			result.command_position = static_cast<UINT>(by_pos.wparam);
 
-		if(s.shape != MenuShape::Invalid)
+		result.unpaired_popups = count_unpaired_popups(probe.trace());
+		result.init_uninit_paired = result.unpaired_popups == 0;
+		result.tracked_a_different_menu = saw_a_menu_other_than(probe.trace(), menu);
+		result.command_is_native = result.command_ids > 0
+			&& menu_contains(menu, result.command_id);
+
+		// ShellMenu owns its own handle; destroying it here would leave the
+		// destructor a dangling one, and the IContextMenu that filled it is
+		// still alive at this point.
+		if(s.shape != MenuShape::Invalid && s.shape != MenuShape::ShellItem)
 			::DestroyMenu(menu);
 		return result;
 	}
@@ -480,6 +602,77 @@ namespace hostprobe
 				s.expectation = Expect::FailedWithLastError;
 				s.why = L"Include/HostContract.h has to answer a notifying host "
 						L"TRUE for a cancel and FALSE for a failure";
+				v.push_back(s);
+			}
+
+			// ---- takeover ------------------------------------------------
+			// The only scenarios Shell actually takes over, because they are
+			// the only ones that reach it the way a file manager does. See
+			// ShellMenu.h. Their traces are printed but never recorded: the
+			// items depend on which handlers this machine has installed.
+			{
+				// Does Shell substitute its own menu at all? Everything below
+				// is meaningless if it declined, and a decline looks exactly
+				// like success from the return value alone.
+				Scenario s;
+				s.name = L"takeover.shell_composes_its_own_menu";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::CancelWhatever;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::ShellTrackedItsOwnMenu;
+				s.why = L"a shell-namespace menu is the one shape QueryShellWindow "
+						L"accepts from a host that is not Explorer";
+				v.push_back(s);
+			}
+			{
+				// a634ab6. The borrowed popup is a real one this time, filled
+				// by whatever handlers the machine has, rather than the fake in
+				// test_native_menu_lazy.cpp.
+				Scenario s;
+				s.name = L"takeover.every_borrowed_popup_is_told_it_is_finished";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::CancelWhatever;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::EveryInitPopupHasOneUninit;
+				s.why = L"\"If an application receives WM_INITMENUPOPUP, it will "
+						L"receive WM_UNINITMENUPOPUP\"";
+				v.push_back(s);
+			}
+			{
+				// b63fdc2, against a host that does not ask for identifiers.
+				// The item is chosen from the menu the host built, so the
+				// assertion is that the identifier survived being mirrored into
+				// Shell's menu and replayed back out - not merely that some
+				// WM_COMMAND arrived.
+				Scenario s;
+				s.name = L"takeover.a_native_item_replays_its_own_identifier";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::SelectDrivableCommand;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::CommandCarriesTheNativeIdentifier;
+				s.why = L"a host that did not ask for TPM_RETURNCMD must still be "
+						L"told which of *its* items was chosen";
+				v.push_back(s);
+			}
+			{
+				// The other half of the same contract: a host that did ask for
+				// identifiers gets one back and is not notified as well.
+				Scenario s;
+				s.name = L"takeover.a_returncmd_host_is_not_notified_as_well";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::SelectDrivableCommand;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::NoCommandMessage;
+				s.why = L"synthetic identifiers must never reach a host, and a "
+						L"RETURNCMD host is notified by the return value alone";
 				v.push_back(s);
 			}
 

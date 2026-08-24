@@ -37,6 +37,7 @@
 #include <windows.h>
 #include <atomic>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Trace.h"
@@ -260,20 +261,58 @@ namespace hostprobe
 			return false;
 		}
 
-		// Steps with VK_DOWN until the highlight is where the script asked, or
-		// until it has been round the menu twice - which means the destination
-		// does not exist and the scenario should fail visibly rather than hang.
+		// Steps with VK_DOWN until the highlight is where the script asked.
+		//
+		// The cap used to be forty presses, on the reasoning that it was twice
+		// round a six-item menu. That held only while every menu in the harness
+		// was one this file built. A menu Shell composed from the shell
+		// namespace has thirty-odd items at its root, and forty presses is not
+		// reliably one lap of it - so a destination that was there all along
+		// looked like a destination that did not exist, and only when the run
+		// happened to be slow enough for the opening highlight to arrive before
+		// this thread first looked.
+		//
+		// Stopping is now decided by the menu rather than by a number: once the
+		// highlight returns to somewhere it has already been, the whole list has
+		// been walked. The check runs *before* the first step for the same
+		// reason - the menu may already be sitting on the destination, and
+		// whether it got there before or after this thread started watching is a
+		// race no test should depend on.
 		bool navigate_to(const Target &target)
 		{
 			if(!target.valid)
 				return true;
 
-			for(int attempt = 0; attempt < 40; attempt++)
+			std::vector<std::pair<UINT, bool>> visited;
+			auto matches = [&target](UINT item, bool popup)
 			{
-				if(_select_count.load() != 0 &&
-				   _selected_item.load() == target.item &&
-				   _selected_is_popup.load() == target.is_popup)
-					return true;
+				return item == target.item && popup == target.is_popup;
+			};
+
+			// Two laps' worth of presses is the backstop for a menu whose
+			// highlight never settles; the visited set is what normally ends it.
+			for(int attempt = 0; attempt < 400; attempt++)
+			{
+				if(_select_count.load() != 0)
+				{
+					auto item = _selected_item.load();
+					auto popup = _selected_is_popup.load();
+					if(matches(item, popup))
+						return true;
+
+					std::pair<UINT, bool> here{ item, popup };
+					if(attempt > 0)
+					{
+						bool seen = false;
+						for(auto &v : visited)
+						{
+							if(v == here) { seen = true; break; }
+						}
+						if(seen)
+							return false;
+					}
+					visited.push_back(here);
+				}
 
 				// A step that produced no notification was not read by the menu
 				// loop, so it costs an attempt and not a position.
