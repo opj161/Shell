@@ -343,6 +343,34 @@ TEST(perf_export, a_real_section_round_trips_through_the_writer_and_the_reader)
 	CHECK(source.host[0] != L'\0');
 }
 
+TEST(perf_export, tracking_flags_are_rendered_as_words_and_returncmd_comes_first)
+{
+	wchar_t names[128]{};
+
+	// TPM_RETURNCMD is the one that decides which half of
+	// complete_host_contract runs, so it leads whatever else is set.
+	perf_export_flag_names(TPM_RETURNCMD | TPM_RIGHTBUTTON, names, ARRAYSIZE(names));
+	CHECK(same(names, L"RETURNCMD|RIGHTBUTTON"));
+
+	// A host that passes nothing is the commonest case and a real answer. An
+	// empty string in a report reads as missing data.
+	perf_export_flag_names(0, names, ARRAYSIZE(names));
+	CHECK(same(names, L"(none)"));
+
+	// Flags with no bearing on the contract are not noise in the line.
+	perf_export_flag_names(TPM_LEFTALIGN | TPM_TOPALIGN, names, ARRAYSIZE(names));
+	CHECK(same(names, L"(none)"));
+}
+
+TEST(perf_export, rendering_flags_into_a_buffer_that_cannot_hold_them_still_terminates)
+{
+	// The report builds this on the stack for every session it prints.
+	wchar_t tiny[6]{};
+	perf_export_flag_names(TPM_RETURNCMD | TPM_NONOTIFY | TPM_VERTICAL, tiny, ARRAYSIZE(tiny));
+	CHECK_EQ(tiny[ARRAYSIZE(tiny) - 1], L'\0');
+	CHECK(size_t(::lstrlenW(tiny)) < ARRAYSIZE(tiny));
+}
+
 TEST(perf_export, a_process_with_no_block_reports_not_present)
 {
 	PerfExportSource source{};

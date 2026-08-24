@@ -1,4 +1,4 @@
-#include "test.h"
+﻿#include "test.h"
 
 #include <windows.h>
 #include "Include/Diagnostics/DiagnosticsRing.h"
@@ -180,7 +180,7 @@ TEST(diagnostics_ring, a_session_publishes_once_and_carries_its_phases)
 {
 	DiagnosticsRing::instance().clear();
 
-	session_begin(0x1234);
+	session_begin(0x1234, TPM_RETURNCMD);
 	session_phase(PHASE_A, 900, 3);
 	session_decision(TakeoverDecision::TakeOver);
 	session_end();
@@ -200,12 +200,12 @@ TEST(diagnostics_ring, a_nested_session_folds_into_the_one_around_it)
 {
 	DiagnosticsRing::instance().clear();
 
-	session_begin(0xAAAA);
+	session_begin(0xAAAA, 0);
 	session_phase(PHASE_A, 100, -1);
 
 	// A menu opening while another is up. It must not publish on its own, or
 	// the outer session is truncated at the moment the inner one started.
-	session_begin(0xBBBB);
+	session_begin(0xBBBB, 0);
 	session_phase(PHASE_B, 200, -1);
 	session_end();
 
@@ -225,9 +225,9 @@ TEST(diagnostics_ring, the_outermost_decision_is_the_one_recorded)
 {
 	DiagnosticsRing::instance().clear();
 
-	session_begin(1);
+	session_begin(1, 0);
 	session_decision(TakeoverDecision::TakeOver);
-	session_begin(2);
+	session_begin(2, 0);
 	// A nested menu that failed open says nothing about how the menu around it
 	// resolved.
 	session_decision(TakeoverDecision::FailOpen);
@@ -249,7 +249,7 @@ TEST(diagnostics_ring, recording_outside_a_session_is_ignored_rather_than_lost_s
 	session_phase(PHASE_A, 50, -1);
 	session_provider(1, 50, ProviderResult::Ok);
 
-	session_begin(5);
+	session_begin(5, 0);
 	session_end();
 
 	MenuSessionRecord out[1];
@@ -267,7 +267,7 @@ TEST(diagnostics_ring, an_unbalanced_end_does_not_swallow_the_next_session)
 	session_end();
 	session_end();
 
-	session_begin(11);
+	session_begin(11, 0);
 	session_end();
 
 	CHECK_EQ(DiagnosticsRing::instance().published(), 1ull);
@@ -282,7 +282,7 @@ TEST(diagnostics_ring, sessions_on_different_threads_do_not_share_a_slot)
 	// the counts below would be wrong.
 	auto body = [](uint32_t host, const wchar_t *name, int repeats)
 	{
-		session_begin(host);
+		session_begin(host, 0);
 		for(int i = 0; i < repeats; i++)
 			session_phase(name, 1, i);
 		session_end();
@@ -307,4 +307,29 @@ TEST(diagnostics_ring, sessions_on_different_threads_do_not_share_a_slot)
 		else
 			CHECK_MSG(false, "a published session belonged to neither thread");
 	}
+}
+
+TEST(diagnostics_ring, the_hosts_own_tracking_flags_are_kept_verbatim)
+{
+	// Which half of complete_host_contract a host exercises turns entirely on
+	// TPM_RETURNCMD, and the hook rewrites uFlags before tracking - so the
+	// value the *host* passed exists in exactly one place, at session_begin.
+	// docs/refactor/01-takeover-contract.md section 3.
+	DiagnosticsRing::instance().clear();
+
+	session_begin(0x77, TPM_RETURNCMD | TPM_RIGHTBUTTON);
+	session_end();
+
+	MenuSessionRecord out[1];
+	DiagnosticsRing::instance().snapshot(out, 1);
+	CHECK_EQ(out[0].host_flags, uint32_t(TPM_RETURNCMD | TPM_RIGHTBUTTON));
+
+	// And a host that passes none is a real answer, not a missing one - it is
+	// the commonest case, and the one whose replay path had never run outside
+	// a test.
+	DiagnosticsRing::instance().clear();
+	session_begin(0x78, 0);
+	session_end();
+	DiagnosticsRing::instance().snapshot(out, 1);
+	CHECK_EQ(out[0].host_flags, 0u);
 }

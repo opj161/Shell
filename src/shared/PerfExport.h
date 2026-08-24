@@ -102,7 +102,12 @@ namespace Nilesoft
 			// Bumped whenever the layout changes. A reader refuses anything it
 			// does not recognise rather than guessing, because the alternative
 			// is printing a newer build's memory as if it were this one's.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 1;
+			//
+			// 2: `reserved` in PerfExportRecord became `host_flags`. Same size,
+			// which is exactly why the version had to move - record_size alone
+			// would not have caught it, and a version-1 host's zeroed reserved
+			// field would have read as "this host passes no TPM flags at all".
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 2;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -159,7 +164,13 @@ namespace Nilesoft
 				uint32_t provider_count;
 				uint32_t dropped_phases;
 				uint32_t dropped_providers;
-				uint32_t reserved;
+
+				// The TPM_* flags the host passed to its own tracking call,
+				// verbatim. Which half of complete_host_contract a host
+				// exercises turns entirely on TPM_RETURNCMD, and nothing could
+				// say which one a real third-party host takes.
+				// docs/refactor/01-takeover-contract.md section 3.
+				uint32_t host_flags;
 				PerfExportPhase phases[PERF_EXPORT_PHASES];
 				PerfExportProvider providers[PERF_EXPORT_PROVIDERS];
 			};
@@ -404,6 +415,55 @@ namespace Nilesoft
 					case 3: return L"deferred";
 					default: return L"ok";
 				}
+			}
+
+			/*
+				The TPM_* flags a host passed, as words.
+
+				Only the ones that change what Shell has to do on the way back
+				out. TPM_RETURNCMD first because it is the one that decides
+				which half of complete_host_contract runs; the alignment and
+				button flags are noise in a report about contracts.
+
+				Always writes something - "(none)" for a host that passed no
+				flags at all, which is a real answer and the commonest one.
+			*/
+			inline void perf_export_flag_names(uint32_t flags, wchar_t *out, size_t capacity)
+			{
+				if(!out || capacity == 0)
+					return;
+				out[0] = L'\0';
+
+				// The SDK's own constants, not the numbers. Written from memory
+				// first and two of them were wrong - TPM_RIGHTBUTTON is 0x0002,
+				// not 0x0004, so a report would have called a right-click menu
+				// centre-aligned. The header is included here anyway.
+				struct { uint32_t bit; const wchar_t *name; } known[] = {
+					{ TPM_RETURNCMD, L"RETURNCMD" },
+					{ TPM_NONOTIFY, L"NONOTIFY" },
+					{ TPM_RIGHTBUTTON, L"RIGHTBUTTON" },
+					{ TPM_VERTICAL, L"VERTICAL" },
+					{ TPM_RECURSE, L"RECURSE" },
+				};
+
+				size_t at = 0;
+				for(auto &k : known)
+				{
+					if((flags & k.bit) == 0)
+						continue;
+					if(at != 0 && at + 1 < capacity)
+						out[at++] = L'|';
+					for(size_t i = 0; k.name[i] && at + 1 < capacity; i++)
+						out[at++] = k.name[i];
+				}
+
+				if(at == 0)
+				{
+					const wchar_t none[] = L"(none)";
+					for(size_t i = 0; none[i] && at + 1 < capacity; i++)
+						out[at++] = none[i];
+				}
+				out[at] = L'\0';
 			}
 
 			inline uint32_t perf_export_architecture()

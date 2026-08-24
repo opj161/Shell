@@ -942,6 +942,26 @@ static int ReportPerf(bool detailed)
 		}
 		report.append_format(L"    decisions  %s\r\n", decisions.c_str());
 
+		// Which tracking flags this host actually passes, which is the question
+		// docs/refactor/01 section 3 could not answer for any host that did not
+		// come from this tree: TPM_RETURNCMD decides whether Shell hands back an
+		// identifier or notifies separately, and only one of those two paths had
+		// ever run outside a test.
+		string flag_sets;
+		for(size_t s = 0; s < written; s++)
+		{
+			wchar_t names[128]{};
+			perf_export_flag_names(records[s].host_flags, names, ARRAYSIZE(names));
+			// find() returns a pointer into the string, not an index.
+			if(flag_sets.find(names) == nullptr)
+			{
+				if(!flag_sets.empty())
+					flag_sets.append(L", ");
+				flag_sets.append(names);
+			}
+		}
+		report.append_format(L"    host flags %s\r\n", flag_sets.c_str());
+
 		auto emit_session = [&](size_t index, const wchar_t *label)
 		{
 			auto &record = records[index];

@@ -1087,7 +1087,10 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	// anywhere below this land in it; session_end() in the __finally publishes
 	// it into the process ring. Both are plain functions on plain data, which is
 	// what an SEH function can hold.
-	perf::session_begin(host_identity_hash());
+	// uFlags as the host passed them, before anything below rewrites them.
+	// Which half of complete_host_contract a host exercises turns on
+	// TPM_RETURNCMD, and this is the only place the original value exists.
+	perf::session_begin(host_identity_hash(), uFlags);
 
 	// SEH function: cannot hold an object that requires unwinding.
 	auto perf_pre_display = perf::menu_perf_begin();

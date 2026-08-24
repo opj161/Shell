@@ -1,4 +1,4 @@
-#include <pch.h>
+﻿#include <pch.h>
 #include "Include/Diagnostics/DiagnosticsRing.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include <PerfExport.h>
@@ -39,6 +39,7 @@ namespace Nilesoft
 				PerfExportRecord out{};
 				out.tick = record.tick;
 				out.host_hash = record.host_hash;
+				out.host_flags = record.host_flags;
 				out.total_microseconds = record.total_microseconds;
 				out.decision = static_cast<uint32_t>(record.decision);
 				out.dropped_phases = record.dropped_phases;
@@ -90,7 +91,7 @@ namespace Nilesoft
 				PerfExportWriter::instance().store(out);
 			}
 
-			void session_begin(uint32_t host_hash) noexcept
+			void session_begin(uint32_t host_hash, uint32_t host_flags) noexcept
 			{
 				if(t_session.depth++ > 0)
 					return;			// nested: fold into the session already open
@@ -98,6 +99,7 @@ namespace Nilesoft
 				t_session.record.reset();
 				t_session.record.tick = ::GetTickCount64();
 				t_session.record.host_hash = host_hash;
+				t_session.record.host_flags = host_flags;
 				::QueryPerformanceCounter(&t_session.started);
 			}
 

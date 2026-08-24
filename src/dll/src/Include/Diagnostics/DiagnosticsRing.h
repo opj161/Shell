@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 /*
 	Where a menu's time went, recorded whether or not anybody asked.
@@ -120,6 +120,17 @@ namespace Nilesoft
 			{
 				uint64_t tick{};			// GetTickCount64 at session start
 				uint32_t host_hash{};
+
+				// The uFlags the host passed to its own tracking call, verbatim,
+				// before Shell touched them.
+				//
+				// This is what says which half of complete_host_contract a host
+				// exercises. A host that sets TPM_RETURNCMD gets an identifier
+				// back; one that does not is told TRUE and notified separately,
+				// and until a real third-party host was measured there was no way
+				// to know which of those two paths had ever run outside a test.
+				// docs/refactor/01-takeover-contract.md section 3.
+				uint32_t host_flags{};
 				uint32_t total_microseconds{};
 				TakeoverDecision decision{ TakeoverDecision::Unknown };
 				uint8_t phase_count{};
@@ -265,7 +276,7 @@ namespace Nilesoft
 
 			SessionSlot &current_session() noexcept;
 
-			void session_begin(uint32_t host_hash) noexcept;
+			void session_begin(uint32_t host_hash, uint32_t host_flags) noexcept;
 			void session_phase(const wchar_t *name, uint32_t microseconds, int32_t count) noexcept;
 			void session_provider(uint32_t clsid_hash, uint32_t microseconds, ProviderResult result) noexcept;
 			void session_decision(TakeoverDecision decision) noexcept;
