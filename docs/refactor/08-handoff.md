@@ -277,10 +277,20 @@ found one item it had lost entirely and one prerequisite it had assigned to the
 wrong piece of work. Both corrections are below, in place.
 
 The tally against `00-master-plan.md` §3, after the 2026-08-25 session:
-**seventeen items closed** — built, or measured and declined with the numbers
-written down — **one partial** (item 9, conditional attach, deferred with
-reasons in §01.9a), **two open**: seam steps 6–7 (item 17) and what they gate
-(item 19).
+**sixteen items closed** — built, or measured and declined with the numbers
+written down — **three partial**, **one open**.
+
+| | Items |
+|---|---|
+| closed | 1–8, 10–16, 18 |
+| partial | 9 (conditional attach deferred, §01.9a) · 17 (seam step 5 landed, 6–7 open) · 20 (icon cache and lazy selection declined by measurement; **per-session memoization untouched and never measured**) |
+| open | 19 (favorites, inspector — gated on 17) |
+
+That tally was itself wrong for a few hours on 2026-08-25 — it said seventeen
+closed, counting item 20 whose middle third nobody has looked at, and counting
+item 17 as wholly open after step 5 had landed. Rule 6 in §1 exists for exactly
+this and was written in the same session that then broke it; the fix is that a
+tally now names the item numbers rather than stating a count.
 
 **What is left is now genuinely one thing and its consequence.** Everything
 else in this section is recorded as landed or declined.

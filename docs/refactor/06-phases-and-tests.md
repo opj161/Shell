@@ -115,6 +115,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | **Selection array reuse (§02.3a)** — a menu over 200 selected files cost 645 ms, of which 616 ms was `ensure_selection_array` rebuilding an array one `SHParseDisplayName` at a time. 645 ms → 30 ms | 1 |
 | ✅ | Provider health keyed by selection shape (§02.2a-iii) — §02.2a specified `(clsid, selection_shape)` and the implementation dropped the shape | 1 |
 | ✅ | Lazy large-selection (§04.7) — **measured and declined** on its own gate | 4 |
+| ⬜ | Per-session memoization (§04.7) — the remaining third of item 20. Never built and, unlike its two siblings, never measured either, so it is open rather than declined | 4 |
 
 ### The 2026-08-24 backlog audit
 
@@ -125,12 +126,12 @@ backlog it tracks. Reconciled item by item against `00-master-plan.md` §3:
 memoization and lazy selection), **three open** (items 8, 17, 19).
 
 Item 8 was closed the same day (§01.9c). By the end of 2026-08-25 the tally is
-**seventeen closed, one partial** (item 9's conditional attach, deferred with
-reasons), **two open** — seam steps 6–7 (item 17) and what they gate (item 19).
+**sixteen closed** (items 1–8, 10–16, 18), **three partial** (9, 17, 20) and
+**one open** (19). `08-handoff.md` §3.6 names what is partial about each.
 
-Item 20 closed by measurement rather than by building: the icon cache was
-declined in §04.7, and the lazy large-selection item was declined on 2026-08-25
-against its own stated gate — `selection.preparing` 0.0 ms, metadata 1.3 ms for
+Item 20 is two-thirds closed by measurement rather than by building: the icon
+cache was declined in §04.7, and the lazy large-selection item was declined on
+2026-08-25 against its own stated gate — `selection.preparing` 0.0 ms, metadata 1.3 ms for
 200 items. Taking that measurement found §02.3a, a 645 ms menu of which 616 ms
 was Shell rebuilding an `IShellItemArray` the view had already built.
 
