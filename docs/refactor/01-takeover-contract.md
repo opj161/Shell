@@ -331,6 +331,51 @@ combos are evaluated by `Initializer::OnState` inside this very hook body
 `Ctrl+Alt+right-click`; `OnState` combos keep precedence, and a harness case asserts
 bypass and reload gestures can never both fire from one click.
 
+### 7a. As implemented (2026-08-24) — the non-interference proof needed a different shape
+
+Both landed: `Include/TakeoverGesture.h` and `Include/TakeoverBreaker.h`.
+
+QA-04 asks for a *proof* that bypass and reload can never both fire from one
+click, and it was scheduled as a harness case. That could not have proved it.
+The two gestures were to be evaluated from two independent reads of the live
+keyboard, microseconds apart in the same hook body, and no test can establish a
+property about two separate reads of global state — a passing harness run would
+only have shown the user did not release a key that particular time.
+
+So the rules became a pure function of one snapshot. `OnState`'s condition nest
+moved into `classify_gesture(GestureState)`, `OnState` acts on the result, and
+the hook classifies **once** and passes the same value to both. Non-interference
+is then structural — a function returns one value — and
+`test_takeover_gesture.cpp` walks every reachable combination of the four
+modifiers at every plausible held-count to assert it. Harness probe 4 is
+therefore satisfied without a deployed build, which is the better outcome: it is
+now a property of the code rather than an observation about one run.
+
+The bypass itself is four lines at the top of the hook, and reuses machinery
+that was already there: `__leave` hands control to the `__finally`, whose
+fail-open call tracks the host's own menu with the host's own flags — which is
+exactly what a bypass is. The `__finally` no longer overwrites the recorded
+decision, so `BypassOnce` and `Degraded` survive into the ring instead of every
+non-takeover being reported as `FailOpen`.
+
+The breaker counts a failure only when the click got as far as *trying* to build
+Shell's menu. An unregistered process, a disabled shell, a bypass gesture and an
+already-open breaker all reach the same fallback deliberately, and counting
+those would open the breaker on a machine where nothing is wrong.
+
+One implementation trap, and it is the one `AGENTS.md` already names: the first
+version logged the breaker opening directly in the `__finally`, and
+`Logger::write` is a variadic template whose `string::Argument` temporaries
+require unwinding — C2712, in a function that has to stay plain-old-data. The
+log call lives in its own function now, the same shape as
+`menu_perf_begin`/`menu_perf_end`.
+
+Not verified here: any of it inside a real host. What is verified is the
+decision table, the state machine, and that both survive their defects being
+re-introduced — a cumulative rather than consecutive count, a `store` instead of
+the `exchange` that tells exactly one thread it opened the breaker, and a bypass
+combination that collides with reload.
+
 ## 8. `HostProfile` compatibility profiles (small, data-driven)
 
 ```cpp

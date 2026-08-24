@@ -115,6 +115,8 @@
     <ClCompile Include="test_native_menu_lazy.cpp" />
     <ClCompile Include="test_explorer_command.cpp" />
     <ClCompile Include="test_packages.cpp" />
+    <ClCompile Include="test_takeover_breaker.cpp" />
+    <ClCompile Include="test_takeover_gesture.cpp" />
     <ClCompile Include="test_taskbar_cache.cpp" />
     <ClCompile Include="test_menutext.cpp" />
     <ClCompile Include="test_registry.cpp" />

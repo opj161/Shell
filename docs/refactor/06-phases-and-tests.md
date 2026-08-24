@@ -85,7 +85,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Packaged verbs no longer leak a GDI bitmap per right-click (§02.2a-ii) | 1 |
 | ✅ | `shell.exe -check` (§03.1b step 4) — parses, reports, publishes nothing; a missing file no longer reports ok | 3 |
 | ✅ | Taskbar (§02.5) — one cached UIA round trip instead of four, and the bounded wait is now counted. The rectangle model was measured and declined | 3 |
-| ⬜ | Circuit breaker, bypass gesture | 3 |
+| ✅ | Circuit breaker and one-shot bypass gesture (§01.7, §05.2) — one gesture classifier, so reload and bypass cannot both fire | 3 |
 
 ### What the harness settled (2026-08-24)
 
@@ -270,9 +270,14 @@ Dedicated probes added from QA validation:
    really tracked (LegacyEager descendants, §01.5 divergence note); must be non-fatal
    for representative handlers. Needs a Shell-side scenario, not a native one, so it
    lands with the takeover half of the harness.
-4. ⬜ **Gesture non-interference** — bypass (`Ctrl+Alt+RClick`) and config-reload
-   (`Shift+Ctrl+RClick`) can never both fire from one click (QA-04). Also
-   Shell-side; lands with the bypass gesture in Phase 3.
+4. ✅ **Gesture non-interference** — bypass (`Ctrl+Alt+RClick`) and config-reload
+   (`Shift+Ctrl+RClick`) can never both fire from one click (QA-04). **Answered
+   without the harness, and better.** A harness run could only have shown that
+   two independent keyboard reads happened to agree once; the rules are now a
+   pure function of one snapshot (`Include/TakeoverGesture.h`), the hook
+   classifies once and passes the result to both consumers, and
+   `test_takeover_gesture.cpp` enumerates the whole reachable table. See
+   §01.7a.
 5. ✅ **Replay delivery ordering** (QA-03) — answered the other way round.
    `select.plain.classic` and `question.notifybypos_reports_a_position` show
    Windows **posts** `WM_COMMAND`/`WM_MENUCOMMAND` after `WM_EXITMENULOOP` and

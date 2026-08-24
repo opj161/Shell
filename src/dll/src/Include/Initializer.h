@@ -1,6 +1,7 @@
 #pragma once
 #include "Include/ConfigLifecycle.h"
 #include "Include/Theme.h"
+#include "Include/TakeoverGesture.h"
 #include <ConfigCheck.h>
 #include <mutex>
 #include <memory>
@@ -139,7 +140,25 @@ namespace Nilesoft
 				return Status.Loaded.load(std::memory_order_relaxed);
 			}
 
+			// Reads the keyboard, classifies, and acts.
 			static bool OnState(bool istaskbar = false);
+
+			// The same, on a gesture somebody else has already classified. The
+			// popup hook uses this so its own bypass check and this cannot
+			// disagree about which keys were down.
+			// See Include/TakeoverGesture.h.
+			static bool OnState(Gesture gesture);
+
+			// One snapshot of the keyboard, with the buttons that caused the
+			// click discounted.
+			static GestureState read_gesture(bool istaskbar);
+
+			// read_gesture + classify_gesture: what this click means, decided
+			// once so that every consumer of it agrees.
+			static Gesture classify_click(bool istaskbar)
+			{
+				return classify_gesture(read_gesture(istaskbar));
+			}
 			static bool is_excluded(HWND hWnd = nullptr);
 			static bool check_excluded();
 

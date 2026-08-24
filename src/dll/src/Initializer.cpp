@@ -1005,17 +1005,18 @@ namespace Nilesoft
 		// enabled/reload
 		// disabled
 		// mix
-		bool Initializer::OnState(bool istaskbar)
+		/*
+			Read the keyboard once, into plain data.
+
+			The count the classifier wants is "keys the user is deliberately
+			holding", so the buttons that caused this click come off first: the
+			right button itself, and the Shift+F10 pair when the click arrived
+			as the context-menu key rather than as a mouse click.
+		*/
+		GestureState Initializer::read_gesture(bool istaskbar)
 		{
-			bool reloaded = false;
-
-			int changed = 0;
-
 			Keyboard kb;
-			auto count = kb.get_keys_state();
-
-			if(istaskbar && kb.is_lbutton())
-				return false;
+			int count = kb.get_keys_state();
 
 			if(kb.is_rbutton())
 				count--;
@@ -1023,48 +1024,62 @@ namespace Nilesoft
 			if(kb.is_contextmenu())
 				count -= 2;
 
-			if(count == 0 || count > 2)
-				return changed;
+			GestureState state;
+			state.held = count;
+			state.ctrl = kb.key_ctrl();
+			state.shift = kb.key_shift();
+			state.win = kb.key_win();
+			state.alt = kb.key_alt();
+			state.lbutton = kb.is_lbutton();
+			state.f5 = kb.key(VK_F5);
+			state.taskbar_lbutton = istaskbar && kb.is_lbutton();
+			return state;
+		}
 
-			auto kwin = kb.key_win();
-			auto kctrl = kb.key_ctrl();
-			auto kshift = kb.key_shift();
+		bool Initializer::OnState(bool istaskbar)
+		{
+			return OnState(classify_click(istaskbar));
+		}
 
-			//int key = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+		/*
+			Act on an already-classified gesture.
 
-			if(count == 1)
+			The hook classifies once and passes the result to both this and its
+			own bypass check, so the two cannot disagree about what the user
+			pressed - which they could when each read the keyboard for itself.
+			See Include/TakeoverGesture.h.
+		*/
+		bool Initializer::OnState(Gesture gesture)
+		{
+			bool reloaded = false;
+
+			int changed = 0;
+
+			switch(gesture)
 			{
-				if(kctrl || kb.is_lbutton() || kb.key(VK_F5)) // reload/enabled shell
-				{
-					//Modern(1);
+				case Gesture::ReloadConfig:
 					Status.Disabled = false;
 					Status.Refresh = true;
 					changed = 1;
-				}
-				else if(kwin) // modern + shell
-				{
-					//if(Status.Unload)
-					//	Status.Unload = false;
-					//Modern(0);
+					break;
+
+				case Gesture::PreferModern:
 					Status.Refresh = false;
 					changed = 1;
-				}
-			}
-			else if(count == 2)
-			{
-				if(kctrl && kwin) // disabled shell/modern
-				{
-					//Modern(2);
+					break;
+
+				case Gesture::DisableShell:
 					Status.Disabled = true;
 					Status.Refresh = false;
 					changed = 1;
-				}
-				else if(kshift && kctrl) // reload/enabled shell
-				{
-					Status.Disabled = false;
-					Status.Refresh = true;
-					changed = 2;
-				}
+					break;
+
+				// Handled by the caller, before any Shell work runs. It
+				// deliberately changes no configuration state - the whole point
+				// is that this one click leaves everything as it was.
+				case Gesture::BypassOnce:
+				case Gesture::None:
+					break;
 			}
 
 			if(changed > 0)

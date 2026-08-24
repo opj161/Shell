@@ -9,6 +9,7 @@
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/TaskbarHitCache.h"
 #include "Include/TaskbarHitStats.h"
+#include "Include/TakeoverBreaker.h"
 #include "Include/TaskbarOrigin.h"
 #include "Library/detours.h"
 #include "RegistryConfig.h"
@@ -633,6 +634,36 @@ private:
 	bool _answer{};
 };
 
+/*
+	The takeover circuit breaker, one per process.
+
+	Process lifetime and no destructor, like every other service here: the
+	module is pinned for the life of the host, and a static whose destructor
+	could run while a menu thread is still recording would be a crash waiting
+	for an unlucky shutdown.
+*/
+inline Nilesoft::Shell::TakeoverBreaker &takeover_breaker()
+{
+	static auto *breaker = new Nilesoft::Shell::TakeoverBreaker();
+	return *breaker;
+}
+
+/*
+	Says, once, that the breaker has opened.
+
+	Its own function rather than a line in the hook's __finally, for the reason
+	AGENTS.md records: Logger::write is a variadic template whose
+	string::Argument temporaries require unwinding, and MSVC refuses (C2712) to
+	compile a function that mixes those with __try/__finally. Keeping the
+	temporaries in this frame keeps the hook a plain-old-data function - the
+	same shape as menu_perf_begin/menu_perf_end.
+*/
+void log_breaker_opened() noexcept
+{
+	_log.write(L"takeover failed %u times in a row; this process will use the host's own menus from now on\n",
+			   Nilesoft::Shell::TakeoverBreaker::THRESHOLD);
+}
+
 LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
 LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -980,6 +1011,12 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	auto result = FALSE;
 	auto invoked = false;
 
+	// Whether this click got as far as trying to build Shell's menu. Only then
+	// is a fail-open a *failure* rather than a decision - an unregistered
+	// process, a disabled shell, a bypass gesture and an open breaker all reach
+	// the fallback deliberately and must not count against the host.
+	auto attempted_takeover = false;
+
 	// One diagnostics session per intercepted popup, always on. Phases recorded
 	// anywhere below this land in it; session_end() in the __finally publishes
 	// it into the process ring. Both are plain functions on plain data, which is
@@ -1037,8 +1074,39 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 			//cs.lock();
 			auto has_inited = 0;
 			auto perf_onstate = perf::menu_perf_begin();
-			Initializer::OnState(Nilesoft::Shell::in_taskbar());
+
+			// Classified once, from one read of the keyboard, and used by both
+			// OnState and the bypass check below. Two reads could disagree -
+			// the user is releasing keys while this runs - and the plan (QA-04)
+			// requires that reload and bypass can never both fire from one
+			// click. One classification of one snapshot is what makes that
+			// true by construction. Include/TakeoverGesture.h.
+			auto gesture = Initializer::classify_click(Nilesoft::Shell::in_taskbar());
+			Initializer::OnState(gesture);
 			perf::menu_perf_end(perf_onstate, L"popup.initializer_onstate");
+
+			// "Windows menu, this time." Before any Shell work at all: no
+			// context, no selection, no composition. __leave hands control to
+			// the __finally, whose fail-open call tracks the host's own menu
+			// with the host's own flags - which is exactly what a bypass is.
+			// docs/refactor/01-takeover-contract.md section 7,
+			// docs/refactor/05-capabilities.md section 2.
+			if(gesture == Gesture::BypassOnce)
+			{
+				perf::session_decision(perf::TakeoverDecision::BypassOnce);
+				__leave;
+			}
+
+			// The host has refused takeover often enough in a row that trying
+			// again just costs the user latency on every click. Hand it the
+			// menu it would have got anyway, without the attempt.
+			// docs/refactor/01-takeover-contract.md section 7.
+			if(!takeover_breaker().should_attempt())
+			{
+				takeover_breaker().record_skipped();
+				perf::session_decision(perf::TakeoverDecision::Degraded);
+				__leave;
+			}
 
 			if(!_initializer.Status.Disabled)
 			{
@@ -1049,6 +1117,12 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 						__leave; //goto skip;
 					_initializer.init();
 				}
+
+				// From here on a failure to show Shell's menu is a takeover
+				// failure rather than a decision not to try, and the breaker
+				// counts it. Set before the call, so an exception inside it
+				// counts too.
+				attempted_takeover = true;
 
 				auto perf_ctx = perf::menu_perf_begin();
 				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, ShellExtCapture::has(hMenu));
@@ -1154,6 +1228,10 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					perf::menu_perf_end(perf_pre_display, L"popup.total_pre_display");
 					perf::session_decision(perf::TakeoverDecision::TakeOver);
 
+					// A menu Shell composed and is about to track. Whatever the
+					// run of failures before it, this host works.
+					takeover_breaker().record_success();
+
 					invoke(ctx->MenuHandle(), flag, { x, y });
 
 					// v = 0;
@@ -1205,7 +1283,19 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		// recorded rather than merely relied upon.
 		// docs/refactor/01-takeover-contract.md section 2.
 		if(!invoked)
-			perf::session_decision(perf::TakeoverDecision::FailOpen);
+		{
+			// A bypass and an open breaker have already recorded what they
+			// were; overwriting them with FailOpen would erase the only
+			// evidence of why this menu was the host's own.
+			if(perf::current_session().record.decision == perf::TakeoverDecision::Unknown)
+				perf::session_decision(perf::TakeoverDecision::FailOpen);
+
+			// Said once, by whichever thread crossed the threshold, rather than
+			// on every menu from here on.
+			// docs/refactor/01-takeover-contract.md section 7.
+			if(attempted_takeover && takeover_breaker().record_failure())
+				log_breaker_opened();
+		}
 
 		invoke(hMenu, uFlags, { x, y });
 		// The flag used to be cleared here, which was the only place it was
