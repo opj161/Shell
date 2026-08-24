@@ -119,6 +119,66 @@ to block all three on that harness; that was true of 6 and 7 and never of 5.
 The ordering that follows is: **5 first**, because it is provable here and it
 shrinks what 6 has to move; then the rendering coverage; then 6; then 7.
 
+### 4b. Step 5 as implemented (2026-08-24) — and the defect it turned out to fix
+
+Landed in two commits, per this section's own rule.
+
+**The move.** `QuerySelected` was one ~300-line function doing two unrelated
+things. It is now a dispatcher over two named providers:
+`QuerySelectedFromShellBrowser` (walk up from the popup's window for an
+`IShellBrowser`, ask it for the active view, read the selection off it) and the
+existing `QuerySelectedFromHandler` (read the selection the host handed Shell
+through `IShellExtInit`). The 271 moved lines were verified **byte-identical**
+to their originals rather than reviewed by eye — the extraction was done by line
+range, so nothing was retyped.
+
+**The defect the seam exposed.** Splitting them made visible something hidden
+inside the long function: **`Window.has_IShellBrowser` reads like a fact and is
+a hypothesis.** Nothing queries an `IShellBrowser` to set it;
+`QueryShellWindow` sets it from the popup window's *class hash* —
+`SHELLDLL_DefView`, `SysListView32`, `ShellTabWindowClass`, `SysTreeView32`.
+Those are Explorer's classes, and they are equally the classes of every
+third-party file manager that embeds the real shell view instead of writing its
+own.
+
+For such a host the hypothesis fails in the worst direction: the window is
+classified as Explorer's, so the browser provider is asked, so the handler is
+never asked — and the host had *already handed Shell the selection*. The menu is
+composed against nothing. That is the same defect the provider's own comment
+describes ("third-party file managers only ever got theming"), fixed for hosts
+whose window class does not look like Explorer's and left in place for hosts
+whose class does.
+
+**The rule, and why it is deliberately narrow.** `Include/SelectionRoute.h`
+holds the policy, pure and tested. The handler answers after the browser
+provider only when **no `IShellBrowser` was found at all** — the one failure that
+provably happened before anything was read. Every later failure happens after
+`Parse` may have run, and `Parse` appends to `Items` and sets the FSO type
+counters; the handler appends too, so falling through there would merge two
+selections or count an item twice. "The browser answered and selected nothing"
+is a real answer as often as it is a failure, and is not second-guessed.
+
+`test_selection_route.cpp` pins both rules and, separately, that they stay
+*asymmetric* — the tidier symmetric version of either is wrong, and neither
+mistake fails anything else in the tree.
+
+**Verified.** Three platforms green, 32,547 checks, harness 23 native and 27
+through takeover — the four `takeover.*` scenarios exercise the capture provider
+against a real borrowed shell menu. In a real Explorer the composed desktop menu
+is unchanged.
+
+**Not verified, and it is the whole point of the change:** a third-party host
+that embeds the shell view. That needs one of the hosts §3.1 of the handoff
+describes, with a lister open. The code path is covered; which shipping software
+takes it is still a survey question.
+
+That last check nearly produced a false alarm, and the lesson is now in
+`AGENTS.md`: the reading taken four seconds after the deploy's Explorer restart
+showed 29 items including two Directory Opus entries and the *native* `New`
+where the settled menu has Shell's `New+`. Steady-state readings are 27, against
+a 28-item baseline differing by one transient OneDrive item. A menu read during
+Explorer's startup measures Explorer settling, not the change.
+
 ## 5. Selection layering detail
 
 Capture-first rule concretely: `ShellExtMatch` result (exact HMENU-bound capture)

@@ -1,6 +1,7 @@
 #include "Include/ShellExt.h"
 #include <pch.h>
 #include "Include/Diagnostics/MenuPerf.h"
+#include "Include/SelectionRoute.h"
 
 //Enable Narrow Classic Context Menu on Windows 10
 // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\FlightedFeatures\ImmersiveContextMenu:0
@@ -1296,7 +1297,9 @@ namespace Nilesoft
 				if(Window.handle == nullptr)
 					return false;
 
-				// Which provider is asked, and why in this order.
+				// Which provider is asked, and when the other one may answer.
+				// The rules and the reasoning are in Include/SelectionRoute.h;
+				// this function is only the wiring.
 				//
 				// No IShellBrowser used to end the query here, and that is exactly why
 				// third-party file managers only ever got theming: they implement
@@ -1305,16 +1308,36 @@ namespace Nilesoft
 				// already handed us the selection through IShellExtInit, so ask for
 				// that before giving up.
 				//
-				// The gate is on the window classification rather than on the capture
-				// so Explorer is not touched. Explorer always has an IShellBrowser and
-				// never reaches the handler, which keeps its richer handling - the
-				// DropTarget and Home/Quick access/Libraries cases - exactly as it
+				// The first gate is on the window classification rather than on the
+				// capture so Explorer is not touched: it always has an IShellBrowser,
+				// so it never reaches the handler, and its richer handling - the
+				// DropTarget and Home/Quick access/Libraries cases - is exactly as it
 				// was. Taking the handler's selection first would have quietly
 				// bypassed all of it.
-				if(!Window.has_IShellBrowser)
+				if(SelectionRoute::Provider::Handler
+				   == SelectionRoute::first(Window.has_IShellBrowser))
 					return QuerySelectedFromHandler();
 
-				return QuerySelectedFromShellBrowser();
+				if(QuerySelectedFromShellBrowser())
+					return true;
+
+				// The window's class said Explorer and no IShellBrowser answered.
+				// `has_IShellBrowser` is set from the class hash alone, so it is a
+				// hypothesis - and it is wrong for exactly the hosts this branch was
+				// written for: a file manager that embeds the real shell view has
+				// Explorer's window classes and its own idea of what is selected.
+				//
+				// Nothing has been read at this point, which is what makes it safe to
+				// ask the handler here and nowhere later: every other way this
+				// provider fails happens after it may have called Parse, and Parse
+				// appends to Items and sets the type counters. `ShellBrowser` is the
+				// discriminator because the lookup is the only thing that sets it, and
+				// an exception would have gone to the catch below rather than here.
+				if(SelectionRoute::Provider::Handler
+				   == SelectionRoute::next_after_browser(ShellBrowser != nullptr))
+					return QuerySelectedFromHandler();
+
+				return false;
 			}
 			catch(...)
 			{

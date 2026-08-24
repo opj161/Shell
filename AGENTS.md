@@ -187,10 +187,11 @@ libraries the owning project lists, not a minimal guess — `src\dll\src` for
 needs `Resource.h` and `Globals.h` ahead of it, for `APP_NAME` and the CLSID
 literals, and `shlwapi.lib` for `Environment::Expand`.
 
-## Two ways an experiment can test something other than what you think
+## Three ways an experiment can test something other than what you think
 
-Both of these cost a full session before they were found, and both produce a
-result that looks like a finding about Windows.
+Each of these cost real time before it was found, and each produces a result
+that looks like a finding about Windows — or, worse, like a regression in a
+change you just made.
 
 **A registry value set from an agent's shell is not visible to `explorer.exe`.**
 Measured 2026-08-24: a key created here took `HKCU\SOFTWARE`'s subkey count to
@@ -226,6 +227,24 @@ checks that the Explorer which came back started *after* the copy. Do not
 reorder it. And do not read the installed file's creation time to decide: NTFS
 file tunneling puts back the old one when a file reappears at a path it just
 left, which rotate-then-copy does — the script stamps it explicitly.
+
+**A context menu read seconds after an Explorer restart measures Explorer
+settling, not your change.** Measured 2026-08-24 while checking a selection-path
+change: the desktop menu read 28 items before deploying, **29 immediately after
+the restart**, and 27 on every read from a few seconds later onwards. The
+29-item read contained two Directory Opus items and, decisively, the *native*
+`New` where the settled menu has Shell's own `New+` — so it was taken while
+Shell's rules had not been applied and the third-party handler set had not
+settled. Read that way, a no-op change looks like it rewrote the menu.
+
+Two things make this safe to work with. Wait for the reading to repeat
+identically — the extension set stabilises within a few seconds, and on this
+machine one OneDrive item ("Move to OneDrive") still comes and goes between
+otherwise identical menus, so a one-item diff is noise rather than signal. And
+check that Shell composed the menu at all before comparing anything: the
+presence of config-driven items (`New+`, `Terminal`, `File manage`, `Go To` in
+the stock configuration) is the cheap proof, because their absence means you are
+diffing Windows' own menu against Shell's.
 
 Then encode the invariant in `src/tests`. The suites are dependency-free and
 self-registering; see `src/tests/test.h`. Prefer testing a real invariant over a
