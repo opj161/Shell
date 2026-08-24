@@ -131,6 +131,7 @@
     <ClCompile Include="test_window_text.cpp" />
     <ClCompile Include="test_dll_load.cpp" />
 	<ClCompile Include="test_legacy_config_transfer.cpp" />
+    <ClCompile Include="test_type_ahead.cpp" />
     <ClCompile Include="test_treatas_plan.cpp" />
     <ClCompile Include="test_oneshot_marshal.cpp" />
     <ClCompile Include="test_loadstring.cpp" />

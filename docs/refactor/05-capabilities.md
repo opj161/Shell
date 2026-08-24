@@ -205,11 +205,41 @@ Two decisions worth stating because they are not forced by the documentation:
   underline, but choosing it would do nothing, so an enabled duplicate below it
   gets the key instead of the press appearing to be ignored.
 
-Stage 2 (prefix type-ahead) is unchanged and still open.
 Stage 2 — prefix type-ahead: buffer chars for 1 s; select first visible match
 (composed items + materialized natives); no lazy-tree violation: unmatched-deep search
 stays out; optional "Search deeper…" item defers to a later phase (A2§20 caution).
 Scope S each; large-menus usability multiplier.
+
+**Stage 2 landed (2026-08-24)** as `Include/TypeAhead.h`, on the `WM_MENUCHAR`
+path Stage 1 opened. It is the half that matters for a real menu: Stage 1 made
+"E&dit with Adobe Acrobat" reachable by pressing D, which covers the items whose
+titles happen to declare a mnemonic, and in a menu built from packaged verbs and
+NSS rules most declare none.
+
+Three decisions, none forced by documentation, each pinned by a test that fails
+if it is reversed:
+
+- **A prefix selects; it does not execute.** A unique *mnemonic* executes,
+  because that is Windows' own rule and what makes a mnemonic a shortcut. A
+  unique prefix must not: menus contain Delete, and somebody typing "de" looking
+  for "Deselect" would have executed it before they saw it. Type-ahead moves the
+  highlight; Enter chooses.
+- **Mnemonics keep precedence on the first character.** A single keypress is
+  tried as a mnemonic first and falls through to a prefix only when no mnemonic
+  matched, so nothing Stage 1 shipped changes behaviour.
+- **A character that matches nothing is not added to the buffer.** Otherwise one
+  typo poisons the word for a whole second and every keystroke after it matches
+  nothing either. Rejecting it leaves the last good prefix in place.
+
+Two smaller things the sketch did not mention. The prefix is matched against the
+title as stored rather than against a label built from it — mnemonic markers and
+the accelerator column are skipped as the comparison walks — so a keystroke
+allocates nothing. And the buffer clears when the *popup* changes as well as on
+its timeout: a submenu is a new list, and carrying "de" into it would select
+something the user never typed towards.
+
+The lazy-tree rule is respected for free: the candidates are the items in the
+`HMENU` that is open, which is what has already been materialised.
 
 ## 5. Smart multi-column overflow
 
@@ -254,7 +284,7 @@ A2§28, master plan §2.
 | Reliability Center | diagnose/slow-quarantine extensions | M-L | §02.6, §01.9 |
 | Bypass gesture | instant native escape hatch | S | none |
 | MSAA exposure | screen-reader usable menus | S-M | none |
-| Mnemonics/type-ahead | keyboard-complete menus | S | none |
+| Mnemonics/type-ahead | keyboard-complete menus | S | none — **both stages landed** |
 | Smart columns | giant menus stay usable | S | none |
 | Favorites/recents | personal muscle-memory layer | M | MenuModel |
 | Inspector | explainable configuration | M | seams + parser provenance |

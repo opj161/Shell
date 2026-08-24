@@ -4,6 +4,7 @@
 #include "Include/stb_image_write.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/Mnemonics.h"
+#include "Include/TypeAhead.h"
 #include "RegistryConfig.h"
 
 using namespace Nilesoft::Diagnostics;
@@ -1649,7 +1650,9 @@ namespace Nilesoft
 				return MnemonicReply{}.to_lresult();
 
 			std::vector<MnemonicItem> candidates;
+			std::vector<TypeAheadItem> labelled;
 			candidates.reserve(static_cast<size_t>(count));
+			labelled.reserve(static_cast<size_t>(count));
 			int current = -1;
 
 			for(int i = 0; i < count; i++)
@@ -1672,18 +1675,55 @@ namespace Nilesoft
 				if(!owns_item(item))
 					continue;
 
+				// A disabled item is still drawn and still has a title, but
+				// choosing it would do nothing - so it is skipped rather than
+				// swallowing a keystroke a later item could have used.
+				auto selectable = (mii.fState & (MFS_DISABLED | MFS_GRAYED)) == 0;
+				auto title = item->title.text.c_str();
+
 				MnemonicItem candidate;
 				candidate.position = i;
-				candidate.mnemonic = mnemonic_of(item->title.text.c_str());
-				// A disabled item is still drawn and still has a mnemonic, but
-				// choosing it would do nothing - so it is skipped rather than
-				// swallowing a keystroke a later duplicate could have used.
-				candidate.selectable = (mii.fState & (MFS_DISABLED | MFS_GRAYED)) == 0;
+				candidate.mnemonic = mnemonic_of(title);
+				candidate.selectable = selectable;
 				if(candidate.mnemonic)
 					candidates.push_back(candidate);
+
+				// Every item with a title is a type-ahead candidate, whether or
+				// not it declares a mnemonic - which is the point of Stage 2.
+				if(title && *title)
+					labelled.push_back(TypeAheadItem{ i, title, selectable });
 			}
 
-			auto reply = choose_mnemonic(pressed, candidates.data(), candidates.size(), current);
+			// Anything typed longer ago than the timeout, or into a different
+			// popup, is not part of what is being typed now.
+			// docs/refactor/05-capabilities.md section 4.
+			_typed.refresh(::GetTickCount64(), hMenu);
+
+			// Mnemonics keep precedence on the first character, so nothing
+			// Stage 1 shipped changes behaviour. Only a keypress that names no
+			// mnemonic falls through to a prefix.
+			if(_typed.empty())
+			{
+				auto reply = choose_mnemonic(pressed, candidates.data(), candidates.size(), current);
+				if(reply.action != MNC_IGNORE)
+					return reply.to_lresult();
+			}
+
+			wchar_t prefix[TypeAheadBuffer::CAPACITY + 2]{};
+			size_t prefix_length = 0;
+			if(!_typed.would_be(pressed, prefix, ARRAYSIZE(prefix), prefix_length))
+				return MnemonicReply{}.to_lresult();
+
+			auto reply = choose_by_prefix(prefix, prefix_length, labelled.data(), labelled.size());
+			if(reply.action == MNC_IGNORE)
+			{
+				// The longer prefix names nothing. Leave the buffer on the last
+				// one that did, so a typo costs one keystroke rather than the
+				// whole word.
+				return reply.to_lresult();
+			}
+
+			_typed.accept(prefix, prefix_length, ::GetTickCount64(), hMenu);
 			return reply.to_lresult();
 		}
 

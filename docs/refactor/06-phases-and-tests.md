@@ -82,6 +82,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | TPM normalization — `TPM_RETURNCMD` always added, native replay posted, synthetic identifiers no longer reach the host | 2.3 |
 | ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B | 2 |
 | ✅ | Mnemonics (§05.4 Stage 1) — `WM_MENUCHAR` was unanswered, so a typed letter beeped | 5 |
+| ✅ | Type-ahead (§05.4 Stage 2) — typing a name selects it; mnemonics keep precedence on the first character | 5 |
 | ✅ | Packaged verbs no longer leak a GDI bitmap per right-click (§02.2a-ii) | 1 |
 | ✅ | `shell.exe -check` (§03.1b step 4) — parses, reports, publishes nothing; a missing file no longer reports ok | 3 |
 | ✅ | Taskbar (§02.5) — one cached UIA round trip instead of four, and the bounded wait is now counted. The rectangle model was measured and declined | 3 |

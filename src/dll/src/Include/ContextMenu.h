@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Include/TypeAhead.h"
+
 //constexpr auto WC_MENU_Layer = L"Nilesoft.Shell.Window.Layers";
 //constexpr auto WC_MENU_Layers = L"Nilesoft.Shell.Window.Border";
 //constexpr auto WC_MENU_Layers = L"Nilesoft.Shell.Window.Shadow";
@@ -776,9 +778,15 @@ plutovg_move_to(pluto, start.x, start.y);
 			LRESULT OnMenuSelect(HMENU hMenu, uint32_t id, uint32_t flags);
 
 			// A character typed while a popup is open. Owner-drawn items give
-			// Windows nothing to match, so this is the only route a mnemonic has.
-			// See Include/Mnemonics.h.
+			// Windows nothing to match, so this is the only route a mnemonic has
+			// - and, past the first character, the only route type-ahead has.
+			// See Include/Mnemonics.h and Include/TypeAhead.h.
 			LRESULT OnMenuChar(HMENU hMenu, wchar_t pressed);
+
+			// What has been typed into the popup that is open now. Cleared by
+			// its own timeout and by the popup changing.
+			// docs/refactor/05-capabilities.md section 4.
+			TypeAheadBuffer _typed;
 			bool owns_item(const MenuItemInfo *item) const;
 			LRESULT OnDrawItem(DRAWITEMSTRUCT *di);
 			LRESULT OnMeasureItem(MEASUREITEMSTRUCT *mi);
