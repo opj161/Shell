@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Deploys a locally built Nilesoft Shell over the installed one.
 
@@ -21,6 +21,12 @@
     with a sharing violation, after Explorer had already been stopped and Shell
     unregistered. Nothing here silences a failure, and Explorer is restarted
     from a finally block whatever happens.
+
+    Explorer is restarted *after* the binaries are in place, not before. Windows
+    brings the shell back about a second after it is killed, so stopping it
+    first only guaranteed the Explorer that came back had mapped the previous
+    build - the deploy landed one restart late, every time, while looking like
+    it had worked.
 
 .PARAMETER Platform
     Target to deploy. Defaults to the host architecture, and a source binary
@@ -170,18 +176,27 @@ if ($holders) {
 }
 
 try {
-    # --- 4. Explorer ------------------------------------------------------
-    if ($alreadyCurrent) {
-        Write-Host "`n3. Explorer left alone - installed shell.dll is already this build." -ForegroundColor Cyan
-    }
-    else {
-        Write-Host "`n3. Stopping Explorer..." -ForegroundColor Cyan
-        Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-    }
-
-    # --- 5. Rotate and copy ----------------------------------------------
-    Write-Host "`n4. Deploying binaries..." -ForegroundColor Cyan
+    # --- 4. Rotate and copy ----------------------------------------------
+    #
+    # Explorer is restarted *after* this, not before, and that ordering is the
+    # whole point.
+    #
+    # This used to stop Explorer first, on the reasonable-sounding theory that
+    # a running Explorer is in the way of replacing the file it has mapped. It
+    # is not - rotation exists precisely so it does not have to be - and
+    # stopping it first was actively wrong: Windows restarts the shell within
+    # about a second of it dying, so by the time the copy finished, a new
+    # Explorer had already started and mapped the *old* binary. Every deploy
+    # therefore landed one Explorer restart late, and the machine looked like it
+    # was running the build that had just been deployed while running the one
+    # before it.
+    #
+    # Measured 2026-08-24: Explorer started 17:09:08 and the rotation it was
+    # supposed to precede is stamped 17:09:09. That is the whole of the puzzle
+    # docs/refactor/08-handoff.md section 3.2 recorded as unexplained - phase
+    # timings that appeared from every host except explorer.exe - because the
+    # explorer.exe under test did not have the build that produced them.
+    Write-Host "`n3. Deploying binaries..." -ForegroundColor Cyan
     if ($alreadyCurrent) {
         Write-Host '[OK] shell.dll unchanged; nothing rotated.' -ForegroundColor Green
     }
@@ -201,6 +216,16 @@ try {
 
         Copy-Item -Path $sourceDll -Destination (Join-Path $installDir 'shell.dll') -Force
         if (Test-Path $sourceExe) { Copy-Item -Path $sourceExe -Destination (Join-Path $installDir 'shell.exe') -Force }
+
+        # Stamp when this landed, and stamp it explicitly.
+        #
+        # The creation time cannot simply be read: NTFS file tunneling puts back
+        # the *old* creation time when a file reappears at a path it recently
+        # left, which is exactly what rotate-then-copy does. Observed here on
+        # 2026-08-24 - a shell.dll deployed at 17:09 reported a creation time
+        # from four days earlier - and it matters because the restart check
+        # below asks whether Explorer started after the deployment.
+        (Get-Item (Join-Path $installDir 'shell.dll')).CreationTime = Get-Date
     }
 
     # The MSI installs the licence as LICENSE; match it rather than leaving both
@@ -224,8 +249,8 @@ try {
     if ($want -ne $got) { throw 'Deployed shell.dll does not match the source.' }
     Write-Host "[OK] shell.dll verified ($($want.Substring(0,16))...)" -ForegroundColor Green
 
-    # --- 6. Configuration -------------------------------------------------
-    Write-Host "`n5. Configuration..." -ForegroundColor Cyan
+    # --- 5. Configuration -------------------------------------------------
+    Write-Host "`n4. Configuration..." -ForegroundColor Cyan
     $stockNss     = Join-Path $repoRoot 'src\bin\shell.nss'
     $installedNss = Join-Path $installDir 'shell.nss'
 
@@ -247,7 +272,7 @@ try {
         }
     }
 
-    # --- 7. Housekeeping --------------------------------------------------
+    # --- 6. Housekeeping --------------------------------------------------
     # Rotations from earlier deployments, once nothing has them mapped.
     $freed = 0
     Get-ChildItem -Path $installDir -File -ErrorAction SilentlyContinue |
@@ -260,8 +285,8 @@ try {
         }
     if ($freed) { Write-Host "[OK] Removed $freed unmapped backup binar$(if($freed -eq 1){'y'}else{'ies'})." -ForegroundColor Green }
 
-    # --- 8. Register ------------------------------------------------------
-    Write-Host "`n6. Registering..." -ForegroundColor Cyan
+    # --- 7. Register ------------------------------------------------------
+    Write-Host "`n5. Registering..." -ForegroundColor Cyan
     $isWin11 = [Environment]::OSVersion.Version.Build -ge 22000
     $regArgs = @('-register')
     if ($isWin11 -and -not $NoTreat) { $regArgs += '-treat' }
@@ -314,6 +339,63 @@ try {
         else {
             Write-Host "[WARN] TreatAs redirect missing or unexpected ('$treatAs'); Shell will" -ForegroundColor Yellow
             Write-Host '       appear under "Show more options" rather than as the main menu.' -ForegroundColor Yellow
+        }
+    }
+
+    # --- 8. Restart Explorer, last -----------------------------------------
+    #
+    # After the binaries and the registration, never before. See the note at
+    # step 3: Windows restarts the shell about a second after it is killed, so
+    # stopping it first only guaranteed that the Explorer which came back had
+    # mapped the previous build.
+    #
+    # And it is verified rather than assumed, because "the deploy silently did
+    # not take" is exactly the failure that cost a whole session: an Explorer
+    # whose start time predates the copy is running the old DLL no matter what
+    # its module list says, since the file it mapped was renamed aside
+    # afterwards and GetModuleFileName still reports the name it had at load.
+    # Two different questions, and conflating them is what let a stale Explorer
+    # survive a deploy that reported success. The binaries can already be this
+    # build - a re-run, or a second deploy of an unchanged tree - while the
+    # running Explorer still has the one before it mapped.
+    $deployedAtStamp = (Get-Item (Join-Path $installDir 'shell.dll')).CreationTime
+    $explorerCurrent = @(Get-Process -Name explorer -ErrorAction SilentlyContinue |
+                         Where-Object { $_.StartTime -gt $deployedAtStamp }).Count -gt 0
+
+    if ($explorerCurrent) {
+        Write-Host "`n7. Explorer left alone - it already started after this shell.dll was installed." -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "`n7. Restarting Explorer so it maps the new binary..." -ForegroundColor Cyan
+        $deployedAt = Get-Date
+        Get-Process -Name explorer -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+        # Wait for the shell to come back rather than sleeping a fixed span -
+        # the watchdog is usually about a second, and a fixed sleep is how this
+        # check becomes decorative on a slow machine.
+        $back = $null
+        for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Milliseconds 500
+            $back = Get-Process -Name explorer -ErrorAction SilentlyContinue |
+                    Sort-Object StartTime | Select-Object -Last 1
+            if ($back -and $back.StartTime -gt $deployedAt) { break }
+            $back = $null
+        }
+
+        if (-not $back) {
+            Start-Process explorer.exe
+            Start-Sleep -Seconds 2
+            $back = Get-Process -Name explorer -ErrorAction SilentlyContinue |
+                    Sort-Object StartTime | Select-Object -Last 1
+        }
+
+        if ($back -and $back.StartTime -gt $deployedAt) {
+            Write-Host "[OK] Explorer restarted (pid $($back.Id)) after the new shell.dll was in place." -ForegroundColor Green
+        }
+        else {
+            Write-Host '[WARN] Could not confirm Explorer restarted after the copy. It may still be' -ForegroundColor Yellow
+            Write-Host '       running the previous build; sign out and back in, or restart it by hand.' -ForegroundColor Yellow
         }
     }
 
