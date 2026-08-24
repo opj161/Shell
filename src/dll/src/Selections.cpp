@@ -995,13 +995,21 @@ namespace Nilesoft
 			return true;
 		}
 
-		bool Selections::QuerySelected()
-		{
-			try
-			{
-				if(Window.handle == nullptr)
-					return false;
+		/*
+			The selection as Explorer's own view reports it - the IShellBrowser route.
 
+			Split out of QuerySelected on 2026-08-24 as step 5 of
+			docs/refactor/04-code-health.md section 4: one provider per way of learning
+			what is selected, and a dispatcher above them that decides which to ask.
+			This half is the window archaeology - find an IShellBrowser by walking up
+			from the popup's window, ask it for the active view, and read the selection
+			off that. Its counterpart is QuerySelectedFromHandler, which reads the
+			selection a host already handed us through IShellExtInit.
+
+			This commit moved the code and changed nothing about it.
+		*/
+		bool Selections::QuerySelectedFromShellBrowser()
+		{
 				/*
 				IComPtr<IShellWindows> sw;	
 				//if(S_OK == ::CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(IShellWindows), sw))
@@ -1076,20 +1084,6 @@ namespace Nilesoft
 
 				HWND current_window{};
 				
-				// No IShellBrowser used to end the query here, and that is exactly why
-				// third-party file managers only ever got theming: they implement
-				// their own view and answer nothing to WM_GETISHELLBROWSER, so the
-				// menu was built with no selection at all. Such a host has usually
-				// already handed us the selection through IShellExtInit, so ask for
-				// that before giving up.
-				//
-				// Placed after this gate rather than before it so Explorer is not
-				// touched. Explorer always has an IShellBrowser and never reaches
-				// here, which keeps its richer handling below - the DropTarget and
-				// Home/Quick access/Libraries cases - exactly as it was. Taking the
-				// handler's selection first would have quietly bypassed all of it.
-				if(!Window.has_IShellBrowser)
-					return QuerySelectedFromHandler();
 
 				if(Window.desktop)
 				{
@@ -1287,6 +1281,40 @@ namespace Nilesoft
 					}
 					Window.id = WINDOW_UI;
 				}
+
+			// Every failure in this provider lands here, exactly as it did when
+			// this body sat inside QuerySelected's try and fell through to the
+			// same `return false` after the catch. Exceptions are still caught
+			// by that try - this function is called from inside it.
+			return false;
+		}
+
+		bool Selections::QuerySelected()
+		{
+			try
+			{
+				if(Window.handle == nullptr)
+					return false;
+
+				// Which provider is asked, and why in this order.
+				//
+				// No IShellBrowser used to end the query here, and that is exactly why
+				// third-party file managers only ever got theming: they implement
+				// their own view and answer nothing to WM_GETISHELLBROWSER, so the
+				// menu was built with no selection at all. Such a host has usually
+				// already handed us the selection through IShellExtInit, so ask for
+				// that before giving up.
+				//
+				// The gate is on the window classification rather than on the capture
+				// so Explorer is not touched. Explorer always has an IShellBrowser and
+				// never reaches the handler, which keeps its richer handling - the
+				// DropTarget and Home/Quick access/Libraries cases - exactly as it
+				// was. Taking the handler's selection first would have quietly
+				// bypassed all of it.
+				if(!Window.has_IShellBrowser)
+					return QuerySelectedFromHandler();
+
+				return QuerySelectedFromShellBrowser();
 			}
 			catch(...)
 			{

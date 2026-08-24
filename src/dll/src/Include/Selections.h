@@ -340,8 +340,18 @@ namespace Nilesoft
 
 			void QuerySelectionMode();
 			bool QueryShellWindow();
+
+			// The dispatcher. Decides which of the two providers below is asked
+			// for the selection; docs/refactor/04-code-health.md section 4a.
 			bool QuerySelected();
+
 			HMENU hmenu_original{};
+
+			// The two providers. One reads the selection off Explorer's own
+			// view through IShellBrowser, the other reads the one a host
+			// already handed us through IShellExtInit. Both leave the rest of
+			// the program with the same thing.
+			bool QuerySelectedFromShellBrowser();
 			bool QuerySelectedFromHandler();
 			bool Preparing();
 			bool Parse(IShellItem *shellItem);
