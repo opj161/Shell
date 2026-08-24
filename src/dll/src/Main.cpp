@@ -1703,6 +1703,36 @@ STDAPI DllCanUnloadNow(void)
 	return S_FALSE;
 }
 
+/*
+	Parse a configuration and report; publish nothing.
+
+	This is what `shell.exe -check` calls. It exists as an export because the
+	parser lives here and the manager EXE does not link it - see
+	src/shared/ConfigCheck.h for the boundary and docs/refactor/03-config-safety.md
+	section 1b step 4 for why the feature is worth having at all.
+
+	Deliberately does *not* call BootstrapOnce(): loading this DLL to ask it a
+	question must not install a hook into the asking process. DllMain does
+	nothing but record the instance, so a plain LoadLibrary is inert.
+
+	Named with __stdcall and exported by name through shell.def, so the same
+	name works on x86, x64 and arm64 without decoration leaking into the
+	contract.
+*/
+extern "C" __declspec(dllexport)
+int __stdcall ShellCheckConfig(const wchar_t *path, Nilesoft::Shell::ConfigCheckResult *result)
+{
+	using namespace Nilesoft::Shell;
+
+	// A caller compiled against a different version of the struct, or none at
+	// all. Refusing is the only safe answer: every field below is written
+	// through a pointer whose size this is the only evidence for.
+	if(!result || result->cbSize != sizeof(ConfigCheckResult))
+		return CONFIG_CHECK_UNUSABLE;
+
+	return _initializer.check(path, *result);
+}
+
 // Register the COM server and the context menu handler.
 HRESULT Register(bool reg)
 {

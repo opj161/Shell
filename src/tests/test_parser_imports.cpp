@@ -302,3 +302,48 @@ TEST(parser_imports, a_broken_configuration_still_parses_from_its_shadow)
 	::DeleteFileW((tmp.dir + L"imports\\extra.nss").c_str());
 	::RemoveDirectoryW((tmp.dir + L"imports").c_str());
 }
+/*
+	The discriminator `shell.exe -check` rests on.
+
+	Parser::Load() returns *true* when the root file could not be read - see the
+	`l->length == 0` early return in Parser.cpp - because a machine with no
+	shell.nss must still get a working shell rather than an error on every menu.
+	A validator cannot use that as its answer: somebody who mistypes a path
+	would be told their configuration is fine.
+
+	Initializer::check() therefore treats "no file was read" as the failure,
+	and reads it off LoadedFiles(), which open_root fills only once load_File
+	has actually succeeded. If that ever stopped being true - if the parser
+	started recording a file it failed to open - `-check` would silently go back
+	to reporting a missing file as ok, and nothing else in the tree would
+	notice. This is what notices.
+
+	docs/refactor/03-config-safety.md section 1b step 4.
+*/
+TEST(parser_imports, a_file_that_cannot_be_read_records_no_loaded_file)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	Parsed parsed(tmp.dir + L"there_is_no_such_file.nss");
+
+	CHECK_MSG(parsed.loaded.empty(),
+			  "a file that never opened must not be recorded as loaded");
+}
+
+// The other half of the same rule: a file that *was* read is recorded, so
+// "loaded is empty" means what check() takes it to mean and nothing broader.
+TEST(parser_imports, a_file_that_was_read_is_recorded_even_when_it_declares_nothing)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	// Long enough to clear the parser's five-character minimum for a config.
+	auto root = tmp.write(L"empty.nss", "// nothing here at all\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1,
+			  "a file with no declarations is still a file that was read");
+	CHECK_EQ(parsed.root_items, (size_t)0);
+}

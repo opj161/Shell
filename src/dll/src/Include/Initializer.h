@@ -1,6 +1,7 @@
 #pragma once
 #include "Include/ConfigLifecycle.h"
 #include "Include/Theme.h"
+#include <ConfigCheck.h>
 #include <mutex>
 #include <memory>
 #include <atomic>
@@ -45,7 +46,20 @@ namespace Nilesoft
 			// last-known-good shadow. See Initializer.cpp.
 			bool load_generation(const string *config_path);
 
+			// Everything a Parser needs before Load() can be called: the CACHE
+			// it builds into, and the variable maps its context points at.
+			// Shared by the publishing path and by check(), which builds the
+			// same thing and then throws it away.
+			std::unique_ptr<Parser> prepare_parser(const string *config_path, CACHE *cache);
+
 		public:
+
+			// Parse and report; publish nothing, touch no generation, write no
+			// shadow. This is what `shell.exe -check` is, and it is the reason
+			// prepare_parser exists as its own step.
+			// docs/refactor/03-config-safety.md section 1b
+			int check(const wchar_t *config_path, ConfigCheckResult &result);
+
 
 			bool config_has_changed();
 

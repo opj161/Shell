@@ -11,6 +11,7 @@
 #include <shlobj.h>
 #include <Library/PlutoVGWrap.h>
 #include <RegistryConfig.h>
+#include <ConfigCheck.h>
 
 //#pragma comment(lib, "mincore.lib")
 #pragma comment(lib, "UxTheme.lib")
@@ -648,6 +649,149 @@ bool Registration(REGOP reg)
 	return false;
 }
 
+/*
+	Write one line where the person who typed the command will see it.
+
+	shell.exe is /SUBSYSTEM:WINDOWS, so it starts with no console and, per
+	AttachConsole's own page, "the standard handles retrieved with GetStdHandle
+	will likely be invalid on startup until AttachConsole is called. The
+	exception to this is if the application is launched with handle inheritance
+	by its parent process."
+
+		https://learn.microsoft.com/en-us/windows/console/attachconsole
+
+	That exception is the redirection case - `shell.exe -check > log.txt` - and
+	it has to be tried first, because attaching to the parent's console would
+	then send the report somewhere the user did not ask for. Console Handles
+	gives the discriminator and the rule for each kind:
+
+		"If a standard handle has been redirected to refer to a file or a pipe,
+		 however, the handle can only be used by the ReadFile and WriteFile
+		 functions. GetFileType can assist in determining what device type the
+		 handle refers to. A console handle presents as FILE_TYPE_CHAR."
+
+		"CreateFile enables a process to get a handle to its console's input
+		 buffer and active screen buffer, even if STDIN and STDOUT have been
+		 redirected... Specify the CONOUT$ value."
+
+		https://learn.microsoft.com/en-us/windows/console/console-handles
+
+	So: an inherited handle is used as it is; otherwise attach to the parent and
+	open CONOUT$ explicitly rather than trusting the standard handles to have
+	been fixed up; otherwise there is no console anywhere and a message box is
+	the only place left to say it.
+
+	One wart that cannot be fixed from here: cmd.exe does not wait for a
+	Windows-subsystem process, so the report lands after the prompt has already
+	been printed. Curing that needs a second, console-subsystem binary.
+*/
+static void write_console_line(const wchar_t *text)
+{
+	if(!text || !*text)
+		return;
+
+	auto length = static_cast<DWORD>(::lstrlenW(text));
+
+	auto write = [&](HANDLE handle) -> bool
+	{
+		if(!handle || handle == INVALID_HANDLE_VALUE)
+			return false;
+
+		if(::GetFileType(handle) == FILE_TYPE_CHAR)
+		{
+			DWORD written = 0;
+			if(!::WriteConsoleW(handle, text, length, &written, nullptr))
+				return false;
+			::WriteConsoleW(handle, L"\r\n", 2, &written, nullptr);
+			return true;
+		}
+
+		// A file or a pipe. Nothing on the other end knows this process's
+		// encoding, so the bytes are UTF-8 - which is what a redirected
+		// console produces and what every tool that would read this expects.
+		auto bytes = ::WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(length),
+										   nullptr, 0, nullptr, nullptr);
+		if(bytes <= 0)
+			return false;
+
+		std::vector<char> utf8(static_cast<size_t>(bytes) + 2);
+		if(::WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(length),
+								 utf8.data(), bytes, nullptr, nullptr) != bytes)
+			return false;
+
+		utf8[static_cast<size_t>(bytes)] = '\r';
+		utf8[static_cast<size_t>(bytes) + 1] = '\n';
+
+		DWORD written = 0;
+		return !!::WriteFile(handle, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+	};
+
+	if(write(::GetStdHandle(STD_OUTPUT_HANDLE)))
+		return;
+
+	if(::AttachConsole(ATTACH_PARENT_PROCESS))
+	{
+		auto console = ::CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+									 nullptr, OPEN_EXISTING, 0, nullptr);
+		if(console != INVALID_HANDLE_VALUE)
+		{
+			auto ok = write(console);
+			::CloseHandle(console);
+			if(ok)
+				return;
+		}
+	}
+
+	::MessageBoxW(nullptr, text, APP_FULLNAME, MB_OK | MB_ICONINFORMATION);
+}
+
+/*
+	`shell.exe -check [path]` - parse a configuration and say what is wrong
+	with it, without publishing anything or touching the running shell.
+
+	The parser lives in shell.dll, so this loads the DLL sitting beside this
+	executable and calls one export. Beside it, specifically, and not whatever
+	copy is registered on the machine: AGENTS.md records the installer's custom
+	action being caught servicing "whatever Shell is registered" rather than the
+	one it was working on, and a validator that checked a different build's idea
+	of the configuration would be the same mistake.
+*/
+static int CheckConfig(const wchar_t *config_path)
+{
+	string path = IO::Path::Combine(IO::Path::Parent(IO::Path::Module(nullptr)), dll_name).move();
+
+	// Not LOAD_LIBRARY_AS_DATAFILE - this one is called, not read.
+	DLL dll(path);
+	if(!dll)
+	{
+		write_console_line(L"shell.exe -check: shell.dll was not found next to shell.exe.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	auto entry = dll.Get<ConfigCheckFn>(CONFIG_CHECK_EXPORT);
+	if(!entry)
+	{
+		write_console_line(L"shell.exe -check: this shell.dll is too old to answer -check.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	ConfigCheckResult result{};
+	result.cbSize = sizeof(result);
+
+	auto code = entry(config_path, &result);
+	if(code == CONFIG_CHECK_UNUSABLE)
+	{
+		write_console_line(L"shell.exe -check: shell.dll refused the request.");
+		return code;
+	}
+
+	wchar_t line[CONFIG_CHECK_PATH + CONFIG_CHECK_MESSAGE + 64]{};
+	format_config_check(result, code, line, ARRAYSIZE(line));
+	write_console_line(line);
+
+	return code;
+}
+
 bool Register(REGOP reg, HWND hwnd = nullptr)
 {
 	string path = IO::Path::Combine(IO::Path::Parent(IO::Path::Module(nullptr)), dll_name).move();
@@ -1009,7 +1153,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
     }
     else
     {
+		// -check accepts the file as a value (-check:"C:\path\shell.nss") or as
+		// the next bare argument; empty means "whatever this machine would load".
 		bool _check = false;
+		string check_path;
 		//bool runglyphs = false;
         string cmd;
         for(auto op : cmdline)
@@ -1049,17 +1196,40 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
                 {
                     cmd = op->Value;
                 }
+				else if(op->has_name({ L"c", L"check" }))
+				{
+					_check = true;
+					if(!op->Value.empty())
+						check_path = op->Value;
+				}
             }
 			else if(op->has_name(L"check"))
 			{
 				_check = true;
 			}
+			else if(_check && check_path.empty())
+			{
+				// A bare argument after -check is the file to check; nothing
+				// else on this command line takes a positional argument.
+				//
+				// Argument, not Name: CommandLine splits every argument at its
+				// first colon into Name and Value, so a path lands here as
+				// Name="C" and Value="\dir\shell.nss". Argument is the text as
+				// it was typed, which is the only form that survives a drive
+				// letter.
+				check_path = op->Argument;
+			}
         }
 
 		if(_check)
 		{
-			//check();
-			return 0;
+			// -check reports on a file and exits. It publishes nothing, starts
+			// no UI and does not touch the running shell, which is what makes
+			// it safe to run while Explorer is up.
+			// docs/refactor/03-config-safety.md section 1b step 4
+			auto code = CheckConfig(check_path.empty() ? nullptr : check_path.c_str());
+			_log->close();
+			return code;
 		}
 
 		if(reg.REGISTER || reg.UNREGISTER || reg.RESTART || reg.FOLDEREXTENSIONS)
@@ -1410,11 +1580,14 @@ BOOL CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, [[maybe_unused]] L
                 L"-unregister\tUnregistering.\r\n"
                 L"-treat\t\tDisable Windows 11 context menu.\r\n"
                 L"-silent\t\tPrevents displaying messages.\r\n"
-                L"-restart\t\tRestart Windows Explorer.\r\n\r\n"
+                L"-restart\t\tRestart Windows Explorer.\r\n"
+                L"-check[:file]\tParse the configuration and report; change nothing.\r\n"
+                L"\t\tExits 0 when it parses and 1 when it does not.\r\n\r\n"
                 //L"-runas:N\t\tLaunch with elevated privileges.\r\n"
                 //L"\t\tN=[admin | system | trustedinsaller]\r\n\r\n"
                 L"-?\t\tDispay this help message.\r\n\r\n"
                 L"Examples:\r\nshell.exe -register -treat\r\n"
+                L"shell.exe -check\r\n"
               //  L"shell.exe -runas:admin -cmd:'cmd.exe' -args:\"/K echo Hello world!\"\r\n"
                 ;
             ::SetDlgItemTextW(hwnd, IDC_CMDLINE_TEXT, usage);

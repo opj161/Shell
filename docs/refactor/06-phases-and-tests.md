@@ -83,7 +83,9 @@ in each is stated below rather than in a separate tracker.
 | ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B | 2 |
 | ✅ | Mnemonics (§05.4 Stage 1) — `WM_MENUCHAR` was unanswered, so a typed letter beeped | 5 |
 | ✅ | Packaged verbs no longer leak a GDI bitmap per right-click (§02.2a-ii) | 1 |
-| ⬜ | `shell.exe -check`, circuit breaker, bypass gesture, taskbar Stage 2 | 3 |
+| ✅ | `shell.exe -check` (§03.1b step 4) — parses, reports, publishes nothing; a missing file no longer reports ok | 3 |
+| ✅ | Taskbar (§02.5) — one cached UIA round trip instead of four, and the bounded wait is now counted. The rectangle model was measured and declined | 3 |
+| ⬜ | Circuit breaker, bypass gesture | 3 |
 
 ### What the harness settled (2026-08-24)
 

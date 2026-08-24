@@ -123,6 +123,146 @@ namespace Nilesoft
 			return served;
 		}
 
+		namespace
+		{
+			/*
+				Copy into a fixed field, truncating rather than overflowing.
+
+				string::Copy's count-taking overload writes count characters and
+				*then* a terminator, so it needs count + 1 slots - passing the
+				capacity overruns by one. That is the same off-by-one family as
+				the `release(n - 1)` shape AGENTS.md records, so this says the
+				rule in terms of the array's own size and never takes a count.
+			*/
+			template<size_t N>
+			void copy_into(wchar_t (&dst)[N], const wchar_t *src)
+			{
+				dst[0] = L'\0';
+				if(!src)
+					return;
+
+				size_t i = 0;
+				for(; i + 1 < N && src[i]; i++)
+					dst[i] = src[i];
+				dst[i] = L'\0';
+			}
+		}
+
+		/*
+			The setup a Parser needs before Load() can be called.
+
+			Extracted so that check() can build exactly what the publishing path
+			builds - a parse against a half-initialised CACHE is not the same
+			parse, and a `-check` that answered a different question from the one
+			the DLL asks at load time would be worse than not having it.
+		*/
+		std::unique_ptr<Parser> Initializer::prepare_parser(const string *config_path, CACHE *cache)
+		{
+			cache->glyph.name = FontCache::Default;
+			load_mui(cache);
+
+			auto parser = config_path ? std::make_unique<Parser>(*config_path)
+									  : std::make_unique<Parser>();
+			parser->context.Cache = cache;
+			parser->context.variables.global = &cache->variables.global;
+			parser->context.variables.runtime = &cache->variables.runtime;
+			return parser;
+		}
+
+		/*
+			Parse and report. Publishes nothing, bumps no generation, writes no
+			shadow, and leaves Status and LastError exactly as it found them -
+			`shell.exe -check` runs in its own short-lived process, but the
+			export is callable from anywhere and a diagnostic that changed what
+			it was diagnosing would be a trap.
+
+			docs/refactor/03-config-safety.md section 1b step 4.
+		*/
+		int Initializer::check(const wchar_t *config_path, ConfigCheckResult &result)
+		{
+			// cbSize belongs to the caller; everything else is ours to fill.
+			auto size = result.cbSize;
+			result = ConfigCheckResult{};
+			result.cbSize = size;
+
+			try
+			{
+				// Never published, never handed to a menu. It exists so the
+				// parse has somewhere to build into.
+				auto cache = std::make_shared<CACHE>();
+
+				string path;
+				if(config_path && *config_path)
+					path = config_path;
+
+				auto parser = prepare_parser(path.empty() ? nullptr : &path, cache.get());
+
+				auto loaded = parser->Load();
+
+				// Path() is the file the parser was in when it stopped, which
+				// for a failed import is not the file that was asked about.
+				if(auto where = parser->Path(); where && *where)
+					copy_into(result.path, where);
+
+				if(!loaded || parser->HasError())
+				{
+					auto code = parser->Error();
+					result.error = static_cast<int32_t>(code);
+					result.line = static_cast<uint32_t>(parser->Line());
+					result.column = static_cast<uint32_t>(parser->Column());
+					copy_into(result.message, ParserException::errortostr(code));
+					return CONFIG_CHECK_FAILED;
+				}
+
+				const auto &files = parser->LoadedFiles();
+
+				/*
+					A file that could not be opened is a *successful* parse as
+					far as Load() is concerned - it returns true when the root
+					lexer read nothing (Parser.cpp, the `l->length == 0` early
+					return), because a machine with no shell.nss must still get
+					a working shell rather than an error on every menu.
+
+					For a validator that answer is exactly wrong: somebody who
+					runs -check on a path they typed wrong would be told their
+					configuration is fine. LoadedFiles() is empty in precisely
+					that case - open_root only records the root once load_File
+					has succeeded - so that is the discriminator.
+				*/
+				if(files.empty())
+				{
+					result.error = static_cast<int32_t>(TokenError::CannotFoundConfigFile);
+					copy_into(result.message, path.empty()
+						? L"no configuration file was found"
+						: L"the file could not be read");
+					if(!path.empty())
+						copy_into(result.path, path.c_str());
+					return CONFIG_CHECK_FAILED;
+				}
+
+				result.files = static_cast<uint32_t>(files.size());
+				result.entries = parser->TotalMenuCount;
+
+				// The root, which is the file a user asked about even when they
+				// named none. Only overwritten on success: on failure the
+				// erroring file is the more useful answer.
+				copy_into(result.path, files.front().c_str());
+
+				return CONFIG_CHECK_OK;
+			}
+			catch(...)
+			{
+				// A parse can throw ParserException, and anything that escapes
+				// here still has to produce a report rather than a crash in a
+				// process the user ran to be told what is wrong.
+				if(result.message[0] == L'\0')
+					copy_into(result.message, L"the configuration could not be parsed");
+				if(result.error == 0)
+					result.error = static_cast<int32_t>(TokenError::Unknown);
+				return CONFIG_CHECK_FAILED;
+			}
+		}
+
 		/*
 			One parse into one new generation, published only if it succeeds.
 
@@ -137,15 +277,8 @@ namespace Nilesoft
 			{
 				auto new_cache = std::make_shared<CACHE>();
 				new_cache->generation = ++_generation;
-				new_cache->glyph.name = FontCache::Default;
 
-				load_mui(new_cache.get());
-
-				auto parser = config_path ? std::make_unique<Parser>(*config_path)
-										  : std::make_unique<Parser>();
-				parser->context.Cache = new_cache.get();
-				parser->context.variables.global = &new_cache->variables.global;
-				parser->context.variables.runtime = &new_cache->variables.runtime;
+				auto parser = prepare_parser(config_path, new_cache.get());
 
 				if(!parser->Load())
 					return false;

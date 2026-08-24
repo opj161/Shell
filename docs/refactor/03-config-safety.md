@@ -64,11 +64,39 @@ the case that is. §2 below is still worth having, but it is the second half.
 4. **`shell.exe -check [file]`** — parse and report, publish nothing, exit non-zero
    on error. The cheapest possible prevention and the thing a user editing `.nss`
    will actually run. ~~Scope: XS; it is `Parser` plus the new path-taking
-   constructor that already exists for tests.~~ **Not XS, and not yet landed:**
-   `shell.exe` is a single `main.cpp` that does not link the parser, and it is a
+   constructor that already exists for tests.~~ **Not XS:** `shell.exe` is a
+   single `main.cpp` that does not link the parser, and it is a
    Windows-subsystem binary with no console. It needs an export from `shell.dll`
    plus `AttachConsole(ATTACH_PARENT_PROCESS)` in the manager. Both are small,
    but the original estimate was wrong about what stood in the way.
+
+   **Landed 2026-08-24.** `src/shared/ConfigCheck.h` is the boundary — a
+   fixed-size POD with `cbSize` at offset 0, deliberately not a required-size
+   buffer protocol — `Initializer::check()` is the parse, `ShellCheckConfig` is
+   the export, and `CheckConfig()` in the manager prints the line. Output goes
+   to an inherited standard handle first (so `-check > log.txt` lands where the
+   user asked), then to the parent's console via `AttachConsole` and `CONOUT$`,
+   then to a message box. Three things the sketch above did not anticipate:
+
+   - **A missing file parsed as a success.** `Parser::Load()` returns `true`
+     when the root file could not be read, deliberately: a machine with no
+     `shell.nss` must still get a working shell. For a validator that is the
+     worst possible answer — mistype the path and you are told your
+     configuration is fine — and the first end-to-end run did exactly that.
+     `LoadedFiles()` is empty in precisely that case, because `open_root` only
+     records the root once `load_File` has succeeded, so that is the
+     discriminator. Pinned by `parser_imports.a_file_that_cannot_be_read_records_no_loaded_file`
+     and its positive counterpart, because nothing else in the tree would
+     notice if the parser started recording files it failed to open.
+   - **`TotalMenuCount` counts entries, not menus** — every menu, item and
+     separator (`Parser.cpp:481`, `:1312`). The report says "entries".
+   - **The exit code is correct but neither `cmd` nor PowerShell waits for a
+     Windows-subsystem process**, so `%errorlevel%` and `$LASTEXITCODE` are not
+     populated by a plain invocation. Verified: `Start-Process -Wait -PassThru`
+     gives 0 for a good file and 1 for a bad or unreadable one, and redirection
+     to a file works through the inherited handle. Curing the bare-invocation
+     case needs a second, console-subsystem binary; that is a real cost for a
+     cosmetic gain and is not being paid yet.
 
 **As implemented (2026-08-24).** Steps 1–3 landed as `src/shared/ConfigShadow.h`
 plus `Parser::LoadedFiles()`, with two departures from the sketch above:
@@ -184,8 +212,9 @@ property of the snapshot design.
       that matters is the next line.)
 - [ ] Save invalid config, **restart Explorer**, right-click → menus still work, served
       from the persisted shadow (§1b), `Status.Stale` set, one notification.
-- [ ] `shell.exe -check` on a good file exits 0 and on a bad one prints file, line,
-      column and message, and exits non-zero.
+- [x] `shell.exe -check` on a good file exits 0 and on a bad one prints file, line,
+      column and message, and exits non-zero. Verified end to end against real
+      files; see the caveat in §1b about which shells wait for the exit code.
 - [ ] A shadow whose manifest fails verification is refused, and the process falls
       back to the never-loaded refusal rather than parsing it.
 - [ ] Fix config → new generation active without Explorer restart (watcher); before the
