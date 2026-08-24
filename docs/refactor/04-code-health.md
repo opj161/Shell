@@ -315,6 +315,44 @@ assertion made where it matters.
   ops, one-shot DWM color reads at snapshot build; explicitly exclude
   `io/reg/clipboard/input/cmd`. Keyed `(Expression*, selection index)` inside session;
   freed on close. Ship behind perf-flag measurement first (AGENTS.md rule).
+
+  **Measured and declined (2026-08-25).** This item set itself the gate "ship
+  behind perf-flag measurement first", and it is the last of the three in this
+  section to have it run. The ring is always on now, so the measurement needed
+  no flag at all - `shell.exe -report perf:all` against a real `explorer.exe`,
+  eleven consecutive menus spanning 30.2 ms to 230.0 ms of pre-display:
+
+  | phase | across all eleven |
+  |---|---|
+  | `config.init` (`init_cfg`, the `settings` expressions) | **0.4 - 0.6 ms** |
+  | `native.modify_rules` (`apply_system_modify_rules`) | **0.1 ms, every time** |
+  | `native.root_scan` | 0.1 - 0.2 ms |
+  | `explorer.commands` | 27 - 227 ms |
+
+  `native.modify_rules` is where the expensive expressions actually are: the
+  stock configuration carries eight `modify` rules, several with `where=`
+  clauses doing string comparison and array membership, and each is evaluated
+  against every native item - 27 to 35 of them. So 0.1 ms buys on the order of
+  240 rule evaluations, which puts one at roughly **0.4 microseconds**. A
+  configuration would need a quarter of a million of them to reach 100 ms.
+
+  Memoization removes only the *repeated* fraction of that, so its ceiling here
+  is some part of a tenth of a millisecond, against menus costing 30 to 230.
+
+  **The reason to decline is the risk rather than the size of the prize.** The
+  whitelist above is the whole design, and it is a claim about purity that has
+  to stay true as the expression engine changes. Memoizing something that turns
+  out not to be pure does not fail loudly - it shows the user a stale menu item,
+  which is the same silent-wrong-answer shape as the `release(n - 1)` and
+  `MB_*`/`WC_*` defects `AGENTS.md` collects. Spending that against 0.4 us per
+  evaluation is a bad trade in a way that does not depend on the exact number.
+
+  **What this does not prove**, stated rather than implied: it bounds the stock
+  configuration on this machine. A configuration with orders of magnitude more
+  rules would spend more, and `native.modify_rules` is the phase that would
+  show it - already printed by `shell.exe -report perf`, so any user with a
+  heavy configuration can find out in one command. Revisit if that line is ever
+  seen in the milliseconds.
 - Lazy large-selection metadata (A2§21): defer until `selection.preparing` shows up in
   ring-buffer p95s; verbs guidance (first item + count) supports the eventual design.
 

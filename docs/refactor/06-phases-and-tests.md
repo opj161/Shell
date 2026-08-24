@@ -109,13 +109,16 @@ in each is stated below rather than in a separate tracker.
 | ✅ | **§03.5's last acceptance criterion** — invalid config, Explorer restarted, menus served from the persisted shadow. Verified in a real Explorer; the menu came back at 213 × 680, identical to baseline | 3 |
 | ✅ | Reliability Center **window** (§05.1d) — `shell.exe -reliability`. Provider list merged across hosts with quarantine beside it, over the exact text `-report perf` prints. Two defects found by looking at the real window: six CLSIDs rendering alike, and a raw mnemonic marker | 5 |
 | ✅ | Seam step 5 (§04.4a, §04.4b) — selection layering. Not blocked by the rendering harness after all: it lives in `Selections.cpp`, which `tests.vcxproj` already links. The split exposed a real defect — `has_IShellBrowser` is set from a window class hash, so a host embedding the shell view lost the selection it had already handed Shell | 4 |
-| ⬜ | Seam steps 6–7 (§04.4a) — `MenuModel` and the presenter, the gate for favorites (§05.6) and the rule inspector (§05.7). Not started deliberately: these two are the paint and window-message halves of a 7,559-line file the test project does not link | 4 |
+| ✅ | Seam step 6 of §04.4a — superseded by the rows below; step 7 remains. The claim that *both* gated favorites and the inspector was wrong: §05.6 needs origin-stable identity from `MenuModel` and §05.7 needs that plus parser provenance. Neither needs the presenter | 4 |
 | ✅ | Interception backend (§01.9c, backlog item 8) — **found missing by the 2026-08-24 audit**, having been absent from the handoff's own list of remaining work. The interface is declined (the two mechanisms are not interchangeable — the PE format makes an import table per-image) and so is the per-hook-entry health check (it cannot fail). What was built is the `intercept` line: which mechanism is live, per host | 3 |
 | ✅ | Provider identity in the report (§05.1c) — the slowest provider on the reference machine printed a hash, so the flagship's diagnosis could not be handed to its own treatment. Verified in a real Explorer | 5 |
 | ✅ | **Selection array reuse (§02.3a)** — a menu over 200 selected files cost 645 ms, of which 616 ms was `ensure_selection_array` rebuilding an array one `SHParseDisplayName` at a time. 645 ms → 30 ms | 1 |
 | ✅ | Provider health keyed by selection shape (§02.2a-iii) — §02.2a specified `(clsid, selection_shape)` and the implementation dropped the shape | 1 |
 | ✅ | Lazy large-selection (§04.7) — **measured and declined** on its own gate | 4 |
-| ⬜ | Per-session memoization (§04.7) — the remaining third of item 20. Never built and, unlike its two siblings, never measured either, so it is open rather than declined | 4 |
+| ✅ | Per-session memoization (§04.7) — **measured and declined**, which closes item 20. `native.modify_rules` is 0.1 ms across eleven consecutive menus, for ~240 rule evaluations against 27-35 native items: about 0.4 us each. The whitelist's purity claim is the real cost, and a stale menu item is a silent wrong answer | 4 |
+| ✅ | **Composed-menu rendering coverage** (§08.3.8) — four `render.*` scenarios read the live menu back through MSAA and assert readability, order against the composed HMENU, layout containment and submenu placement. The gate seam steps 6-7 had been waiting on for three sessions | 0 |
+| ✅ | Seam step 6 (§04.4) — `MenuModel`, the origin table §01.4 specified. Three parallel vectors held one fact between them and `_main_popup` was read by nothing at all | 4 |
+| ⬜ | Seam step 7 (§04.4) — `Win32MenuPresenter`. The paint half, ~1,700 lines across two blocks of `ContextMenu.cpp`. No longer a capability gate: favorites needs `MenuModel`, which landed, and the inspector needs that plus parser provenance | 4 |
 
 ### The 2026-08-24 backlog audit
 
@@ -126,14 +129,17 @@ backlog it tracks. Reconciled item by item against `00-master-plan.md` §3:
 memoization and lazy selection), **three open** (items 8, 17, 19).
 
 Item 8 was closed the same day (§01.9c). By the end of 2026-08-25 the tally is
-**sixteen closed** (items 1–8, 10–16, 18), **three partial** (9, 17, 20) and
+**seventeen closed** (items 1–8, 10–16, 18, 20), **two partial** (9, 17) and
 **one open** (19). `08-handoff.md` §3.6 names what is partial about each.
 
-Item 20 is two-thirds closed by measurement rather than by building: the icon
-cache was declined in §04.7, and the lazy large-selection item was declined on
-2026-08-25 against its own stated gate — `selection.preparing` 0.0 ms, metadata 1.3 ms for
-200 items. Taking that measurement found §02.3a, a 645 ms menu of which 616 ms
-was Shell rebuilding an `IShellItemArray` the view had already built.
+Item 20 is closed by measurement rather than by building, in all three of its
+parts: the icon cache was declined in §04.7; the lazy large-selection item on
+2026-08-25 against its own stated gate — `selection.preparing` 0.0 ms, metadata
+1.3 ms for 200 items; and per-session memoization the same day, also against its
+own gate — `native.modify_rules` 0.1 ms across eleven consecutive menus, roughly
+0.4 microseconds per rule evaluation. Taking the second of those found §02.3a, a
+645 ms menu of which 616 ms was Shell rebuilding an `IShellItemArray` the view
+had already built.
 
 Two of those had been invisible for several sessions because every individual
 update to the table was itself accurate — the failure was that nothing was

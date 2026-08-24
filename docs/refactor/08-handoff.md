@@ -100,6 +100,8 @@ decision or fixed something; pure documentation commits are omitted.
 | `20e061e` | **Selection routing** — a host whose window class looks like Explorer's no longer loses the selection it already gave us. §04.4b |
 | `c76c2e9` | **Reliability Center window** — `shell.exe -reliability`. §05.1d |
 | `3723e78` | **Selection array reuse** — a menu over 200 files went from **645 ms to 30 ms**. §02.3a |
+| `f17373c` | **Rendering coverage** — four `render.*` scenarios read the live menu back through MSAA. The gate steps 6–7 waited on for three sessions. §3.8 |
+| `17321b2` | **Seam step 6** — `MenuModel`. Three vectors held one fact between them; `_main_popup` was read by nobody. §04.4 |
 
 ### The measurements that changed decisions
 
@@ -134,6 +136,9 @@ decision or fixed something; pure documentation commits are omitted.
 | The export kept **8 provider records** for a 27-provider menu, and `dropped_providers` was printed by nobody | The slowest menu on the machine was the one the instrument could least explain. Raised to 32, and drops are now reported |
 | A handler costing **209 ms** over 200 files had a single-file best of ~2 ms | `ProviderHealth` keyed on CLSID alone, so nothing could defer it. §02.2a specified `(clsid, selection_shape)`; it does now. 645 ms → ~460 ms on its own |
 | `selection.preparing` **0.0 ms** and metadata **1.3 ms for 200 items** | §04.7's lazy large-selection item declined on its own stated gate |
+| A menu item's `get_accChild` returns the submenu popup **with `accLocation` (0,0 0x0)**, open or closed | The documented MSAA descent cannot answer where anything was placed. Geometry comes from each popup's own `#32768`; parent and child are told apart by which window appeared. §08.3.8 |
+| `get_accName` strips `&` and keeps the accelerator; a separator answers **S_FALSE with a null BSTR** | Comparing MSAA against an HMENU means stripping the title and nothing else, and a reader that tests only `FAILED(hr)` turns a separator into a nameless item |
+| `native.modify_rules` is **0.1 ms across eleven consecutive menus**, for ~240 rule evaluations — about **0.4 us** each | Per-session memoization (§04.7) declined on its own gate. The purity whitelist is the real cost: memoizing something impure is a stale menu item, silently |
 
 ## 3. Where to pick up
 
@@ -282,15 +287,23 @@ master plan's own twenty-item backlog rather than against its own memory. That
 found one item it had lost entirely and one prerequisite it had assigned to the
 wrong piece of work. Both corrections are below, in place.
 
-The tally against `00-master-plan.md` §3, after the 2026-08-25 session:
-**sixteen items closed** — built, or measured and declined with the numbers
-written down — **three partial**, **one open**.
+The tally against `00-master-plan.md` §3, after the second 2026-08-25 session:
+**seventeen items closed** — built, or measured and declined with the numbers
+written down — **two partial**, **one open**.
 
 | | Items |
 |---|---|
-| closed | 1–8, 10–16, 18 |
-| partial | 9 (conditional attach deferred, §01.9a) · 17 (seam step 5 landed, 6–7 open) · 20 (icon cache and lazy selection declined by measurement; **per-session memoization untouched and never measured**) |
-| open | 19 (favorites, inspector — gated on 17) |
+| closed | 1–8, 10–16, 18, 20 |
+| partial | 9 (conditional attach deferred, §01.9a) · 17 (seam steps 5 and 6 landed, **7 open**) |
+| open | 19 (favorites, inspector) |
+
+**Item 19's gate was stated wrongly for several sessions and is now corrected.**
+This section used to say favorites and the inspector were both gated on item 17
+as a whole, which put them behind the presenter. They are not: §05.6 needs
+origin-stable identity from `MenuModel`, which landed as step 6, and §05.7 needs
+that plus file-and-line provenance threaded through the parser. **Neither needs
+seam step 7.** So the last open capability item is unblocked today, and the one
+large piece of work left is architectural hygiene rather than a gate.
 
 That tally was itself wrong for a few hours on 2026-08-25 — it said seventeen
 closed, counting item 20 whose middle third nobody has looked at, and counting
@@ -323,21 +336,28 @@ What was built is the part that was genuinely missing — *which* mechanism is
 live, published per host and printed as an `intercept` line by
 `shell.exe -report perf`. Measured in a real Explorer: `win32u import`.
 
-**Seam steps 5–7 of §04.4** — selection layering, `MenuModel`,
-`Win32MenuPresenter`. This is the one large item on the branch, and it is the
-gate for both remaining capabilities: favorites (§05.6) needs origin-stable
-identity from `MenuModel`, and the rule inspector (§05.7) needs that plus
-file-and-line provenance threaded through the parser.
+**Seam step 7 of §04.4** — `Win32MenuPresenter`. The last large piece, and the
+only part of item 17 still open. Steps 5 and 6 have landed.
 
-**Steps 6–7 have not been started, deliberately.** `ContextMenu.cpp` is 7,559
-lines, the test project does **not** link it, and those two seams are the paint
-and window-message halves — the parts whose regressions look like a menu that
-draws slightly wrong rather than a test that fails. The verification available
-here is one Explorer and a screenshot, which is not enough to move that code
-confidently. §04.4's own rule ("move code, don't improve it in the same commit;
-each seam lands with its unit suite where pure or harness coverage where
-hosted") is the right one, and satisfying it needs the harness to grow coverage
-of composed-menu *rendering* first.
+**The gate it waited on is now built.** "Harness coverage of composed-menu
+rendering" was repeated for three sessions without anyone saying what it was;
+§3.8 said, and `f17373c` built it. Four `render.*` scenarios read the live menu
+back through MSAA while the owner is blocked inside its tracking call, and
+assert readability, order against the composed HMENU, layout containment and
+submenu placement. Those are exactly the regressions the presenter can
+introduce and that no other test would notice.
+
+**What is left of it is a move, not a design.** The paint code is two blocks of
+`ContextMenu.cpp` — `draw_string`/`draw_rect`/`OnDrawItem`/`OnMeasureItem`
+(~1,180 lines) and `screenshot`/`draw_layer`/`UpdateLayered`/`CreateLayer`
+(~490) — and §04.4's own rule says to move it without improving it. Do the file
+split first and verify it byte-identical, the way step 5's extraction was;
+turning it into a class with a real interface is a second commit, and it needs
+the presenter's dependency on `ContextMenu`'s private state made visible before
+it can be designed honestly.
+
+**It is no longer a capability gate**, and that correction matters more than the
+work: see the tally above. Favorites needs `MenuModel`, which has landed.
 
 **Step 5 was not blocked by that, and saying it was is the second correction —
 it has now landed.** Step 5 is selection layering, and the code it moves is not
@@ -356,15 +376,23 @@ neither blocking:
   is a transient a screenshot cannot show;
 - whether any real third-party host takes the non-`RETURNCMD` path (§3.1).
 
-**One measurement close-out remains**, and one was taken:
+**Every measurement close-out is now taken**, which is what closed item 20:
 
-- §04.7's lazy large-selection item is **closed, declined** (2026-08-25).
+- §04.7's lazy large-selection item — **declined** (2026-08-25).
   `selection.preparing` is 0.0 ms and metadata 1.3 ms for 200 items. Taking
   that measurement is what found the 645 ms menu next to it — see §02.3a,
   which is the largest first-paint defect this branch has fixed.
-- §03.5 still has two untested acceptance criteria: a shadow whose manifest
-  fails verification being refused, and a fresh machine with a corrupt stock
-  config reaching the clean never-loaded refusal.
+- §04.7's per-session memoization — **declined** (2026-08-25), the last third
+  of item 20 and the only one that had never been measured at all.
+  `native.modify_rules` is 0.1 ms across eleven consecutive menus for roughly
+  240 rule evaluations, so one costs about 0.4 us. The decline rests on the
+  risk rather than the size: the design is a purity whitelist, and memoizing
+  something that is not pure shows a stale menu item silently.
+
+**§03.5 still has two untested acceptance criteria**, and they are the smallest
+open thing on the branch: a shadow whose manifest fails verification being
+refused, and a fresh machine with a corrupt stock config reaching the clean
+never-loaded refusal. Both need a machine state this one is not in.
 
 ### 3.6a The flagship's loop did not close for the provider that mattered most — fixed
 
@@ -457,13 +485,30 @@ which announces itself:
   briefly looked like the Reliability Center's details pane was broken when it
   held 2,030 characters.
 
-### 3.8 The next real piece of work, concretely
+### 3.8 The rendering coverage — specified here, then built (`f17373c`)
 
-Seam steps 6–7 are gated on harness coverage of composed-menu **rendering**,
-and that phrase has been repeated for three sessions without anyone saying what
-it would be. Here is what it looks like, from what already exists.
+Seam steps 6–7 were gated on harness coverage of composed-menu **rendering**,
+and that phrase had been repeated for three sessions without anyone saying what
+it would be. This section said; the next session built it. It is kept as
+written, because the reasoning is what the scenarios mean — what was actually
+built, and the four things that had to be measured first, are in
+`src/tests/hostprobe/fixtures/README.md` under "The rendering scenarios have no
+fixture, and cannot have one".
 
-**The pieces are all present; none of them is joined up.**
+Two things the plan below got wrong, both found by building it:
+
+- **The reader must wait for the popup window, not for a message.** Under
+  takeover the earliest message saying "a menu is up" is a `WM_INITMENUPOPUP`
+  Shell *synthesises* for the borrowed host menu, sent before Shell has
+  composed anything. The first run read zero popups and reported that Shell
+  had drawn nothing.
+- **The documented MSAA descent cannot answer where a submenu was placed.** A
+  menu item's `get_accChild` does return the submenu popup, as the Menu Item
+  page says — but its `accLocation` is `(0,0 0x0)` whether or not the submenu
+  is open. A placement assertion built on it would have compared a rectangle
+  at the origin against its parent and passed or failed for the wrong reason.
+
+**The pieces were all present; none of them was joined up.**
 
 - `hostprobe --takeover` already raises **Shell's own composed menu** — the four
   `takeover.*` scenarios build a real shell menu through
