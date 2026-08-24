@@ -231,6 +231,53 @@ overflow and work-area width allows, insert group-aware breaks (prefer after
 separators; cap 3 columns; else fall back to scroll). Pure presenter logic over the
 existing measure pass. Scope S.
 
+### 5a. As implemented (2026-08-24) — a number, not a mode, and two bugs the tests missed
+
+Landed as `Include/MenuColumns.h` (pure, tested) plus
+`ContextMenu::apply_smart_columns` (measure and `SetMenuItemInfo`).
+
+**`settings { columns = 3 }`, not `overflow = smart`.** A cap says the thing the
+user actually cares about — how wide they will tolerate the menu getting — and
+it needs no new constant in the expression engine, which `smart` would have.
+Unset, 0 and 1 all mean today's behaviour, so no existing configuration changes.
+
+**Reading the rows back off the finished `HMENU` rather than planning during
+insertion.** `Menu::insert` can add separators of its own on either side of an
+item, so the position an item ends at is not the index the insert loop used —
+and the plan needs *every* row, separators included, because they take vertical
+space and are where the good breaks are. One `GetMenuItemInfo` per row, no
+string retrieval.
+
+**Two defects the unit suite did not catch, both found by looking at a real
+menu.** A 100-item configuration in `hostprobe`'s shell-namespace scenario, on a
+1920×1080 display:
+
+| | menu window |
+|---|---|
+| before | 239 × 1031, scrolling |
+| after | **938 × 990, four columns, no scrollbar** |
+
+Getting there took two rounds:
+
+1. **Group boundaries piled up in the last column.** Every break pulled back to
+   a separator leaves height behind, and with a fixed per-column target three
+   such pulls hand all of it to the final column — which came out at 1148 px
+   against 1040 of screen, so the whole plan was thrown away and the menu kept
+   scrolling. The target is now recomputed over what is left after every break.
+2. **A break may not be so early that the rest cannot fit in the columns that
+   remain.** The same shape, one round later: a boundary a few rows back looks
+   free because it only shortens the column being closed. It is now rejected
+   unless `prefix[at] >= total - columns_remaining × available_height`.
+
+Both are pinned by `test_menu_columns.cpp`, including a sweep over separator
+spacings that would have caught either.
+
+**`ColumnPlan::refused` names the rule that declined.** Refusing is the common
+answer and a legitimate one, so "nothing happened" needed to be
+distinguishable from "this menu fits". It is what made the first defect
+findable at all — the log said `column-too-tall`, which is the whole diagnosis
+in one word.
+
 ## 6. Favorites & recents
 
 Requires origin-stable identity — deliberately scheduled *after* `MenuModel`
@@ -266,6 +313,6 @@ A2§28, master plan §2.
 | Bypass gesture | instant native escape hatch | S | none |
 | MSAA exposure | screen-reader usable menus | — | **already satisfied**, see §3 |
 | Mnemonics/type-ahead | keyboard-complete menus | S | none — **both stages landed** |
-| Smart columns | giant menus stay usable | S | none |
+| Smart columns | giant menus stay usable | — | **landed**, see §5a |
 | Favorites/recents | personal muscle-memory layer | M | MenuModel |
 | Inspector | explainable configuration | M | seams + parser provenance |

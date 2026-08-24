@@ -15,6 +15,12 @@ namespace Nilesoft
 		struct Settings
 		{
 			auto_expr showdelay;
+
+			// The most columns a menu taller than the screen may use before it
+			// falls back to scrolling. Unset, 0 or 1 all keep the scrolling
+			// behaviour every configuration has today.
+			// docs/refactor/05-capabilities.md section 5, Include/MenuColumns.h.
+			auto_expr columns;
 			auto_expr priority;
 			struct
 			{

@@ -5,6 +5,7 @@
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/Mnemonics.h"
 #include "Include/TypeAhead.h"
+#include "Include/MenuColumns.h"
 #include "RegistryConfig.h"
 
 using namespace Nilesoft::Diagnostics;
@@ -1541,7 +1542,10 @@ namespace Nilesoft
 				menu->draw.height++;
 
 			menu->popup_height += _theme.border.padding.top + _theme.border.padding.bottom + _theme.border.size + _theme.border.size;
-			
+
+			// Before cyMax is set below, because the two are alternatives: this
+			// either makes the menu fit or leaves it to be scrolled.
+			apply_smart_columns(hMenu, menu);
 
 			MENUINFO mi = { sizeof(mi), MIM_STYLE | MIM_BACKGROUND | MIM_MAXHEIGHT };
 			if(m.get(&mi))
@@ -4663,6 +4667,118 @@ namespace Nilesoft
 			third-party code synchronously, so no lock may be held across it and
 			the target is published in _native_uninit_notify first.
 		*/
+		/*
+			Break a menu taller than the screen into columns instead of scrolling it.
+
+			Opt-in: `settings { columns = 3 }` says how many columns Shell may
+			use. Unset, 0 or 1 all mean "scroll", which is what every existing
+			configuration gets and what this changes nothing about.
+
+			The decision is in Include/MenuColumns.h, which is pure and tested.
+			This is the two halves it cannot do: reading the rows back off the
+			finished HMENU, and asking Windows for the break.
+
+			Reading them back rather than planning during insertion is
+			deliberate. Menu::insert can add separators of its own either side of
+			an item, so the position an item ends up at is not the index the
+			insert loop used, and the plan needs *every* row - separators
+			included - because they take vertical space and are where the good
+			break points are. Walking the finished menu is the only place both
+			facts are available at once, and it costs one GetMenuItemInfo per
+			row with no string retrieval.
+
+			MFT_MENUBREAK "places the item on a new line (for a menu bar) or in a
+			new column (for a drop-down menu, submenu, or shortcut menu)":
+			https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuiteminfow
+		*/
+		void ContextMenu::apply_smart_columns(HMENU hMenu, menu_t *menu)
+		{
+			if(!hMenu || !menu || !_cache)
+				return;
+
+			auto max_columns = _context.eval_number<int>(_cache->settings.columns, 0);
+			if(max_columns < 2)
+				return;
+
+			auto count = ::GetMenuItemCount(hMenu);
+			if(count < 2)
+				return;
+
+			// One row per menu position, in the order Windows lays them out.
+			std::vector<ColumnRow> rows;
+			rows.reserve(static_cast<size_t>(count));
+
+			auto separator_height = _theme.separator.margin.top + _theme.separator.margin.bottom
+				+ _theme.separator.size;
+			auto item_padding = _theme.back.padding.top + _theme.back.padding.bottom
+				+ _theme.back.margin.top + _theme.back.margin.bottom;
+
+			for(int i = 0; i < count; i++)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_FTYPE | MIIM_DATA;
+				if(!::GetMenuItemInfoW(hMenu, static_cast<UINT>(i), TRUE, &mii))
+					return;
+
+				ColumnRow row;
+				row.explicit_break = (mii.fType & (MFT_MENUBREAK | MFT_MENUBARBREAK)) != 0;
+
+				if(mii.fType & MFT_SEPARATOR)
+				{
+					row.separator = true;
+					row.height = separator_height + menu->draw.height;
+				}
+				else
+				{
+					// Shell's own items know their measured height; anything
+					// else - a separator this menu inserted, or an item a host
+					// owns - gets the row height the measure pass settled on.
+					// MenuItemInfo::Signed identifies Shell's own dwItemData by
+					// cbSize at offset 0. Anything else - a host's own item data,
+					// or none at all - gets the row height the measure pass
+					// settled on rather than a reinterpreted pointer.
+					auto item = MenuItemInfo::Signed(mii.dwItemData)
+						? reinterpret_cast<MenuItemInfo *>(mii.dwItemData) : nullptr;
+					auto height = (item && item->size.cy > 0)
+						? item->size.cy : menu->draw.height;
+					row.height = height + item_padding;
+				}
+
+				rows.push_back(row);
+			}
+
+			ColumnBudget budget;
+			// The same budget cyMax is about to be given, so "does it fit" means
+			// the same thing to both.
+			auto monitor_h = _rcMonitor.height();
+			auto margin = dpi(40);
+			budget.available_height = monitor_h > margin ? monitor_h - margin : monitor_h;
+			budget.menu_width = menu->draw.length > 0 ? menu->draw.length : menu->draw.width;
+			budget.available_width = _rcMonitor.width();
+			budget.max_columns = max_columns;
+
+			auto plan = plan_columns(rows, budget);
+			if(!plan.apply)
+				return;
+
+			for(auto at : plan.breaks)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_FTYPE;
+				if(!::GetMenuItemInfoW(hMenu, static_cast<UINT>(at), TRUE, &mii))
+					continue;
+
+				// Read-modify-write: MIIM_FTYPE replaces the whole field, and
+				// every item here is MFT_OWNERDRAW.
+				mii.fType |= MFT_MENUBREAK;
+				::SetMenuItemInfoW(hMenu, static_cast<UINT>(at), TRUE, &mii);
+			}
+
+			menu->has_col = true;
+		}
+
 		void ContextMenu::uninitialize_native_popups()
 		{
 			for(auto hMenu : _native_popups.take_for_uninit())

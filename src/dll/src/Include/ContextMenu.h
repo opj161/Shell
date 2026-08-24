@@ -813,6 +813,9 @@ plutovg_move_to(pluto, start.x, start.y);
 			bool Initialize();
 			int Uninitialize();
 			int InvokeCommand(int id);	
+			// Group-aware column breaks for a menu taller than the screen.
+			// Opt-in through settings.columns; see Include/MenuColumns.h.
+			void apply_smart_columns(HMENU hMenu, menu_t *menu);
 			void build_system_menuitems(HMENU hMenu, menuitem_t *menu, bool is_root = false);
 			void build_main_system_menuitems(menuitem_t *menu, bool is_root = false);
 
