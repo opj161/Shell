@@ -149,6 +149,77 @@ namespace Nilesoft
 		}
 
 		/*
+			The compiled COM activation policy, published for the hook to read.
+
+			Separate from the CACHE and from _snapshot_mutex on purpose:
+			CoCreateInstanceHook runs on every in-process and local-server
+			activation in the host, and taking a mutex there to answer "is there
+			anything to do?" would be the cost this compile exists to remove.
+			An atomic shared_ptr swap gives the hook a lock-free read and the
+			same publish-once semantics the config snapshot has.
+
+			docs/refactor/01-takeover-contract.md section 9.
+		*/
+		namespace
+		{
+			std::mutex _policy_mutex;
+			std::shared_ptr<const ComActivationPolicy> _policy;
+		}
+
+		std::shared_ptr<const ComActivationPolicy> current_com_policy()
+		{
+			std::lock_guard<std::mutex> lock(_policy_mutex);
+			return _policy;
+		}
+
+		/*
+			Compile it, from the same rules the hook used to walk per activation.
+
+			Every CLSID any static rule names goes in, whether or not the rule
+			carries a `where` - a mentioned CLSID is worth evaluating, and only
+			the evaluation can say whether it is actually blocked right now. What
+			the set buys is the far commoner answer: this CLSID is named by
+			nothing, so there is no rule to evaluate and no Context to build.
+		*/
+		void Initializer::compile_com_policy(const CACHE *cache)
+		{
+			auto policy = std::make_shared<ComActivationPolicy>();
+
+			if(cache)
+			{
+				for(auto rule : cache->statics)
+				{
+					if(!rule || !rule->has_clsid)
+						continue;
+
+					for(auto &id : rule->clsid)
+					{
+						if(id.empty())
+							continue;
+
+						// Sixteen bytes of GUID, copied. No parsing, no
+						// allocation, and no dependence on GUID's layout beyond
+						// its size - which is what the static_assert checks.
+						static_assert(sizeof(GUID) == 2 * sizeof(unsigned long long),
+									  "a CLSID key is exactly the GUID's bytes");
+						ClsidKey key{};
+						::memcpy(&key, static_cast<const GUID *>(&id), sizeof(GUID));
+						policy->mention(key, rule->where != nullptr);
+					}
+				}
+
+				// The Win11 priority rule matches one Windows CLSID rather than
+				// a configured one, so it needs the hook on its own.
+				policy->set_suppresses_modern_menu(cache->settings.priority != nullptr);
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(_policy_mutex);
+				_policy = policy;
+			}
+		}
+
+		/*
 			The process's one configuration watcher.
 
 			Process lifetime and no destructor, like the other services here.
@@ -379,6 +450,12 @@ namespace Nilesoft
 					if(!loaded.empty())
 						ConfigShadow::save(ConfigShadow::default_directory(), loaded.front(), loaded);
 				}
+
+				// Compile the activation policy from the generation that has
+				// just been published, so the hook reads a policy that matches
+				// the configuration serving menus.
+				// docs/refactor/01-takeover-contract.md section 9.
+				compile_com_policy(new_cache.get());
 
 				// Watch what was actually read, whichever set that turned out
 				// to be. Re-pointed on every successful load, because an edit

@@ -424,6 +424,56 @@ warning that the private route may be load-bearing.
 - modern-menu suppression moves under `TakeoverRouter`: TreatAs is authoritative when
   healthy; CoCI override only as fallback, never both by default.
 
+### 9a. As implemented (2026-08-24) — the fast path landed; conditional attach did not, and here is why
+
+`Include/ComActivationPolicy.h` gains the compiled policy;
+`Initializer::compile_com_policy` builds it from `cache->statics` at every
+publish and swaps it into a process-wide `shared_ptr<const>`;
+`CoCreateInstanceHook` reads it lock-free and returns to the original
+immediately when no rule can name the CLSID.
+
+What that removes is real. The detour sees **every** in-process and
+local-server activation in the host, and for each one whose IID was one of the
+four it cared about it built a `Context`, called `Guid::to_string` — an
+allocation — and walked the rule list evaluating `where` expressions. On the
+stock configuration, which names no CLSID at all, every one of those was
+wasted. The replacement is sixteen bytes `memcpy`'d and compared against a
+vector that is usually empty.
+
+Two rules the tests pin, because the direction of a mistake here is asymmetric.
+Answering `may_affect` true for a CLSID no rule names costs the old slow path
+and nothing else; answering **false** for one a rule does name silently
+disables the blocklist — the same class of defect as §04.9's Alt-held bypass,
+which also failed silently and also let a suppressed extension quietly
+reappear. And a policy with no CLSIDs is *not* empty if the Win11 priority rule
+is on: that rule matches a Windows CLSID rather than a configured one, so it
+needs the hook by itself.
+
+The timing probe is deliberately **not** gated by `may_affect`. It exists to
+time every activation and find the slow one, so narrowing it to the CLSIDs a
+blocklist already names would destroy the diagnostic while looking like an
+optimisation.
+
+**Conditional attach is deferred, and the reason is worth recording.** Two
+things came out of looking at it properly:
+
+1. **The blast radius is already smaller than this section assumes.** The
+   detour is installed inside `if(rt.loader.explorer)` — third-party hosts
+   never get it. "Attach only when needed" therefore buys the case of Explorer
+   with an empty policy, not the process-wide exposure the section describes.
+2. **The policy does not exist yet when the decision would be made.**
+   `BootstrapOnce` installs the detour before any configuration has been
+   parsed — `Initializer::init(HINSTANCE)` sets up paths; the parse happens
+   later, in `DllGetClassObject`. Deciding at bootstrap would mean skipping the
+   hook and then needing to install it later, from whichever thread published
+   the configuration, which now includes the config watcher's. Installing an
+   inline detour from a background thread while menus are open is a real risk
+   on a machine that cannot test it, taken in exchange for the item in (1).
+
+Not worth it in that trade. Revisit if the ring ever shows the empty-policy
+Explorer case mattering, or alongside the `TakeoverRouter` work, where the
+decision has somewhere natural to live.
+
 ## 10. Acceptance criteria for this doc
 
 - [ ] Every hook exit maps to a logged `TakeoverDecision`.

@@ -87,6 +87,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | `shell.exe -check` (§03.1b step 4) — parses, reports, publishes nothing; a missing file no longer reports ok | 3 |
 | ✅ | Taskbar (§02.5) — one cached UIA round trip instead of four, and the bounded wait is now counted. The rectangle model was measured and declined | 3 |
 | ✅ | Circuit breaker and one-shot bypass gesture (§01.7, §05.2) — one gesture classifier, so reload and bypass cannot both fire | 3 |
+| ◐ | CoCI policy compile (§01.9) — the fast path landed; conditional attach deferred with reasons in §01.9a | 3 |
 
 ### What the harness settled (2026-08-24)
 

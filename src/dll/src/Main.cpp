@@ -893,6 +893,33 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 
 			if(process)
 			{
+				auto timing = Keyboard::IsKeyDown(VK_MENU);
+
+				/*
+					The fast path. docs/refactor/01-takeover-contract.md
+					section 9: "if(!policy->may_affect(rclsid)) return
+					original(...)".
+
+					This detour sees every in-process and local-server
+					activation in the host. Everything below it - a Context, a
+					stringified CLSID, a walk of the rule list evaluating
+					`where` expressions - used to run for each one whose IID was
+					one of the four, on a machine whose configuration names no
+					CLSID at all. Sixteen bytes copied and compared against a
+					list that is usually empty replaces all of it.
+
+					The timing probe is deliberately *not* gated by this. It
+					exists to time every activation and find the slow one, so
+					narrowing it to the CLSIDs a blocklist already names would
+					destroy the diagnostic while appearing to optimise it.
+				*/
+				ClsidKey key{};
+				::memcpy(&key, &rclsid, sizeof(GUID));
+
+				auto policy = current_com_policy();
+				if(!timing && (!policy || !policy->may_affect(key)))
+					return _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+
 				Context context;
 				this_item _this; context._this = &_this;
 				_this.is_uwp = is_UWP;
@@ -923,7 +950,7 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 						break;
 				}
 
-				switch(decide_com_activation(true, blocked, Keyboard::IsKeyDown(VK_MENU)))
+				switch(decide_com_activation(true, blocked, timing))
 				{
 					case ComActivationVerdict::Block:
 						// Nothing was activated, so there is nothing to release.

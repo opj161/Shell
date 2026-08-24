@@ -3,6 +3,7 @@
 #include "Include/Theme.h"
 #include "Include/TakeoverGesture.h"
 #include "Include/ConfigWatcher.h"
+#include "Include/ComActivationPolicy.h"
 #include <ConfigCheck.h>
 #include <mutex>
 #include <memory>
@@ -12,6 +13,13 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
+		// The compiled COM activation policy for this process, or null before
+		// the first configuration has been published. Read by
+		// CoCreateInstanceHook on every activation, so it is a lock-free
+		// shared_ptr copy rather than anything that touches the config snapshot
+		// mutex. docs/refactor/01-takeover-contract.md section 9.
+		std::shared_ptr<const ComActivationPolicy> current_com_policy();
+
 		class Initializer
 		{
 		private:
@@ -60,6 +68,10 @@ namespace Nilesoft
 
 			// What the watcher calls when one of those files is written.
 			static void on_config_file_changed();
+
+			// Compile the COM activation policy from a published generation.
+			// docs/refactor/01-takeover-contract.md section 9.
+			static void compile_com_policy(const CACHE *cache);
 
 		public:
 
