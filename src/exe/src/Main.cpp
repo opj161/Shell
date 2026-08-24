@@ -12,6 +12,7 @@
 #include <Library/PlutoVGWrap.h>
 #include <RegistryConfig.h>
 #include <ConfigCheck.h>
+#include <PerfReport.h>
 
 //#pragma comment(lib, "mincore.lib")
 #pragma comment(lib, "UxTheme.lib")
@@ -792,6 +793,213 @@ static int CheckConfig(const wchar_t *config_path)
 	return code;
 }
 
+/*
+	`shell.exe -report perf` - what the menus in every host on this desktop
+	actually cost.
+
+	docs/refactor/06-phases-and-tests.md section 4 names this command and
+	docs/refactor/05-capabilities.md section 1 needs it; section 3.2 of the
+	handoff explains why the alternative does not work. The phase timings are
+	always recorded (Include/Diagnostics/DiagnosticsRing.h) but the ring is
+	process-local, and the process that matters is somebody else's explorer.exe.
+	The documented substitute - the `perf` registry value writing breaching
+	phases to shell.log - was measured producing nothing at all from
+	explorer.exe while the same DLL logged freely from another host in the same
+	session, so until now the numbers existed and could not be looked at.
+
+	This reads them out of the shared block each host publishes into. It loads
+	no DLL, injects nothing and takes no lock any host could be waiting on:
+	src/shared/PerfExport.h has the reasoning for that shape.
+
+	Nothing here is a diagnostic of this process. `-report perf` run on a
+	machine where no menu has been opened correctly reports nothing at all, and
+	says so rather than printing an empty table.
+*/
+static int ReportPerf(bool detailed)
+{
+	using namespace Nilesoft::Shell::Diagnostics;
+
+	// The process list on a busy desktop; more than enough, and a machine with
+	// more processes than this loses the tail rather than the report.
+	std::vector<uint32_t> pids(2048);
+	auto found = perf_export_enumerate(pids.data(), pids.size());
+
+	string report;
+	size_t hosts = 0;
+	size_t busy = 0;
+	size_t unsupported = 0;
+	auto now = ::GetTickCount64();
+
+	std::vector<PerfExportRecord> records(PERF_EXPORT_RECORDS);
+	uint32_t scratch[PERF_EXPORT_RECORDS]{};
+
+	for(size_t i = 0; i < found; i++)
+	{
+		PerfExportSource source{};
+		size_t written = 0;
+		auto status = perf_export_read(pids[i], source, records.data(), records.size(), written);
+
+		if(status == PerfExportStatus::NotPresent)
+			continue;
+		if(status == PerfExportStatus::Busy)
+		{
+			busy++;
+			continue;
+		}
+		if(status == PerfExportStatus::Unsupported)
+		{
+			unsupported++;
+			continue;
+		}
+
+		hosts++;
+
+		auto summary = perf_report_summarize(records.data(), written, scratch, ARRAYSIZE(scratch));
+		summary.published = source.published;
+
+		uint32_t p50_ms = 0, p50_tenth = 0, p95_ms = 0, p95_tenth = 0;
+		perf_report_split_ms(summary.p50_microseconds, p50_ms, p50_tenth);
+		perf_report_split_ms(summary.p95_microseconds, p95_ms, p95_tenth);
+
+		if(hosts > 1)
+			report.append(L"\r\n");
+
+		report.append_format(L"%s  pid %u  %s  -  %llu menu%s, %u held\r\n",
+							 source.host[0] ? source.host : L"(unknown)",
+							 source.process_id,
+							 perf_export_architecture_name(source.architecture),
+							 static_cast<unsigned long long>(source.published),
+							 source.published == 1 ? L"" : L"s",
+							 static_cast<unsigned>(written));
+
+		if(written == 0)
+		{
+			// A host that mapped its block and has not published yet. Worth a
+			// line: it says Shell is loaded there, which is half of what
+			// somebody running this wants to know.
+			report.append(L"    no sessions recorded yet\r\n");
+			continue;
+		}
+
+		// Pre-display, not the session. The session clock runs from the hook
+		// being entered to the hook returning, so it includes however long the
+		// menu sat on screen - measured at 1,435 ms for a menu whose
+		// pre-display cost was 11 ms. Only one of those is a latency number.
+		if(summary.measured > 0)
+		{
+			report.append_format(L"    pre-display  p50 %u.%u ms   p95 %u.%u ms   n=%u\r\n",
+								 p50_ms, p50_tenth, p95_ms, p95_tenth,
+								 static_cast<unsigned>(summary.measured));
+		}
+		else
+		{
+			// Every session here was declined or failed before the menu was
+			// composed. A row of zeroes would read as a fast menu.
+			report.append(L"    pre-display  no menu of Shell's own was displayed\r\n");
+		}
+
+		// Decisions, but only the ones that happened - a row of zeroes for the
+		// four that did not is noise in a report meant to be skimmed.
+		string decisions;
+		for(uint32_t d = 0; d < 8; d++)
+		{
+			if(summary.decisions[d] == 0)
+				continue;
+			if(!decisions.empty())
+				decisions.append(L", ");
+			decisions.append_format(L"%u %s", summary.decisions[d],
+									perf_export_decision_name(d));
+		}
+		report.append_format(L"    decisions  %s\r\n", decisions.c_str());
+
+		auto emit_session = [&](size_t index, const wchar_t *label)
+		{
+			auto &record = records[index];
+			uint32_t pre_ms = 0, pre_tenth = 0;
+			perf_report_split_ms(perf_report_phase(record, PERF_REPORT_PRE_DISPLAY),
+								 pre_ms, pre_tenth);
+
+			auto age = perf_report_age_ms(now, record.tick);
+
+			report.append_format(L"    %s  %u.%u ms to display  %s  %llu.%llus ago\r\n",
+								 label, pre_ms, pre_tenth,
+								 perf_export_decision_name(record.decision),
+								 static_cast<unsigned long long>(age / 1000),
+								 static_cast<unsigned long long>((age % 1000) / 100));
+
+			// `phase`, not `p`: this file has a global `p`, and a loop variable
+			// that shadows it compiles with a warning nobody reads.
+			for(uint32_t phase = 0; phase < record.phase_count; phase++)
+			{
+				uint32_t ms = 0, tenth = 0;
+				perf_report_split_ms(record.phases[phase].microseconds, ms, tenth);
+
+				if(record.phases[phase].count >= 0)
+				{
+					report.append_format(L"                 %-36s %u.%u ms  n=%d\r\n",
+										 record.phases[phase].name, ms, tenth,
+										 record.phases[phase].count);
+				}
+				else
+				{
+					report.append_format(L"                 %-36s %u.%u ms\r\n",
+										 record.phases[phase].name, ms, tenth);
+				}
+			}
+
+			if(record.dropped_phases)
+			{
+				report.append_format(L"                 (%u phase%s did not fit)\r\n",
+									 record.dropped_phases,
+									 record.dropped_phases == 1 ? L"" : L"s");
+			}
+
+			for(uint32_t v = 0; v < record.provider_count; v++)
+			{
+				uint32_t ms = 0, tenth = 0;
+				perf_report_split_ms(record.providers[v].microseconds, ms, tenth);
+				report.append_format(L"                 provider %08x  %u.%u ms  %s\r\n",
+									 record.providers[v].clsid_hash, ms, tenth,
+									 perf_export_result_name(record.providers[v].result));
+			}
+		};
+
+		if(detailed)
+		{
+			for(size_t s = 0; s < written; s++)
+				emit_session(s, s == 0 ? L"newest " : L"       ");
+		}
+		else if(summary.slowest < written)
+		{
+			emit_session(summary.slowest, L"slowest");
+		}
+	}
+
+	if(hosts == 0)
+	{
+		string line = L"shell.exe -report perf: no host on this desktop has an open Shell menu ring.";
+		if(unsupported)
+			line.append_format(L"\r\n  %u process%s had a ring this build cannot read - restart them to pick up this Shell.",
+							   static_cast<unsigned>(unsupported), unsupported == 1 ? L"" : L"es");
+		line.append(L"\r\n  Raise a context menu in Explorer and run this again.");
+		write_console_line(line.c_str());
+		return 1;
+	}
+
+	string header;
+	header.append_format(L"Nilesoft Shell - menu timing, %u host%s",
+						 static_cast<unsigned>(hosts), hosts == 1 ? L"" : L"s");
+	if(busy)
+		header.append_format(L", %u busy", static_cast<unsigned>(busy));
+	if(unsupported)
+		header.append_format(L", %u unreadable", static_cast<unsigned>(unsupported));
+	header.append(L"\r\n\r\n");
+	header.append(report);
+
+	write_console_line(header.c_str());
+	return 0;
+}
+
 bool Register(REGOP reg, HWND hwnd = nullptr)
 {
 	string path = IO::Path::Combine(IO::Path::Parent(IO::Path::Module(nullptr)), dll_name).move();
@@ -1157,6 +1365,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 		// the next bare argument; empty means "whatever this machine would load".
 		bool _check = false;
 		string check_path;
+
+		// -report perf, and -report perf:all for every session rather than the
+		// slowest one. Same shape as -check: reports and exits, publishes
+		// nothing, touches no running shell.
+		bool _report = false;
+		string report_what;
 		//bool runglyphs = false;
         string cmd;
         for(auto op : cmdline)
@@ -1202,10 +1416,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 					if(!op->Value.empty())
 						check_path = op->Value;
 				}
+				else if(op->has_name(L"report"))
+				{
+					_report = true;
+					if(!op->Value.empty())
+						report_what = op->Value;
+				}
             }
 			else if(op->has_name(L"check"))
 			{
 				_check = true;
+			}
+			else if(_report && report_what.empty())
+			{
+				// A bare word after -report is what to report on, the same way
+				// a bare path after -check is the file. Argument rather than
+				// Name, for the reason spelled out below.
+				report_what = op->Argument;
 			}
 			else if(_check && check_path.empty())
 			{
@@ -1220,6 +1447,28 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 				check_path = op->Argument;
 			}
         }
+
+		if(_report)
+		{
+			// `perf` is the only subject there is, and it is the default: the
+			// command is `-report perf` in the plan, but somebody who types
+			// `-report` has said enough. An unknown subject is refused rather
+			// than silently treated as perf - a typo that prints a report of
+			// something else is worse than one that says what it wanted.
+			auto what = report_what.empty() ? string(L"perf") : report_what;
+
+			bool detailed = what.equals(L"perf:all", true) || what.equals(L"all", true);
+			if(!detailed && !what.equals(L"perf", true))
+			{
+				write_console_line(L"shell.exe -report: the only report is `perf` (or `perf:all`).");
+				_log->close();
+				return CONFIG_CHECK_UNUSABLE;
+			}
+
+			auto code = ReportPerf(detailed);
+			_log->close();
+			return code;
+		}
 
 		if(_check)
 		{
@@ -1582,12 +1831,15 @@ BOOL CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, [[maybe_unused]] L
                 L"-silent\t\tPrevents displaying messages.\r\n"
                 L"-restart\t\tRestart Windows Explorer.\r\n"
                 L"-check[:file]\tParse the configuration and report; change nothing.\r\n"
-                L"\t\tExits 0 when it parses and 1 when it does not.\r\n\r\n"
+                L"\t\tExits 0 when it parses and 1 when it does not.\r\n"
+                L"-report perf\tWhat the menus in every host on this desktop cost.\r\n"
+                L"\t\tAdd `perf:all` for every recorded session, not just the slowest.\r\n\r\n"
                 //L"-runas:N\t\tLaunch with elevated privileges.\r\n"
                 //L"\t\tN=[admin | system | trustedinsaller]\r\n\r\n"
                 L"-?\t\tDispay this help message.\r\n\r\n"
                 L"Examples:\r\nshell.exe -register -treat\r\n"
                 L"shell.exe -check\r\n"
+                L"shell.exe -report perf\r\n"
               //  L"shell.exe -runas:admin -cmd:'cmd.exe' -args:\"/K echo Hello world!\"\r\n"
                 ;
             ::SetDlgItemTextW(hwnd, IDC_CMDLINE_TEXT, usage);

@@ -17,6 +17,8 @@
   <ItemGroup>
     <ClInclude Include="$(MSBuildThisFileDirectory)ConfigShadow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)FileSystemObjects.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)PerfExport.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)PerfReport.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Globals.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Library\plutosvg.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Library\plutovg.h" />

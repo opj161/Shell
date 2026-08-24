@@ -152,6 +152,7 @@
     <ClCompile Include="test_icon_resource.cpp" />
     <ClCompile Include="test_mnemonics.cpp" />
     <ClCompile Include="test_menu_columns.cpp" />
+    <ClCompile Include="test_perf_export.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression
        tests exercise the real evaluator instead of a copy of it. The closure is

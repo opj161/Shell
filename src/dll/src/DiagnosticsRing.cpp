@@ -1,6 +1,7 @@
 #include <pch.h>
 #include "Include/Diagnostics/DiagnosticsRing.h"
 #include "Include/Diagnostics/MenuPerf.h"
+#include <PerfExport.h>
 
 namespace Nilesoft
 {
@@ -17,6 +18,76 @@ namespace Nilesoft
 			SessionSlot &current_session() noexcept
 			{
 				return t_session;
+			}
+
+			/*
+				Mirror one finished session into this process's shared block, so
+				`shell.exe -report perf` can read it from outside.
+
+				Off the measured path by construction: session_end() has already
+				stopped the clock and published into the in-process ring before
+				this runs, and the menu itself closed before that. The cost is
+				one memcpy of about 1.5 KB.
+
+				The copy is not a cast. PhaseRecord::name is a `const wchar_t *`
+				into this process's own image, which means nothing at all in the
+				process doing the reading, so the characters are copied.
+				src/shared/PerfExport.h has the rest of the reasoning.
+			*/
+			static void export_session(const MenuSessionRecord &record) noexcept
+			{
+				PerfExportRecord out{};
+				out.tick = record.tick;
+				out.host_hash = record.host_hash;
+				out.total_microseconds = record.total_microseconds;
+				out.decision = static_cast<uint32_t>(record.decision);
+				out.dropped_phases = record.dropped_phases;
+				out.dropped_providers = record.dropped_providers;
+
+				auto phases = record.phase_count;
+				if(phases > PERF_EXPORT_PHASES)
+				{
+					// The export holds fewer phases than the ring. Losing the
+					// tail silently is the failure the ring's own header warns
+					// about, so the overflow joins the count that already says
+					// how many did not fit.
+					auto lost = static_cast<uint32_t>(phases - PERF_EXPORT_PHASES);
+					out.dropped_phases += lost;
+					phases = PERF_EXPORT_PHASES;
+				}
+				out.phase_count = phases;
+
+				for(uint8_t i = 0; i < phases; i++)
+				{
+					out.phases[i].microseconds = record.phases[i].microseconds;
+					out.phases[i].count = record.phases[i].count;
+
+					auto name = record.phases[i].name;
+					size_t at = 0;
+					if(name)
+					{
+						for(; name[at] && at + 1 < PERF_EXPORT_NAME; at++)
+							out.phases[i].name[at] = name[at];
+					}
+					out.phases[i].name[at] = L'\0';
+				}
+
+				auto providers = record.provider_count;
+				if(providers > PERF_EXPORT_PROVIDERS)
+				{
+					out.dropped_providers += static_cast<uint32_t>(providers - PERF_EXPORT_PROVIDERS);
+					providers = PERF_EXPORT_PROVIDERS;
+				}
+				out.provider_count = providers;
+
+				for(uint8_t i = 0; i < providers; i++)
+				{
+					out.providers[i].clsid_hash = record.providers[i].clsid_hash;
+					out.providers[i].microseconds = record.providers[i].microseconds;
+					out.providers[i].result = static_cast<uint32_t>(record.providers[i].result);
+				}
+
+				PerfExportWriter::instance().store(out);
 			}
 
 			void session_begin(uint32_t host_hash) noexcept
@@ -83,6 +154,7 @@ namespace Nilesoft
 				}
 
 				DiagnosticsRing::instance().publish(t_session.record);
+				export_session(t_session.record);
 			}
 		}
 	}
