@@ -98,6 +98,32 @@ the case that is. §2 below is still worth having, but it is the second half.
      case needs a second, console-subsystem binary; that is a real cost for a
      cosmetic gain and is not being paid yet.
 
+   **A fourth, found 2026-08-24 by using the feature rather than testing it:
+   `shell.exe -check` with no argument could never work.** The sketch above -
+   "empty means whatever this machine would load" - described something that had
+   never happened on any machine. `ShellCheckConfig` deliberately skips
+   `BootstrapOnce()`, because loading this DLL to ask it a question must not
+   install a hook into the asking process; but `BootstrapOnce` is also what calls
+   `Initializer::init(HINSTANCE)`, which is where `application.ConfigPortable` -
+   the `shell.nss` beside the DLL - is derived. Without it `Initializer::instance`
+   is null, `Parser`'s default constructor gives up immediately, and
+   `LoadedFiles()` comes back empty. Which the validator then correctly reports as
+   "no configuration file was found", on a machine whose configuration is
+   perfectly fine.
+
+   The fix is to call `init(HINSTANCE)` - paths, DPI and an elevation check; no
+   hook, no COM, no window, no thread - guarded on `instance` being null so the
+   export only ever *establishes* paths and never resets them underneath a host
+   where Shell is already live. Verified end to end: in a directory holding
+   `shell.exe`, `shell.dll` and a config, bare `-check` now answers
+   `ok - 10 files, 150 entries` with exit 0, and `(43,28): error: Property
+   unexpected` with exit 1 for a broken one.
+
+   The unit suite cannot reach this: it links `Parser.cpp` but not
+   `Initializer.cpp`, so there is no way to drive `check(nullptr, ...)` from it.
+   The reproduction is the artifact itself, which is the rule `AGENTS.md` states
+   for anything the tests cannot reach.
+
 **As implemented (2026-08-24).** Steps 1–3 landed as `src/shared/ConfigShadow.h`
 plus `Parser::LoadedFiles()`, with two departures from the sketch above:
 
@@ -257,8 +283,21 @@ the watcher against real files, not the parse under injection.
 - [ ] Save invalid config while menus working → menus continue; single notification.
       (Note: this passes today for the wrong reason — nothing re-parses. The test
       that matters is the next line.)
-- [ ] Save invalid config, **restart Explorer**, right-click → menus still work, served
-      from the persisted shadow (§1b), `Status.Stale` set, one notification.
+- [x] Save invalid config, **restart Explorer**, right-click → menus still work, served
+      from the persisted shadow (§1b). **Verified in a real `explorer.exe`
+      2026-08-24** — the first time this has been exercised anywhere, because the
+      in-memory design cannot cover it (§1a) and no unit test can: the failure is
+      a *fresh process* parsing a broken file. The installed `shell.nss` was
+      broken until `-check` reported `(43,28): error: Property unexpected`,
+      Explorer was killed and restarted, and the desktop menu came back at
+      **213 × 680 — identical dimensions to the baseline taken before the file
+      was broken**. Restored afterwards and re-verified.
+
+      The premise was checked rather than assumed, and the first attempt failed
+      that check: it used bare `-check`, which was itself broken (§1b), so it
+      never confirmed the file was invalid and proved nothing. `Status.Stale` and
+      the single notification are *not* covered by this — what was observed is
+      that menus survive.
 - [x] `shell.exe -check` on a good file exits 0 and on a bad one prints file, line,
       column and message, and exits non-zero. Verified end to end against real
       files; see the caveat in §1b about which shells wait for the exit code.

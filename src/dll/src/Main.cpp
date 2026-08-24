@@ -1919,6 +1919,27 @@ STDAPI DllCanUnloadNow(void)
 	question must not install a hook into the asking process. DllMain does
 	nothing but record the instance, so a plain LoadLibrary is inert.
 
+	It does have to call `init(HINSTANCE)` though, and not doing so was a defect
+	that made `shell.exe -check` with no argument answer "no configuration file
+	was found" on *every* machine, however healthy. The path is derived in
+	`Initializer::init(HINSTANCE)` - `application.ConfigPortable`, the
+	`shell.nss` beside this DLL - and `Parser`'s default constructor gives up
+	immediately when `Initializer::instance` is null, which is exactly the state
+	skipping BootstrapOnce leaves behind. So the bare form could never work, and
+	docs/refactor/03-config-safety.md section 1b's "empty means whatever this
+	machine would load" was describing something that had never happened.
+
+	`init(HINSTANCE)` is safe here in a way BootstrapOnce is not: it assigns
+	paths, reads the DPI and asks whether this process is elevated. No hook, no
+	COM, no window, no thread.
+
+	Guarded on `instance` being null so this only ever *establishes* the paths.
+	The export is callable from a host where Shell is live and has already
+	bootstrapped, and re-running it there would reset `application.Config` to
+	the portable path underneath a running menu - turning a read-only diagnostic
+	into something that changes what it is diagnosing, which the comment above
+	says this must never do.
+
 	Named with __stdcall and exported by name through shell.def, so the same
 	name works on x86, x64 and arm64 without decoration leaking into the
 	contract.
@@ -1933,6 +1954,9 @@ int __stdcall ShellCheckConfig(const wchar_t *path, Nilesoft::Shell::ConfigCheck
 	// through a pointer whose size this is the only evidence for.
 	if(!result || result->cbSize != sizeof(ConfigCheckResult))
 		return CONFIG_CHECK_UNUSABLE;
+
+	if(Initializer::instance == nullptr)
+		_initializer.init(_hInstance);
 
 	return _initializer.check(path, *result);
 }
