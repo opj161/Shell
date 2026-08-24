@@ -267,12 +267,72 @@ reporting, because it dereferenced the pointer whose nullness is the defect —
 the flaw `08-handoff.md` §1 rule 2 exists to find. The check short-circuits now,
 and says in a comment why.
 
-What is still missing for the window: the window itself, and the "Repair
-takeover" row.
+### 1d. The window — landed 2026-08-24, and it closed the arc this section opened
+
+`shell.exe -reliability`. `src/exe/src/Reliability.h` has the design; the three
+decisions worth restating are that the details pane shows **the exact text
+`-report perf` prints** (one formatter, so a window and a report can never
+disagree about a machine), that the provider list is **merged across hosts** by
+CLSID hash and keeps each extension's worst time, and that it is built from
+plain user32 controls so the manager's import table is unchanged — a `ListView`
+would look better and would add comctl32 to a binary whose job is to be small
+and to work before anything else is known to.
+
+What it shows on this machine, unedited:
+
+```text
+1 host publishing.  13 extensions asked.
+
+Edit with Adobe Acrobat                   87.7 ms   ok
+{1FA0E654-C9F2-4A1F-9800-B9A75D744B00}    19.1 ms   ok
+NanaZip                                   10.6 ms   ok
+Unlock with File Locksmith                 6.1 ms   ok
+{1FA0E654-C9F2-4A1F-9800-B9A75D744B04}     5.9 ms   ok
+```
+
+That first row is the whole feature in one line, and it also closes the arc
+§1c opened: the extension costing 87.7 ms is the one that reported
+`provider 4f1b2d3a  70.0 ms  ok` at the start of the day — a hash, with no
+CLSID, that `-quarantine:add` could not accept. It is now named, identified,
+and quarantined by selecting it and pressing a button.
+
+**Two defects found by looking at the real window rather than by testing it**,
+both invisible to any test written before it existed:
+
+- **Six extensions rendered as the same row.** The name column was 34 wide, a
+  formatted CLSID is 38, and the elision took the *tail* — so a handler family
+  registered as `…B9A75D744B00` through `…B05` produced six identical-looking
+  lines with different timings, which is worse than showing nothing. The column
+  is 38 now, exactly a CLSID, and elision keeps both ends: the tail is where
+  the information is, for GUIDs and for names alike ("Microsoft Defender
+  scan…" / "…submit…").
+- **`E&dit with Adobe Acrobat`.** `GetTitle` answers with the string meant for
+  a menu item, so it carries mnemonic markers; a `LISTBOX` gives `&` no meaning
+  and renders it literally. Stripped per the Win32 rule — `&&` is a literal,
+  a single `&` marks the next character.
+
+`test_reliability_rows.cpp` pins both, and each was checked to catch its
+defect: restoring the 34-wide column and the tail elision fails exactly
+`the_name_column_fits_a_whole_clsid`, `two_clsids_from_one_family_look_different`,
+`a_clsid_is_shown_whole_and_not_elided` and `elision_keeps_both_ends`.
+
+Verified end to end by driving the live window from another process:
+quarantine a row and it reports `quarantined` and appears in
+`shell.exe -quarantine:list` with the same CLSID; release it and both agree it
+is gone.
+
+**"Repair takeover" is deliberately not there.** Everything else in this window
+reads state or writes a per-user file, so it needs no elevation and cannot
+change what a menu does while it is open. Repair means writing HKLM, which
+would make the whole window an elevated program for the sake of one button —
+`shell.exe -register -treat` already does it, and the `Takeover` block says
+when it is needed. The same reasoning excludes "Show Windows menu once", which
+is a gesture the user makes (Ctrl+Alt+right-click, §01.7) rather than something
+a window can do on their behalf.
 
 The `Takeover` line's inputs also all exist now: `RegistryConfig::ModernMenuRedirectedToUs()`
-answers the TreatAs half (§01.9b), `IATHook::installed()` the interception half,
-and `TaskbarHitStats` the taskbar half.
+answers the TreatAs half (§01.9b), `IATHook::installed()` the interception half
+— reported per host as of §01.9c — and `TaskbarHitStats` the taskbar half.
 
 ## 2. One-shot native bypass ("Windows menu, this time")
 
@@ -525,7 +585,7 @@ A2§28, master plan §2.
 
 | Feature | New capability for users | Effort | Depends on |
 |---|---|---|---|
-| Reliability Center | diagnose/slow-quarantine extensions | M-L | §02.6, §01.9 |
+| Reliability Center | diagnose/slow-quarantine extensions | — | **landed**, see §1a–§1d |
 | Bypass gesture | instant native escape hatch | S | none |
 | MSAA exposure | screen-reader usable menus | — | **already satisfied**, see §3 |
 | Mnemonics/type-ahead | keyboard-complete menus | S | none — **both stages landed** |

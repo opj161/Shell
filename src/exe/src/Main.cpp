@@ -14,6 +14,7 @@
 #include <ConfigCheck.h>
 #include <PerfReport.h>
 #include <ProviderQuarantine.h>
+#include "Reliability.h"
 
 //#pragma comment(lib, "mincore.lib")
 #pragma comment(lib, "UxTheme.lib")
@@ -897,7 +898,15 @@ static void AppendTakeoverStatus(string &out)
 	}
 }
 
-static int ReportPerf(bool detailed)
+/*
+	Builds the report text and returns the exit code, writing nothing.
+
+	Split from ReportPerf so the Reliability Center window (docs/refactor/05
+	section 1) can show exactly what `-report perf` prints rather than a second
+	rendering of the same numbers that drifts from it. Two formatters for one
+	set of facts is how a report and a window come to disagree.
+*/
+static int BuildPerfReport(bool detailed, string &out)
 {
 	using namespace Nilesoft::Shell::Diagnostics;
 
@@ -1162,7 +1171,7 @@ static int ReportPerf(bool detailed)
 		// identically without it, and the second is the one worth acting on.
 		AppendTakeoverStatus(line);
 
-		write_console_line(line.c_str());
+		out = line;
 		return 1;
 	}
 
@@ -1178,8 +1187,423 @@ static int ReportPerf(bool detailed)
 	header.append(L"\r\n");
 	header.append(report);
 
-	write_console_line(header.c_str());
+	out = header;
 	return 0;
+}
+
+static int ReportPerf(bool detailed)
+{
+	string text;
+	auto code = BuildPerfReport(detailed, text);
+	write_console_line(text.c_str());
+	return code;
+}
+
+/*
+	The Reliability Center - docs/refactor/05-capabilities.md section 1, and the
+	last piece of it. src/exe/src/Reliability.h has the design decisions; what
+	follows is the window.
+*/
+namespace Nilesoft
+{
+	namespace Shell
+	{
+		namespace Reliability
+		{
+			Snapshot take()
+			{
+				using namespace Nilesoft::Shell::Diagnostics;
+
+				Snapshot snap;
+
+				string text;
+				BuildPerfReport(false, text);
+				snap.text = text.c_str();
+
+				// What the user has already decided, so a row can say so
+				// rather than reporting a quarantined extension as "0.0 ms,
+				// ok" - which reads as an extension that is simply fast.
+				auto quarantined = Nilesoft::Shell::Quarantine::load(
+					Nilesoft::Shell::Quarantine::default_path());
+
+				std::vector<uint32_t> pids(2048);
+				auto found = perf_export_enumerate(pids.data(), pids.size());
+
+				std::vector<PerfExportRecord> records(PERF_EXPORT_RECORDS);
+
+				for(size_t i = 0; i < found; i++)
+				{
+					PerfExportSource source{};
+					size_t written = 0;
+					if(PerfExportStatus::Ok
+					   != perf_export_read(pids[i], source, records.data(), records.size(), written))
+						continue;
+
+					snap.hosts++;
+
+					for(size_t r = 0; r < written; r++)
+					{
+						auto &record = records[r];
+						for(uint32_t v = 0; v < record.provider_count; v++)
+						{
+							auto hash = record.providers[v].clsid_hash;
+
+							auto at = std::find_if(snap.providers.begin(), snap.providers.end(),
+												   [hash](const ProviderRow &row)
+												   { return row.hash == hash; });
+							if(at == snap.providers.end())
+							{
+								ProviderRow row;
+								row.hash = hash;
+								if(auto clsid = source.clsid_for(hash))
+								{
+									row.clsid = *clsid;
+									row.has_clsid = true;
+								}
+								snap.providers.push_back(std::move(row));
+								at = snap.providers.end() - 1;
+							}
+
+							// A name may arrive from a later host than the one
+							// that first reported the hash, so it is filled in
+							// whenever it turns up rather than only on
+							// creation.
+							if(at->name.empty())
+							{
+								if(auto name = source.name_for(hash))
+									at->name = name;
+							}
+							if(!at->has_clsid)
+							{
+								if(auto clsid = source.clsid_for(hash))
+								{
+									at->clsid = *clsid;
+									at->has_clsid = true;
+								}
+							}
+
+							at->samples++;
+							at->worst_us = std::max<uint32_t>(at->worst_us, record.providers[v].microseconds);
+						}
+					}
+				}
+
+				for(auto &row : snap.providers)
+				{
+					row.quarantined = std::any_of(quarantined.begin(), quarantined.end(),
+												  [&row](const Nilesoft::Shell::Quarantine::Entry &e)
+												  { return e.hash == row.hash; });
+				}
+
+				// Slowest first: the row somebody opened this window to find.
+				// Quarantined rows sink, because they cost nothing now and
+				// their old timing is history rather than a complaint.
+				std::sort(snap.providers.begin(), snap.providers.end(),
+						  [](const ProviderRow &a, const ProviderRow &b)
+						  {
+							  if(a.quarantined != b.quarantined)
+								  return b.quarantined;
+							  return a.worst_us > b.worst_us;
+						  });
+
+				return snap;
+			}
+
+			namespace
+			{
+				enum : int
+				{
+					RC_LIST = 1001, RC_DETAIL, RC_HEAD,
+					RC_QUARANTINE, RC_RELEASE, RC_REFRESH, RC_COPY, RC_CLOSE,
+				};
+
+				struct Ui
+				{
+					HWND window{}, head{}, list{}, detail{};
+					HWND quarantine{}, release{}, refresh{}, copy{}, close{};
+					HFONT mono{}, ui{};
+					Snapshot snap;
+				};
+
+				Ui g_ui;
+
+				HWND make(const wchar_t *cls, const wchar_t *text, DWORD style, int id, HFONT font)
+				{
+					auto h = ::CreateWindowExW(
+						(::wcscmp(cls, L"LISTBOX") == 0 || ::wcscmp(cls, L"EDIT") == 0)
+							? WS_EX_CLIENTEDGE : 0,
+						cls, text, WS_CHILD | WS_VISIBLE | style,
+						0, 0, 10, 10, g_ui.window,
+						reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+						reinterpret_cast<HINSTANCE>(&__ImageBase), nullptr);
+					if(h && font)
+						::SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+					return h;
+				}
+
+				void populate()
+				{
+					g_ui.snap = take();
+
+					string head;
+					head.append_format(L"%u host%s publishing.  ",
+									   static_cast<unsigned>(g_ui.snap.hosts),
+									   g_ui.snap.hosts == 1 ? L"" : L"s");
+					if(g_ui.snap.providers.empty())
+					{
+						head.append(L"No extension has been asked yet - open a context menu, then Refresh.");
+					}
+					else
+					{
+						head.append_format(L"%u extension%s asked.",
+										   static_cast<unsigned>(g_ui.snap.providers.size()),
+										   g_ui.snap.providers.size() == 1 ? L"" : L"s");
+					}
+					::SetWindowTextW(g_ui.head, head.c_str());
+
+					::SendMessageW(g_ui.list, LB_RESETCONTENT, 0, 0);
+					for(auto &row : g_ui.snap.providers)
+					{
+						auto line = format_row(row);
+						::SendMessageW(g_ui.list, LB_ADDSTRING, 0,
+									   reinterpret_cast<LPARAM>(line.c_str()));
+					}
+					if(!g_ui.snap.providers.empty())
+						::SendMessageW(g_ui.list, LB_SETCURSEL, 0, 0);
+
+					::SetWindowTextW(g_ui.detail, g_ui.snap.text.c_str());
+				}
+
+				// Add or remove the selected row, then refresh so the list
+				// shows what the file now says rather than what this function
+				// intended. Same store and the same rules as
+				// `shell.exe -quarantine`; see QuarantineCommand.
+				void set_quarantined(bool quarantine)
+				{
+					auto sel = static_cast<int>(::SendMessageW(g_ui.list, LB_GETCURSEL, 0, 0));
+					if(sel < 0 || static_cast<size_t>(sel) >= g_ui.snap.providers.size())
+						return;
+
+					auto &row = g_ui.snap.providers[static_cast<size_t>(sel)];
+					if(!row.has_clsid)
+					{
+						::MessageBoxW(g_ui.window,
+									  L"This host has not identified that extension yet, so there is "
+									  L"nothing to quarantine it by.\r\n\r\nOpen a context menu where "
+									  L"it appears and press Refresh.",
+									  L"Nilesoft Shell", MB_OK | MB_ICONINFORMATION);
+						return;
+					}
+
+					auto path = Nilesoft::Shell::Quarantine::default_path();
+					auto entries = Nilesoft::Shell::Quarantine::load(path);
+
+					auto at = std::find_if(entries.begin(), entries.end(),
+										   [&row](const Nilesoft::Shell::Quarantine::Entry &e)
+										   { return e.hash == row.hash; });
+
+					if(quarantine)
+					{
+						if(at != entries.end())
+							return;                 // already the state asked for
+						if(entries.size() >= Nilesoft::Shell::Quarantine::MaxEntries)
+						{
+							::MessageBoxW(g_ui.window, L"The quarantine list is full.",
+										  L"Nilesoft Shell", MB_OK | MB_ICONWARNING);
+							return;
+						}
+						Nilesoft::Shell::Quarantine::Entry entry;
+						entry.clsid = row.clsid;
+						entry.hash = row.hash;
+						entries.push_back(std::move(entry));
+					}
+					else
+					{
+						if(at == entries.end())
+							return;
+						entries.erase(at);
+					}
+
+					if(!Nilesoft::Shell::Quarantine::save(path, entries))
+					{
+						::MessageBoxW(g_ui.window, L"Could not write the quarantine list.",
+									  L"Nilesoft Shell", MB_OK | MB_ICONERROR);
+						return;
+					}
+
+					populate();
+					::SendMessageW(g_ui.list, LB_SETCURSEL, static_cast<WPARAM>(sel), 0);
+				}
+
+				void copy_report()
+				{
+					if(!::OpenClipboard(g_ui.window))
+						return;
+
+					::EmptyClipboard();
+					auto bytes = (g_ui.snap.text.size() + 1) * sizeof(wchar_t);
+					if(auto mem = ::GlobalAlloc(GMEM_MOVEABLE, bytes))
+					{
+						// `target`, not `p`: this file has a global `p`, and the
+						// shadowing warning is an error in the projects that
+						// enable it.
+						if(auto target = ::GlobalLock(mem))
+						{
+							::memcpy(target, g_ui.snap.text.c_str(), bytes);
+							::GlobalUnlock(mem);
+							// Ownership passes to the clipboard on success
+							// only, so the failure path still frees it.
+							if(!::SetClipboardData(CF_UNICODETEXT, mem))
+								::GlobalFree(mem);
+						}
+						else
+						{
+							::GlobalFree(mem);
+						}
+					}
+					::CloseClipboard();
+				}
+
+				void layout(int cx, int cy)
+				{
+					auto pad = 12;
+					auto button_w = 128, button_h = 30;
+					auto head_h = 24;
+
+					auto y = pad;
+					::MoveWindow(g_ui.head, pad, y, cx - pad * 2, head_h, TRUE);
+					y += head_h + pad / 2;
+
+					// The list gets a third of the height; the details pane
+					// takes what is left, because that is what people scroll.
+					auto list_h = std::max<int>(90, (cy - head_h - button_h * 2 - pad * 6) / 3);
+					::MoveWindow(g_ui.list, pad, y, cx - pad * 2, list_h, TRUE);
+					y += list_h + pad / 2;
+
+					::MoveWindow(g_ui.quarantine, pad, y, button_w, button_h, TRUE);
+					::MoveWindow(g_ui.release, pad + button_w + pad / 2, y, button_w, button_h, TRUE);
+					y += button_h + pad / 2;
+
+					auto detail_h = std::max<int>(80, cy - y - button_h - pad * 2);
+					::MoveWindow(g_ui.detail, pad, y, cx - pad * 2, detail_h, TRUE);
+					y += detail_h + pad / 2;
+
+					::MoveWindow(g_ui.refresh, pad, y, button_w, button_h, TRUE);
+					::MoveWindow(g_ui.copy, pad + button_w + pad / 2, y, button_w, button_h, TRUE);
+					::MoveWindow(g_ui.close, cx - pad - button_w, y, button_w, button_h, TRUE);
+				}
+
+				LRESULT CALLBACK Proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+				{
+					switch(msg)
+					{
+						case WM_SIZE:
+							layout(LOWORD(lParam), HIWORD(lParam));
+							return 0;
+
+						case WM_COMMAND:
+							switch(LOWORD(wParam))
+							{
+								case RC_QUARANTINE: set_quarantined(true); return 0;
+								case RC_RELEASE: set_quarantined(false); return 0;
+								case RC_REFRESH: populate(); return 0;
+								case RC_COPY: copy_report(); return 0;
+								case RC_CLOSE: ::DestroyWindow(hWnd); return 0;
+							}
+							return 0;
+
+						case WM_CTLCOLORSTATIC:
+							::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+							return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_BTNFACE));
+
+						case WM_DESTROY:
+							::PostQuitMessage(0);
+							return 0;
+					}
+					return ::DefWindowProcW(hWnd, msg, wParam, lParam);
+				}
+			}
+
+			int show()
+			{
+				auto instance = reinterpret_cast<HINSTANCE>(&__ImageBase);
+
+				WNDCLASSEXW wc{};
+				wc.cbSize = sizeof(wc);
+				wc.lpfnWndProc = Proc;
+				wc.hInstance = instance;
+				wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+				wc.hbrBackground = ::GetSysColorBrush(COLOR_BTNFACE);
+				wc.lpszClassName = L"Nilesoft.Shell.Reliability";
+				// The one icon the shared script defines; IDI_LOGO next to it
+				// carries a stray semicolon in Resource.h and cannot be used
+				// inside MAKEINTRESOURCEW.
+				wc.hIcon = ::LoadIconW(instance, MAKEINTRESOURCEW(IDI_RPMICON));
+				if(!::RegisterClassExW(&wc) && ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+					return 1;
+
+				g_ui.window = ::CreateWindowExW(
+					0, wc.lpszClassName, L"Nilesoft Shell - Reliability",
+					WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720,
+					nullptr, nullptr, instance, nullptr);
+				if(!g_ui.window)
+					return 1;
+
+				// The shell dialog font for prose, a fixed-pitch one for the
+				// two panes that are columns. Consolas has shipped since Vista;
+				// the fallback is whatever the system substitutes, which is
+				// still fixed-pitch because FIXED_PITCH is asked for.
+				NONCLIENTMETRICSW ncm{ sizeof(ncm) };
+				if(::SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+					g_ui.ui = ::CreateFontIndirectW(&ncm.lfMessageFont);
+
+				g_ui.mono = ::CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+										  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+										  CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+
+				g_ui.head = make(L"STATIC", L"", 0, RC_HEAD, g_ui.ui);
+				g_ui.list = make(L"LISTBOX", L"",
+								 LBS_NOTIFY | WS_VSCROLL | WS_HSCROLL, RC_LIST, g_ui.mono);
+				g_ui.quarantine = make(L"BUTTON", L"Quarantine", BS_PUSHBUTTON | WS_TABSTOP,
+									   RC_QUARANTINE, g_ui.ui);
+				g_ui.release = make(L"BUTTON", L"Release", BS_PUSHBUTTON | WS_TABSTOP,
+									RC_RELEASE, g_ui.ui);
+				g_ui.detail = make(L"EDIT", L"",
+								   ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL
+									   | WS_VSCROLL | WS_HSCROLL,
+								   RC_DETAIL, g_ui.mono);
+				g_ui.refresh = make(L"BUTTON", L"Refresh", BS_PUSHBUTTON | WS_TABSTOP,
+									RC_REFRESH, g_ui.ui);
+				g_ui.copy = make(L"BUTTON", L"Copy report", BS_PUSHBUTTON | WS_TABSTOP,
+								 RC_COPY, g_ui.ui);
+				g_ui.close = make(L"BUTTON", L"Close", BS_PUSHBUTTON | WS_TABSTOP,
+								  RC_CLOSE, g_ui.ui);
+
+				populate();
+
+				RECT rc{};
+				::GetClientRect(g_ui.window, &rc);
+				layout(rc.right - rc.left, rc.bottom - rc.top);
+
+				::ShowWindow(g_ui.window, SW_SHOW);
+				::UpdateWindow(g_ui.window);
+
+				MSG msg{};
+				while(::GetMessageW(&msg, nullptr, 0, 0) > 0)
+				{
+					if(::IsDialogMessageW(g_ui.window, &msg))
+						continue;
+					::TranslateMessage(&msg);
+					::DispatchMessageW(&msg);
+				}
+
+				if(g_ui.mono) ::DeleteObject(g_ui.mono);
+				if(g_ui.ui) ::DeleteObject(g_ui.ui);
+				g_ui = {};
+				return 0;
+			}
+		}
+	}
 }
 
 /*
@@ -1702,6 +2126,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 		bool _quarantine = false;
 		string quarantine_action;
 		string quarantine_argument;
+
+		// -reliability opens the window over the same data -report perf prints.
+		// docs/refactor/05-capabilities.md section 1.
+		bool _reliability = false;
 		//bool runglyphs = false;
         string cmd;
         for(auto op : cmdline)
@@ -1759,10 +2187,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 					if(!op->Value.empty())
 						quarantine_action = op->Value;
 				}
+				else if(op->has_name({ L"reliability", L"reliabilitycenter" }))
+				{
+					_reliability = true;
+				}
             }
 			else if(op->has_name(L"check"))
 			{
 				_check = true;
+			}
+			else if(op->has_name({ L"reliability", L"reliabilitycenter" }))
+			{
+				_reliability = true;
 			}
 			else if(_quarantine && quarantine_argument.empty())
 			{
@@ -1817,6 +2253,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 		if(_quarantine)
 		{
 			auto code = QuarantineCommand(quarantine_action, quarantine_argument);
+			_log->close();
+			return code;
+		}
+
+		if(_reliability)
+		{
+			// Reads every host's block and writes only the per-user quarantine
+			// file, so it needs no elevation and cannot change what a menu
+			// does while it is open.
+			// docs/refactor/05-capabilities.md section 1.
+			auto code = Nilesoft::Shell::Reliability::show();
 			_log->close();
 			return code;
 		}
@@ -2187,7 +2634,9 @@ BOOL CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, [[maybe_unused]] L
                 L"\t\tAdd `perf:all` for every recorded session, not just the slowest.\r\n"
                 L"-quarantine\tExtensions Shell stops asking when it builds a menu.\r\n"
                 L"\t\t-quarantine:add {clsid} / :remove {clsid} / :list (the default).\r\n"
-                L"\t\tThey keep working everywhere else. Next menu, no restart.\r\n\r\n"
+                L"\t\tThey keep working everywhere else. Next menu, no restart.\r\n"
+                L"-reliability\tThe same information in a window, with the quarantine\r\n"
+                L"\t\tactions beside it. Needs no elevation.\r\n\r\n"
                 //L"-runas:N\t\tLaunch with elevated privileges.\r\n"
                 //L"\t\tN=[admin | system | trustedinsaller]\r\n\r\n"
                 L"-?\t\tDispay this help message.\r\n\r\n"

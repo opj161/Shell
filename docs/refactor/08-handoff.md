@@ -218,7 +218,7 @@ consolidation the section wanted has happened anyway, in plain-old-data form —
 `complete_host_contract` — each of which is separately testable in a way a
 single struct would not have been.
 
-### 3.4 Reliability Center (§05.1) — everything except the window
+### 3.4 Reliability Center (§05.1) — complete, window included
 
 Four of the five rows §05.1 sketches now exist, in text, for every host on the
 desktop:
@@ -244,9 +244,14 @@ Explorer.EXE  pid 29804  x64  -  6 menus, 6 held
   activation, which is both surgical and the only version that saves the cost.
 - **Takeover** — `898c680`. Machine state, read from the registry by the manager.
 
-What is left is **the window**, and the "Repair takeover" action. Everything it
-would present is available and actionable from the command line today, which is
-why it is last rather than first — this is presentation over data that exists.
+- **The window** — §05.1d, `shell.exe -reliability`. The rows above, merged
+  across hosts and sorted slowest first, with Quarantine and Release beside
+  them.
+
+"Repair takeover" is deliberately absent: everything else in that window reads
+state or writes a per-user file, so it needs no elevation, and repair means
+writing HKLM. `shell.exe -register -treat` already does it and the `Takeover`
+block says when it is needed.
 
 ### 3.5 CoCI router de-dup and `priority` — **landed**, see §01.9b
 
@@ -269,8 +274,12 @@ The tally against `00-master-plan.md` §3: **fourteen items closed** — built, 
 measured and declined with the numbers written down — **three partial**, **three
 open**.
 
-**The Reliability Center window (§05.1).** Additive, no risk to the menu path,
-and verifiable by launching it. It is presentation over data that all exists.
+**The Reliability Center window (§05.1) — landed.** `shell.exe -reliability`:
+the providers every host asked, merged and sorted slowest first, with
+Quarantine and Release beside them, over the exact text `-report perf` prints.
+§05.1d. Looking at the real window found two defects no test written beforehand
+would have had reason to check — six CLSIDs from one handler family rendering
+as the same truncated string, and a raw mnemonic marker in a title.
 
 **Interception backend abstraction (§01.9, backlog item 8) — settled, and mostly
 declined.** *This section used to omit it altogether*, which is how the master
