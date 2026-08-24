@@ -8,6 +8,7 @@
 #include "Include/PackageCatalogService.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/TaskbarHitCache.h"
+#include "Include/TaskbarHitStats.h"
 #include "Include/TaskbarOrigin.h"
 #include "Library/detours.h"
 #include "RegistryConfig.h"
@@ -300,17 +301,26 @@ public:
 	}
 
 	Nilesoft::Shell::TaskbarHitCache &cache() { return _cache; }
+	Nilesoft::Shell::TaskbarHitStats &stats() { return _stats; }
 
 	// Called on the taskbar's UI thread. Returns the cached answer when there is
 	// one, otherwise hands the point to the worker and waits out the budget.
 	bool query(HWND taskbar, POINT pt, bool secondary)
 	{
+		using Outcome = Nilesoft::Shell::TaskbarHitStats::Outcome;
+
 		auto now = ::GetTickCount64();
 		if(auto hit = _cache.lookup(taskbar, pt, now); hit)
+		{
+			_stats.record(Outcome::CacheHit, 0);
 			return *hit;
+		}
 
 		if(!ensure_started())
+		{
+			_stats.record(Outcome::Unavailable, 0);
 			return false;
+		}
 
 		// One question at a time. Taskbars on several monitors can be serviced by
 		// different threads, and without this the second caller would overwrite
@@ -332,9 +342,16 @@ public:
 		::ResetEvent(_done);
 		::SetEvent(_work);
 
+		// The wait is the thing docs/refactor/02 section 5 asks to be counted,
+		// so it is timed whether or not anybody has turned logging on.
+		LARGE_INTEGER wait_start{};
+		::QueryPerformanceCounter(&wait_start);
+
 		DWORD index = 0;
 		::SetLastError(ERROR_SUCCESS);
 		auto hr = ::CoWaitForMultipleHandles(0, BUDGET_MS, 1, &_done, &index);
+
+		auto waited_us = elapsed_microseconds(wait_start);
 
 		bool answer = false;
 		bool answered = false;
@@ -349,9 +366,14 @@ public:
 			// Timed out, or the wait could not run, or what is on the slot
 			// belongs to an earlier request. Let Windows handle this click; the
 			// worker still publishes its answer to the cache for next time.
+			//
+			// This is the outcome that costs the user a menu, and until it was
+			// counted there was no way to know it had ever happened.
+			_stats.record(Outcome::TimedOut, waited_us);
 			return false;
 		}
 
+		_stats.record(Outcome::Answered, waited_us);
 		_cache.store(taskbar, pt, answer, ::GetTickCount64());
 		return answer;
 	}
@@ -366,6 +388,20 @@ private:
 	};
 
 	TaskbarUiaWorker() = default;
+
+	static uint32_t elapsed_microseconds(const LARGE_INTEGER &start) noexcept
+	{
+		auto per_ms = perf::MenuPerf::ticks_per_ms();
+		if(per_ms <= 0.0)
+			return 0;
+
+		LARGE_INTEGER now{};
+		::QueryPerformanceCounter(&now);
+		auto us = static_cast<double>(now.QuadPart - start.QuadPart) / per_ms * 1000.0;
+		if(us < 0.0)
+			return 0;
+		return static_cast<uint32_t>(us);
+	}
 
 	bool ensure_started()
 	{
@@ -425,6 +461,13 @@ private:
 		if(SUCCEEDED(com))
 			uia.CreateInstance(__uuidof(CUIAutomation), CLSCTX_INPROC_SERVER);
 
+		// Built once, used for every question. Asking for the three properties
+		// up front turns four marshalled calls to the provider into one; see
+		// evaluate() for the measurement and for why that is worth doing.
+		IComPtr<IUIAutomationCacheRequest> properties;
+		if(uia)
+			build_property_request(uia, properties);
+
 		for(;;)
 		{
 			::WaitForSingleObject(_work, INFINITE);
@@ -435,7 +478,7 @@ private:
 				request = _request;
 			}
 
-			auto allowed = uia ? evaluate(uia, request) : false;
+			auto allowed = uia ? evaluate(uia, properties, request) : false;
 
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
@@ -450,13 +493,63 @@ private:
 		}
 	}
 
-	// Everything UI Automation touches stays inside this function, on this
-	// thread. No element pointer is stored or returned.
-	static bool evaluate(IComPtr<IUIAutomation> &uia, const Request &request)
+	/*
+		The three properties the verdict depends on, asked for in advance.
+
+		A cache request names the properties an element should carry when it
+		comes back, so the element and its properties arrive in one call instead
+		of one call for the element and one per property. AutomationElementMode_None
+		is what the docs call for when only cached data will be read - the
+		element "has no reference to the underlying UI and contains only cached
+		information", which is exactly this case and is cheaper to produce:
+
+			https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation-elementfrompointbuildcache
+			https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/ne-uiautomationclient-automationelementmode
+	*/
+	static void build_property_request(IComPtr<IUIAutomation> &uia,
+									   IComPtr<IUIAutomationCacheRequest> &request)
+	{
+		if(FAILED(uia->CreateCacheRequest(request)) || !request)
+			return;
+
+		request->AddProperty(UIA_AutomationIdPropertyId);
+		request->AddProperty(UIA_ClassNamePropertyId);
+		request->AddProperty(UIA_NamePropertyId);
+		request->put_TreeScope(TreeScope_Element);
+		request->put_AutomationElementMode(AutomationElementMode_None);
+	}
+
+	/*
+		Everything UI Automation touches stays inside this function, on this
+		thread. No element pointer is stored or returned.
+
+		Measured on this machine (Windows 11 26200.8875 x64, 2026-08-24) over a
+		1440-point grid covering the whole taskbar, out of process:
+
+			ElementFromPoint + three get_Current* reads   p50 2.78 ms, p95 4.28 ms
+			ElementFromPointBuildCache + cached reads     p50 2.25 ms, p95 3.25 ms
+
+		Half a millisecond is not why this is written the way it is - the win is
+		that a wedged provider now has one call to hang in rather than four,
+		which is what the 250 ms budget above exists to survive. The two forms
+		were checked to agree on the verdict at all 1440 points, and neither
+		returns a NULL BSTR for the TaskbarFrame's empty name, so the guard
+		below keeps its meaning.
+	*/
+	static bool evaluate(IComPtr<IUIAutomation> &uia,
+						 IComPtr<IUIAutomationCacheRequest> &properties,
+						 const Request &request)
 	{
 		IComPtr<IUIAutomationElement> element;
-		if(FAILED(uia->ElementFromPoint(request.pt, element)) || !element)
+		if(properties)
+		{
+			if(FAILED(uia->ElementFromPointBuildCache(request.pt, properties, element)) || !element)
+				return false;
+		}
+		else if(FAILED(uia->ElementFromPoint(request.pt, element)) || !element)
+		{
 			return false;
+		}
 
 		struct elem_t
 		{
@@ -483,9 +576,21 @@ private:
 		id=[SystemTrayIcon], type=[SystemTray.OmniButton], name=[Clock 7:04 PM 3/20/2023]
 		id=[SystemTrayIcon], type=[SystemTray.ShowDesktopButton], name=[Show Desktop]
 		*/
-		element->get_CurrentAutomationId(&elem.id);
-		element->get_CurrentClassName(&elem.type);
-		element->get_CurrentName(&elem.name);
+		// Cached reads when the element was built with the request, live ones
+		// when it was not - AutomationElementMode_None means a cached element
+		// has nothing to read a Current property from.
+		if(properties)
+		{
+			element->get_CachedAutomationId(&elem.id);
+			element->get_CachedClassName(&elem.type);
+			element->get_CachedName(&elem.name);
+		}
+		else
+		{
+			element->get_CurrentAutomationId(&elem.id);
+			element->get_CurrentClassName(&elem.type);
+			element->get_CurrentName(&elem.name);
+		}
 
 		if(!elem.name || !elem.type || !elem.id)
 			return false;
@@ -510,6 +615,7 @@ private:
 	}
 
 	Nilesoft::Shell::TaskbarHitCache _cache;
+	Nilesoft::Shell::TaskbarHitStats _stats;
 
 	std::mutex _start_mutex;
 	std::atomic<bool> _started{ false };

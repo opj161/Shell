@@ -123,6 +123,7 @@
     <ClCompile Include="test_manifest.cpp" />
     <ClCompile Include="test_path.cpp" />
     <ClCompile Include="test_taskbar_origin.cpp" />
+    <ClCompile Include="test_taskbar_stats.cpp" />
     <ClCompile Include="test_path_bounds.cpp" />
     <ClCompile Include="test_comptr.cpp" />
     <ClCompile Include="test_window_text.cpp" />

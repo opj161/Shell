@@ -345,6 +345,70 @@ only — no COM call, no wait. The bounded `CoWaitForMultipleHandles` path remai
 the fallback for a cold layout, and the ring records how often it is taken; that
 frequency, not the wait itself, is the number to drive to zero.
 
+### 5a. Measured 2026-08-24 — the rectangle model is wrong, and the wait is not the problem
+
+Stage 2 has two halves, and measurement separated them: one is a behaviour
+change disguised as an optimisation, the other is real but small. The probe
+walked a 1440-point grid covering the whole taskbar (Windows 11 26200.8875 x64,
+1920×48 taskbar, 33 automation elements), asking `ElementFromPoint` at each
+point and comparing the answer against a rectangle model built from a cached
+subtree request — exactly what the sketch above proposes.
+
+**The rectangle model does not reproduce `ElementFromPoint`.** Two natural
+formulations were tried and both are wrong:
+
+| Model | Agreement with `ElementFromPoint` |
+|---|---|
+| innermost element of the whole subtree containing the point | **49.58 %** |
+| innermost element of the `TaskbarFrame` subtree only | **84.17 %** |
+
+The first fails because a `Windows.UI.Input.InputSite.WindowClass` element spans
+`(0,1032)-(960,1056)` — an invisible input-site host covering the left half of
+the taskbar's top 24 px — which `ElementFromPoint` never returns but which wins
+any innermost-rectangle test. The second fails in the direction that costs the
+user something: `TaskbarFrame`'s rectangle spans the entire taskbar while the
+notification icons live under a *separate* HWND subtree (`TrayNotifyWnd`), so
+228 points across the system tray are classified as background. That is Shell's
+menu appearing when the user right-clicks a tray icon.
+
+Making it correct would need a hand-curated list of container classes to
+exclude — undocumented names, matched literally, breaking silently on the next
+Windows update — and a refresh policy, because the rectangles go stale every
+time a taskbar button is added or removed. **Declined.** `ElementFromPoint`
+stays the authority. A future attempt has to beat 84.17 %, not start from it.
+
+**What the wait actually costs**, over the same grid, out of process:
+
+| | p50 | p95 | first (cold) |
+|---|---|---|---|
+| `ElementFromPoint` + three `get_Current*` (shipping) | 2.78 ms | 4.28 ms | 18.6 ms |
+| `ElementFromPointBuildCache` + cached reads | **2.25 ms** | **3.25 ms** | **3.0 ms** |
+
+So the cached request is worth having, but not for the half-millisecond: it
+turns four marshalled calls into one, which means a wedged provider has one call
+to hang in rather than four inside the same 250 ms budget. The two forms were
+checked to agree on the verdict at **all 1440 points**, and neither returns a
+NULL `BSTR` for the `TaskbarFrame`'s empty name — which the shipping guard
+rejects on — so the swap is behaviour-preserving. Landed in
+`TaskbarUiaWorker::evaluate`.
+
+The rectangle hit-test itself, for reference, costs 0.0002 ms per point against
+2.25 ms for the COM call. The prize was never in doubt; the correctness was.
+
+**What was missing is the number this section's own acceptance names.** Nothing
+recorded how often the bounded wait is taken, and nothing recorded the outcome
+that costs a user their menu — the budget elapsing, after which `query` returns
+false and Windows handles the click silently. `Include/TaskbarHitStats.h` counts
+all four outcomes (cache hit, answered, timed out, worker unavailable) with one
+relaxed atomic increment per right-click, always on. It is deliberately not a
+`MenuSessionRecord` phase: the hit-test decides whether there will *be* a menu,
+so it runs before any session exists and `session_phase()` would drop it.
+
+Revisit the layout snapshot only if that counter shows the wait being taken
+often *and* timing out. Until then the ordering is: cache hit is free, the wait
+costs ~2.3 ms, and a rectangle model would trade 15.8 % of the taskbar's area
+for it.
+
 ## 6. Diagnostics ring (always-on, zero-cost)
 
 Today `MenuPerf` is opt-in because Logger opens/appends/closes per line (AGENTS.md
