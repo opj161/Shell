@@ -6365,8 +6365,91 @@ namespace Nilesoft
 
 		HHOOK m_hHook = NULL;
 
+		/*
+			Is the vertical-blank wait wanted?
+
+				HKCU\SOFTWARE\Nilesoft\Shell    flicker    REG_DWORD    0
+
+			docs/refactor/02-first-paint-latency.md section 4 asks for this to be
+			"registry-gated ... benchmark ON/OFF ... delete or capability-gate
+			per build". Default on, because turning it off by default would be
+			deciding the visual question this machine cannot answer.
+
+			What it costs is now measured rather than argued about. The wait is
+			a Sleep to the next vertical blank, so it is bounded by one refresh
+			period and averages half of one. It sits in WM_NCCALCSIZE, which
+			runs inside the tracking call - *after* popup.total_pre_display has
+			already been stopped - so until the phase below existed this was
+			latency the user paid that no report showed.
+
+			A/B on one build, a real Explorer, ten menus each, Windows 11
+			26200.8875 x64 at 59 Hz (2026-08-24):
+
+				                    menu.flicker_wait      popup.total_pre_display
+				flicker = 1 (default)  7.0 ms avg,           15.8 ms avg
+				                       1.9 - 15.1 ms
+				flicker = 0            0 ms                  16.0 ms avg
+
+			So it adds about seven milliseconds to every menu, capped at one
+			refresh period, and pre-display is unchanged either way - which is
+			the point: the cost lands after the phase everybody was measuring.
+			Right-click to pixels is roughly 23 ms with it and 16 ms without.
+
+			It also calls timeBeginPeriod, which raises the *system* timer
+			resolution for the whole of explorer.exe while it is held. That is
+			the part with a blast radius beyond this menu.
+
+			Not deleted, and the reason is a limit rather than a preference:
+			what it buys is a visual artefact during window creation. A
+			screenshot cannot show a transient, and nothing here can judge
+			whether the flicker returns without it. So it is measured, it is
+			switchable, and the visual half stays an open question for somebody
+			with the menu in front of them.
+		*/
+		inline bool flicker_fix_enabled()
+		{
+			// -1 = not probed, 0 = off, 1 = on. Read once: it is a developer
+			// switch, and re-reading it inside WM_NCCALCSIZE would put a
+			// registry call on the path being measured.
+			static std::atomic<int> state{ -1 };
+
+			auto value = state.load(std::memory_order_relaxed);
+			if(value < 0)
+			{
+				int configured = 1;
+				try
+				{
+					if(!RegistryConfig::get(nullptr, L"flicker", configured))
+						configured = 1;
+				}
+				catch(...)
+				{
+					configured = 1;
+				}
+				value = configured ? 1 : 0;
+				state.store(value, std::memory_order_relaxed);
+			}
+			return value != 0;
+		}
+
 		inline void fix_ugly_flicker()
 		{
+			auto enabled = flicker_fix_enabled();
+
+			// Recorded whether or not the wait happens, with the gate's state as
+			// the count: n=1 waited, n=0 switched off. A phase that vanished
+			// when disabled would leave a report unable to distinguish "this
+			// build does not have the wait" from "this machine turned it off",
+			// which is the one thing somebody comparing two reports needs.
+			//
+			// Inside the tracking call and on the menu thread, so the session
+			// the hook opened is still current and this lands in the same
+			// record as everything else.
+			Diagnostics::MenuPerfScope perf(L"menu.flicker_wait");
+			perf.annotate(enabled ? 1 : 0);
+			if(!enabled)
+				return;
+
 			LARGE_INTEGER freq, now0, now1;
 			::QueryPerformanceFrequency(&freq); // hz
 

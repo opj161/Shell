@@ -107,7 +107,8 @@ namespace Nilesoft
 			// which is exactly why the version had to move - record_size alone
 			// would not have caught it, and a version-1 host's zeroed reserved
 			// field would have read as "this host passes no TPM flags at all".
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 2;
+			// 3: PERF_EXPORT_PHASES 16 -> 24.
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 3;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -120,11 +121,18 @@ namespace Nilesoft
 			inline constexpr size_t PERF_EXPORT_NAME = 40;		// phase name, wchar_t
 			inline constexpr size_t PERF_EXPORT_HOST = 64;		// host image file name
 
-			// 16 phases against the ring's 24. The menu path names eleven and
-			// the hook adds three, so this is the normal case plus headroom -
-			// and `dropped_phases` says when it was not enough, which is the
-			// rule the ring's own header sets: overflow is counted, not hidden.
-			inline constexpr uint8_t PERF_EXPORT_PHASES = 16;
+			// The same 24 the ring holds.
+			//
+			// This was 16, on the reasoning that the menu path names eleven and
+			// the hook adds three. Measured in a real Explorer, an ordinary
+			// takeover records fifteen and the first menu in a process records
+			// more - so the cap was being hit in normal use, and the phases it
+			// dropped were the ones after popup.total_pre_display, which is
+			// exactly where the interesting late work happens. `dropped_phases`
+			// said so, which is the only reason it was noticed.
+			//
+			// Costs 8 more phases per record: 704 bytes a record, 11 KB a host.
+			inline constexpr uint8_t PERF_EXPORT_PHASES = 24;
 			inline constexpr uint8_t PERF_EXPORT_PROVIDERS = 8;
 
 			// 16 sessions, ~24 KB of shared commit. This is mapped into every
