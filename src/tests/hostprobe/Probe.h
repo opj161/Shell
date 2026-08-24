@@ -168,6 +168,8 @@ namespace hostprobe
 			_draw_items.store(0);
 			_selected_item.store(0);
 			_selected_is_popup.store(false);
+			_target_armed.store(false);
+			_target_reached.store(false);
 			::ResetEvent(_menu_up);
 
 			// The alias table assigns numbers in first-seen order, so claiming
@@ -272,53 +274,81 @@ namespace hostprobe
 		// happened to be slow enough for the opening highlight to arrive before
 		// this thread first looked.
 		//
-		// Stopping is now decided by the menu rather than by a number: once the
-		// highlight returns to somewhere it has already been, the whole list has
-		// been walked. The check runs *before* the first step for the same
-		// reason - the menu may already be sitting on the destination, and
-		// whether it got there before or after this thread started watching is a
-		// race no test should depend on.
+		// Arrival is noticed by the *message handler*, not by reading the
+		// selection back after each keypress. One press does not always produce
+		// one notification - a separator is skipped silently, and a menu Shell
+		// composed can move the highlight twice - so a driver that reads once
+		// per press steps straight over its destination and keeps walking. That
+		// is what made this intermittently claim the item did not exist.
+		//
+		// Two further rules, both learned the same way:
+		//
+		//  - The target is armed *before* anything is pressed, because the menu
+		//    may already be sitting on it. Whether the opening highlight arrives
+		//    before or after this thread starts watching is a race no test
+		//    should depend on.
+		//  - Walking stops when the highlight has gone a long stretch without
+		//    reaching anywhere new - not at the first repeat. WM_MENUSELECT
+		//    reports an *identifier*, and a composed menu repeats them: every
+		//    item without one reports zero, and mirrored natives from different
+		//    subtrees collide. A repeat is not proof of a full lap.
 		bool navigate_to(const Target &target)
 		{
 			if(!target.valid)
 				return true;
 
-			std::vector<std::pair<UINT, bool>> visited;
-			auto matches = [&target](UINT item, bool popup)
-			{
-				return item == target.item && popup == target.is_popup;
-			};
+			arm_target(target);
 
-			// Two laps' worth of presses is the backstop for a menu whose
-			// highlight never settles; the visited set is what normally ends it.
-			for(int attempt = 0; attempt < 400; attempt++)
+			std::vector<std::pair<UINT, bool>> visited;
+			int stale = 0;
+			constexpr int STALE_LIMIT = 60;
+			constexpr int STEP_LIMIT = 300;
+
+			for(int attempt = 0; attempt < STEP_LIMIT && stale < STALE_LIMIT; attempt++)
 			{
+				if(_target_reached.load())
+					return true;
+
 				if(_select_count.load() != 0)
 				{
-					auto item = _selected_item.load();
-					auto popup = _selected_is_popup.load();
-					if(matches(item, popup))
-						return true;
-
-					std::pair<UINT, bool> here{ item, popup };
-					if(attempt > 0)
+					std::pair<UINT, bool> here{ _selected_item.load(),
+												_selected_is_popup.load() };
+					bool seen = false;
+					for(auto &v : visited)
 					{
-						bool seen = false;
-						for(auto &v : visited)
-						{
-							if(v == here) { seen = true; break; }
-						}
-						if(seen)
-							return false;
+						if(v == here) { seen = true; break; }
 					}
-					visited.push_back(here);
+					if(seen)
+						stale++;
+					else
+					{
+						visited.push_back(here);
+						stale = 0;
+					}
 				}
 
 				// A step that produced no notification was not read by the menu
 				// loop, so it costs an attempt and not a position.
 				step(VK_DOWN);
 			}
-			return false;
+
+			return _target_reached.load();
+		}
+
+		void arm_target(const Target &target)
+		{
+			_target_item.store(target.item);
+			_target_is_popup.store(target.is_popup);
+			_target_reached.store(false);
+			_target_armed.store(true);
+
+			// Armed last so the handler cannot match a stale destination, and
+			// checked here so a highlight that arrived before arming is not
+			// missed either.
+			if(_select_count.load() != 0
+			   && _selected_item.load() == target.item
+			   && _selected_is_popup.load() == target.is_popup)
+				_target_reached.store(true);
 		}
 
 		void drive()
@@ -403,9 +433,20 @@ namespace hostprobe
 				// opens a drop-down menu or submenu, this parameter contains the
 				// index of the drop-down menu or submenu in the main menu."
 				// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menuselect
-				_selected_item.store(LOWORD(wp));
-				_selected_is_popup.store((HIWORD(wp) & MF_POPUP) != 0);
+				auto item = static_cast<UINT>(LOWORD(wp));
+				auto popup = (HIWORD(wp) & MF_POPUP) != 0;
+
+				_selected_item.store(item);
+				_selected_is_popup.store(popup);
 				_select_count.fetch_add(1);
+
+				// Latched here rather than sampled by the driver, so a
+				// destination the highlight only passed through is still an
+				// arrival. See navigate_to.
+				if(_target_armed.load()
+				   && item == _target_item.load()
+				   && popup == _target_is_popup.load())
+					_target_reached.store(true);
 			}
 
 			if(msg == WM_MENUCHAR && _policy.handle_menuchar)
@@ -570,6 +611,13 @@ namespace hostprobe
 		std::atomic<size_t> _draw_items{ 0 };
 		std::atomic<UINT> _selected_item{ 0 };
 		std::atomic<bool> _selected_is_popup{ false };
+
+		// Where the script wants the highlight, and whether it has ever been
+		// there. Latched by the message handler; see navigate_to.
+		std::atomic<bool> _target_armed{ false };
+		std::atomic<UINT> _target_item{ 0 };
+		std::atomic<bool> _target_is_popup{ false };
+		std::atomic<bool> _target_reached{ false };
 		bool _navigation_failed{};
 
 	public:
