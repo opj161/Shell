@@ -1,4 +1,4 @@
-# 05 — Capabilities: highest user value per unit of scope
+﻿# 05 — Capabilities: highest user value per unit of scope
 
 Selection criterion (per charter): features that exploit what only a takeover engine
 can see or do, reusing machinery that already exists, without new frameworks. Ranked.
@@ -57,6 +57,34 @@ ProgramData, compiled into `ComActivationPolicy`, §01.9) so it survives reloads
 user-editable like any NSS-adjacent artifact. Undo = delete line / click.
 
 Scope: M-L but staged — telemetry-only first (lands with §02), UI second.
+
+**Both prerequisites now exist.** The telemetry landed with the ring (`1f17d00`),
+and the export it needed in order to leave the process landed as
+`shell.exe -report perf` (§06.4). That command already prints most of the "Last
+menus" and "Providers" rows above, in text, for every host on the desktop:
+
+```text
+Explorer.EXE  pid 41272  x64  -  8 menus, 8 held
+    pre-display  p50 13.2 ms   p95 58.2 ms   n=8
+    decisions    8 takeover
+    host flags   RETURNCMD|RIGHTBUTTON
+    slowest      58.2 ms to display  takeover  6.7s ago
+                   explorer.commands          57.0 ms  n=23
+                   popup.total_pre_display    58.2 ms
+                   menu.flicker_wait           4.6 ms  n=1
+                   provider e345019d  6.4 ms  ok
+```
+
+What is still missing for the window: provider **names** — the ring carries a
+CLSID hash rather than a name, deliberately, so that a report can say "these
+forty menus were all the same handler" without carrying strings around the
+measured path, and the Reliability Center will have to resolve them from the
+catalog at display time — plus the quarantine action and the "Repair takeover"
+row.
+
+The `Takeover` line's inputs also all exist now: `RegistryConfig::ModernMenuRedirectedToUs()`
+answers the TreatAs half (§01.9b), `IATHook::installed()` the interception half,
+and `TaskbarHitStats` the taskbar half.
 
 ## 2. One-shot native bypass ("Windows menu, this time")
 

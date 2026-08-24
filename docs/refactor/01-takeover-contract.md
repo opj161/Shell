@@ -1,4 +1,4 @@
-# 01 — Takeover contract: session, host translation, native bridge, interception
+﻿# 01 — Takeover contract: session, host translation, native bridge, interception
 
 Goal: make takeover an explicit **translation layer between two contracts** (Audit 2 §1)
 instead of scattered flags and ad-hoc guards. Nothing here changes what the user sees;
@@ -499,52 +499,89 @@ Not worth it in that trade. Revisit if the ring ever shows the empty-policy
 Explorer case mattering, or alongside the `TakeoverRouter` work, where the
 decision has somewhere natural to live.
 
-### 9b. The router de-dup, traced but not changed (2026-08-24)
+### 9b. The router de-dup, and `priority` on a `-treat` machine - settled by measurement (2026-08-24)
 
 §9's last bullet - "TreatAs is authoritative when healthy; CoCI override only as
-fallback, never both by default" - is still open, and tracing it turned the
-problem into something more specific than tidiness.
+fallback, never both by default" - is now answered, and the answer is not the
+one the bullet implies.
 
 **Both mechanisms are live on a `-treat` machine, and they reach the same
 outcome by different routes.**
 
 - `CoCreateInstanceHook` returns `E_NOINTERFACE` for
-  `IID_FileExplorerContextMenu` whenever `settings.priority` evaluates truthy
-  (`Main.cpp`, the first branch). Explorer cannot create the modern menu and
-  falls back to the classic one, which Shell then takes over.
-- The `TreatAs` redirect on `{86ca1aa0-…}` makes COM substitute Shell's own
+  `IID_FileExplorerContextMenu` whenever `settings.priority` evaluates truthy.
+  Explorer cannot create the modern menu and falls back to the classic one,
+  which Shell then takes over.
+- The `TreatAs` redirect on `{86ca1aa0-...}` makes COM substitute Shell's own
   CLSID. `DllGetClassObject` accepts it - `rclsid` *is* `IID_ContextMenu` - and
   hands back a class factory whose object does not implement whatever interface
   the modern menu asked for, so the activation fails there instead. Same
   outcome, one COM round trip and a DLL load later.
 
-**The user-visible consequence is that `priority = 0` does nothing on a machine
-registered with `-treat`.** The setting exists to let the modern menu win; the
-redirect overrules it silently, and nothing says so. That is the defect hiding
-behind the de-dup, and it is the reverse of what §9's bullet implies: making
-TreatAs unconditionally authoritative would make `priority` permanently
-meaningless rather than fixing it.
+#### What the four experiments showed
 
-**Not changed here, deliberately.** This is the single most user-visible
-behaviour on Windows 11, the two mechanisms are registered at different times
-(install versus config publish), and the experiment that would settle it needs
-writing to the installed `shell.nss` - which sits in `Program Files` and is not
-writable by the user account whose Explorer would have to reload it. Guessing
-at it at the end of a session is how the Win11 menu gets broken for everyone.
+Run on a real machine by editing the installed `shell.nss` under elevation,
+restarting Explorer, and reading back which window class the desktop
+right-click produced. Windows 11 26200.8875 x64:
 
-The experiment, for whoever picks this up:
+| TreatAs | `priority` | menu |
+| --- | --- | --- |
+| ours | 1 | classic - `#32768`, Shell's |
+| ours | 0 | **classic - Shell's.** The setting is inert |
+| absent | 0 | modern - `Microsoft.UI.Content.PopupWindowSiteBridge` |
+| absent | 1 | classic - Shell's |
 
-1. On a `-treat`-registered machine, set `priority = 0` and confirm the
-   modern menu still does not appear. That is the defect, reproduced.
-2. Make the CoCI branch conditional on the redirect *not* being ours -
-   the check already exists as a shape in `RegistryConfig.h`, the
-   `RegGetValueW` on `CLSID\{86ca1aa0-…}\TreatAs` compared against
-   `CLS_ContextMenu` - cached like `IsRegisteredCached`.
-3. Confirm `priority = 0` now shows the modern menu, `priority = 1` does not,
-   and an unregistered-`TreatAs` machine is unchanged in both.
+So `priority` does exactly what it says when there is no redirect, and nothing
+at all when there is one.
 
-Step 2 is small. Steps 1 and 3 are the work, and they need a machine whose
-`shell.nss` can be edited and whose Explorer can be restarted repeatedly.
+#### Why it cannot be fixed by making the setting authoritative
+
+Three things close that door, and it is worth recording them so the next reader
+does not re-derive them:
+
+1. **COM does not fall back to the original class when a `TreatAs` substitute
+   fails.** Refusing the redirected activation from `DllGetClassObject` lands on
+   the classic menu too - the same outcome, for a different reason.
+2. **There is no per-call opt-out of `TreatAs`.** `CoCreateInstance` honours the
+   registry; `CoTreatAsClass` would have to *write* to it.
+3. **Removing the redirect is machine-wide HKLM state and an elevated act**, not
+   something a configuration file read by every host process gets to do.
+
+On a machine registered with `-treat` the modern menu is gone until somebody
+runs `shell.exe -unregister -treat`. That is the honest answer rather than a
+bug in the setting, and making `TreatAs` "authoritative when healthy" would be
+the same behaviour with a different name.
+
+#### What was changed
+
+**The waste.** When the redirect is ours the answer is already decided, so
+`CoCreateInstanceHook` no longer builds a `Context` and evaluates an expression
+on every `IID_FileExplorerContextMenu` activation to reach it. That is the
+"router de-dup" this section was about, and it is behaviour-preserving by the
+table above. `RegistryConfig::ModernMenuRedirectedToUsCached()` reads HKCR -
+the merged view COM itself resolves against, so a per-user redirect shadowing
+the machine one is seen - on the same two-second terms as `IsRegisteredCached`.
+
+**The silence.** `shell.exe -check` now says when `priority = 0` will do
+nothing, which is where somebody who has just written it will look. A note
+rather than an error, and the exit code stays 0: the configuration is valid.
+`ConfigCheckResult` gained one field at the end for it, which is what its
+`cbSize` at offset 0 has always been for.
+
+`priority` is an *expression*, so a validator that runs on a file can only
+speak for the cases where it is a constant; anything else is reported as
+dynamic rather than guessed at.
+
+#### One trap found on the way
+
+`Object` declares a non-template `explicit operator bool` meaning *not null*,
+and separately a template conversion for numeric types meaning *not zero*.
+Being non-template, the explicit operator wins `static_cast<bool>` - so a
+numeric zero casts to **true**, and `priority = 0` read that way reports as
+switched on. The hook next door is correct by accident, because it assigns to a
+`bool`, where the explicit operator is not a candidate. Use `to_bool()`;
+`test_expression.an_objects_truth_is_to_bool_not_a_cast` fails if that is ever
+"simplified" back into a cast.
 
 ## 10. Acceptance criteria for this doc
 

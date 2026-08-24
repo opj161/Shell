@@ -1,4 +1,4 @@
-# 06 — Phases, test harness, regression gates
+﻿# 06 — Phases, test harness, regression gates
 
 Execution order merges A1§24 and A2§30 with the validated backlog; every phase ends
 shippable. Machine-dependent verification is called out explicitly (this repo's AGENTS
@@ -94,6 +94,12 @@ in each is stated below rather than in a separate tracker.
 | ✅ | The circuit breaker no longer counts deliberate declines, which had switched takeover off after three popups in any non-Explorer host | 3 |
 | ✅ | MSAA (§05.3) — confirmed against Shell's own composed menu in a real `explorer.exe`; closed as already satisfied | 5 |
 | ✅ | Smart columns (§05.5) — `settings columns = N`; measured on a real menu, 239×1031 scrolling → 938×990 in four columns | 5 |
+| ✅ | **Ring export** (§4) — `shell.exe -report perf` reads menu timings out of any host on the desktop. Pre-display measured in a real Explorer at **10.3 ms p50 warm**, inside the 15 ms budget | 1 |
+| ✅ | **Deploy ordering** — Explorer was mapping the build *before* the one just deployed, so every real-host result on this branch had been one build stale | 0 |
+| ✅ | `priority` versus the `TreatAs` redirect (§01.9b) — measured four ways; de-duplicated, and `shell.exe -check` now says when the setting is inert | 3 |
+| ✅ | Host tracking flags in the report — which half of `complete_host_contract` a real host exercises. Explorer and Everything both set `TPM_RETURNCMD` | 2 |
+| ✅ | Flicker A/B (§02.4a) — 7.0 ms per menu, landing *after* `popup.total_pre_display` stops. Gated on `flicker`, reported as its own phase | 2 |
+| ◐ | Third-party hosts (§3.1) — Everything driven and the breaker fix confirmed there; a *file* menu in Everything or Opus still open | 5 |
 
 ### What the harness settled (2026-08-24)
 
@@ -409,10 +415,29 @@ Baseline first, then per-phase re-measure (AGENTS.md "measure before optimising"
 HKCU\SOFTWARE\Nilesoft\Shell  perf  REG_DWORD  <floor-ms>   # existing phase timers
 ```
 
-Plus ring export (`shell.exe -report perf`) for distributions. Budgets set from measured
-p95/p99 on the reference machine, not invented: initial targets — pre-display added by
-Shell ≤ 15 ms p95 Explorer file context; taskbar hit-test added ≤ 2 ms; catalog refresh
-never on menu thread (hard gate, not budget).
+**The ring export exists now** — `shell.exe -report perf`, and `perf:all` for every
+recorded session rather than the slowest. It needs no registry value and reads every
+host on the desktop, which is what makes the budget below checkable where it matters.
+
+First measurement against that budget, a real Explorer, Windows 11 26200.8875 x64,
+2026-08-24: **pre-display p50 10.3 ms warm, 60 ms on the first menu in a process.**
+Inside the 15 ms p95 target for the warm case; the cold outlier is the first
+activation of every packaged verb handler, and is what §02.1 step 5's persistence
+decision is about.
+
+One correction the export forced. `popup.total_pre_display` stops before Shell starts
+tracking, so it does not include the vertical-blank wait in `WM_NCCALCSIZE` — another
+**7.0 ms on average** (§02.4a). Right-click to pixels is therefore ~23 ms, not the
+~16 ms the phase alone reports, and a budget written against that phase is measuring
+about two thirds of what the user waits for.
+
+Two things about measuring on a real Explorer that silently invalidate a run, both now
+in `AGENTS.md`: a registry value set from an agent's shell is not visible to Explorer
+at all, and a deploy that stops Explorer before copying gives it the previous build.
+
+Budgets set from measured p95/p99 on the reference machine, not invented: initial
+targets — pre-display added by Shell ≤ 15 ms p95 Explorer file context; taskbar
+hit-test added ≤ 2 ms; catalog refresh never on menu thread (hard gate, not budget).
 
 ## 5. Windows acceptance matrix (VM/manual; from A1§25, trimmed to what this plan changes)
 

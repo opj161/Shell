@@ -1,4 +1,4 @@
-# 02 — First-paint latency: async services, stall removals, diagnostics
+﻿# 02 — First-paint latency: async services, stall removals, diagnostics
 
 Governing rule R1: *before first pixel, only bounded local work.* Everything in this
 doc either removes synchronous work from the menu thread or makes the remaining work
@@ -265,13 +265,60 @@ diagnostics event, not silence.
 | Item | Site | Change |
 |---|---|---|
 | All-drive Recycle Bin query | `ContextMenu.cpp:4579` (`SHQueryRecycleBinW(nullptr)` during native enumeration) | trust native item disabled state (as fork-assessment §5.4 already argued); if verification needed, cached async refresh |
-| `fix_ugly_flicker` vblank Sleep | `ContextMenu.cpp:6052`, called `:6211` in WM_NCCALCSIZE | registry-gated diagnostic flag (default ON initially); benchmark ON/OFF on Win10 22H2 + Win11 current; delete or capability-gate per build. Rationale: UI-thread sleep + timer-resolution side effects (A2§11, canonical link in master plan) |
-| `SPI_SETMENUSHOWDELAY` set/restore around menus | set `ContextMenu.cpp:3925`, restore `:4977` with `SPIF_SENDCHANGE` | **Amended (§07 A5).** Keep the feature, drop the broadcast: pass `fWinIni = 0`. See below |
+| `fix_ugly_flicker` vblank Sleep | `ContextMenu.cpp:6052`, called `:6211` in WM_NCCALCSIZE | **Done, see §4a.** Gated on `flicker`, measured at 7.0 ms average per menu, and recorded as its own phase - the cost lands *after* `popup.total_pre_display` stops, so it was invisible to every report |
+| `SPI_SETMENUSHOWDELAY` set/restore around menus | set `ContextMenu.cpp:3925`, restore `:4977` with `SPIF_SENDCHANGE` | **Amended (§07 A5).** Keep the feature, drop the broadcast: pass `fWinIni = 0`. See §4b |
 | `SPI_SETSELECTIONFADE` off/on | `ContextMenu.cpp:6556/6558` (fWinIni=0, no broadcast) | lowest risk of the three; still remove with the flicker experiment — same A/B gate |
 | Per-activation expression evaluation | `Main.cpp:685-805` | replaced by compiled policy (§01.9) |
 | Manifest scan on menu thread | §02.1 | replaced by service |
 
-### 4a. `SPI_SETMENUSHOWDELAY`: the defect is the fourth argument, not the feature
+### 4a. The flicker wait: measured, gated, and it was landing where nobody was looking
+
+`fix_ugly_flicker` waits for the next vertical blank before the menu window is
+sized. This section asked for it to be registry-gated and benchmarked ON/OFF.
+Both are done, and the benchmark turned up something the plan had not
+anticipated: **the wait sits after the phase everybody was measuring.**
+
+It runs in `WM_NCCALCSIZE`, which happens inside the tracking call, and
+`popup.total_pre_display` is stopped *before* Shell starts tracking. So its cost
+was latency the user paid on every menu that no phase recorded and no report
+showed. It is a phase now — `menu.flicker_wait`, visible in
+`shell.exe -report perf` — and gated:
+
+```
+HKCU\SOFTWARE\Nilesoft\Shell    flicker    REG_DWORD    0
+```
+
+A/B on one build, a real Explorer, ten menus each, Windows 11 26200.8875 x64 at
+59 Hz (2026-08-24):
+
+| | `menu.flicker_wait` | `popup.total_pre_display` |
+|---|---|---|
+| `flicker = 1` (default) | **7.0 ms avg**, 1.9 – 15.1 ms | 15.8 ms avg |
+| `flicker = 0` | 0 ms | 16.0 ms avg |
+
+About seven milliseconds on every menu, capped at one refresh period, with
+pre-display unchanged either way. Right-click to pixels is roughly **23 ms with
+it and 16 ms without** — so a third of the time before the menu appears was
+going to a wait no report mentioned.
+
+**Kept, and default on.** What it buys is a visual artefact during window
+creation. A screenshot cannot show a transient, and nothing on this machine can
+judge whether the flicker returns without it; deleting a feature on latency
+alone when the thing it trades against is unmeasurable is the mistake this
+repository's rules exist to prevent. So it is measured, it is switchable, and
+the visual half is stated as open rather than assumed either way.
+
+The gate's state is recorded as the phase's count — `n=1` waited, `n=0`
+switched off — so a report can tell "this build has no wait" from "this machine
+turned it off", which is the one thing somebody comparing two reports needs.
+
+Two things about the A/B that are worth knowing before repeating it. The
+registry value has to be written from outside the agent's process tree or
+Explorer never sees it (`AGENTS.md`), and the deploy has to restart Explorer
+*after* the copy or the measurement is of the previous build. Both of those
+silently produced "the setting does nothing" before they were found.
+
+### 4b. `SPI_SETMENUSHOWDELAY`: the defect is the fourth argument, not the feature
 
 The original entry above proposed removing the `showdelay` mutation and offering
 instead an opt-in that changes the user's real system setting permanently. That is

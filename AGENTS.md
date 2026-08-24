@@ -183,7 +183,49 @@ them avoidable:
 A probe that links repository sources needs the same include roots and
 libraries the owning project lists, not a minimal guess — `src\dll\src` for
 `Include/...` paths, `src\shared` for `System.h`, and `user32.lib` for
-`Packages.cpp`, whose `icontains` calls `CharUpperW`.
+`Packages.cpp`, whose `icontains` calls `CharUpperW`. `RegistryConfig.h` also
+needs `Resource.h` and `Globals.h` ahead of it, for `APP_NAME` and the CLSID
+literals, and `shlwapi.lib` for `Environment::Expand`.
+
+## Two ways an experiment can test something other than what you think
+
+Both of these cost a full session before they were found, and both produce a
+result that looks like a finding about Windows.
+
+**A registry value set from an agent's shell is not visible to `explorer.exe`.**
+Measured 2026-08-24: a key created here took `HKCU\SOFTWARE`'s subkey count to
+101 in that shell while Explorer still counted 100 and answered
+`ERROR_FILE_NOT_FOUND` for the key by name. Elevating with
+`Start-Process -Verb RunAs` does not help — it stays inside the same tree. The
+same `reg add` run from a **scheduled task** took Explorer's count to 101 and
+its read to the value written, so that is the way to set one:
+
+```powershell
+$a = New-ScheduledTaskAction -Execute 'reg.exe' -Argument 'add "HKCU\SOFTWARE\Nilesoft\Shell" /v perf /t REG_DWORD /d 1 /f'
+Register-ScheduledTask -TaskName 'SetHkcu' -Action $a -Force | Out-Null
+Start-ScheduledTask -TaskName 'SetHkcu'; Start-Sleep 3
+Unregister-ScheduledTask -TaskName 'SetHkcu' -Confirm:$false
+```
+
+This is the whole of the "the `perf` value reads back correctly but Explorer
+logs nothing" puzzle that `docs/refactor/08-handoff.md` recorded as unexplained
+and warned the next reader not to sink time into. The registry read, the log
+path and the file permissions had all been ruled out correctly. Explorer had
+simply never seen the value. Note that **files** and **HKLM** are not affected:
+editing the installed `shell.nss` under elevation reaches Explorer, and so does
+`shell.exe -register -treat`.
+
+**Explorer restarts about a second after it is killed, so deploying while it is
+down gives it the previous build.** `scripts/backup-and-upgrade.ps1` used to
+stop Explorer, then copy; the Explorer that came back had already mapped the
+old binary, which was then renamed aside underneath it —
+`GetModuleFileName` still reports the name the file had at load, so the module
+list looked right. Every "verified in a real Explorer" result on the takeover
+branch was one build stale. The script now deploys first and restarts last, and
+checks that the Explorer which came back started *after* the copy. Do not
+reorder it. And do not read the installed file's creation time to decide: NTFS
+file tunneling puts back the old one when a file reappears at a path it just
+left, which rotate-then-copy does — the script stamps it explicitly.
 
 Then encode the invariant in `src/tests`. The suites are dependency-free and
 self-registering; see `src/tests/test.h`. Prefer testing a real invariant over a
