@@ -2,6 +2,7 @@
 #include "Include/ExplorerCommandCatalog.h"
 #include "Include/PackageCatalogService.h"
 #include "Include/ProviderHealth.h"
+#include "Include/ProviderQuarantineStore.h"
 #include "Include/IconResource.h"
 #include "Include/Diagnostics/DiagnosticsRing.h"
 #include "Include/ContextMenu.h"
@@ -421,6 +422,19 @@ namespace Nilesoft
 					continue;
 
 				auto hash = provider_hash(reg.clsid);
+
+				// Quarantine is checked before health, and before anything is
+				// activated: the whole point is that this provider costs the
+				// menu nothing at all. It is the user's declaration rather than
+				// Shell's measurement, so it is reported with its own word and
+				// never re-probed the way a deferral is.
+				// docs/refactor/05-capabilities.md section 1b.
+				if(ProviderQuarantineStore::instance().contains(hash))
+				{
+					Diagnostics::session_provider(hash, 0, Diagnostics::ProviderResult::Quarantined);
+					continue;
+				}
+
 				auto verdict = health.consider(hash, budget.remaining_us());
 				if(verdict != ProviderVerdict::Try)
 				{
@@ -462,7 +476,7 @@ namespace Nilesoft
 				// per distinct provider per process.
 				// docs/refactor/05-capabilities.md section 1.
 				if(!item->title.empty())
-					Diagnostics::provider_name(hash, item->title.c_str());
+					Diagnostics::provider_name(hash, reg.clsid, item->title.c_str());
 
 				if(filled != FillResult::Shown)
 				{

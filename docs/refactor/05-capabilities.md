@@ -129,8 +129,58 @@ serialised now.
 *process* per block — which is what makes the security descriptor the right
 boundary — and was never a claim about threads.
 
-What is still missing for the window: the window, the quarantine action, and the
-"Repair takeover" row.
+### 1b. Quarantine — landed 2026-08-24, and it skips rather than refuses
+
+The treatment for what §1a diagnoses. `shell.exe -quarantine:add {clsid}` stops
+Shell asking a handler when it builds a menu; `:remove` puts it back, `:list`
+(the default) shows what is quarantined. The list is a per-user file,
+`%LocalAppData%\Nilesoft\Shell\quarantine.txt`, re-read by every host within a
+couple of seconds — so the answer to "when does this take effect" is "the next
+menu", with no restart.
+
+Three departures from §1's sketch, each because the measurement said so.
+
+**Skipped in `append_explorer_commands`, not refused at `CoCreateInstance`.**
+§1 said "activation refused via the existing E_NOINTERFACE path", reusing the
+CLSID blocklist `CoCreateInstanceHook` already compiles. That is the wrong
+instrument twice over. It is far too blunt — the detour sees *every* activation
+in the host, so refusing a CLSID there breaks that extension for everything the
+process does, and a user who quarantined a slow context-menu handler has not
+asked for its DLL to start failing elsewhere. And it does not save the thing
+worth saving: the measured cost is activation *plus*
+`GetState`/`GetTitle`/`GetIcon` (§02.2a-i), and skipping the provider outright
+pays none of it while refusing the activation still walks the catalog and still
+enters the hook. Measured on a real Explorer: a quarantined provider costs
+**0.0 ms** and is reported as such.
+
+**`%LocalAppData%`, not ProgramData.** ProgramData needs elevation, which would
+make quarantining an administrative act for a per-user complaint. The integrity
+rule §02.1 states — a file a medium-integrity process can write must never make
+an activation *possible* that a live query would not have authorised — is
+satisfied in the strong direction: this file only ever *removes* providers, so
+the worst a tampered one can do is hide a menu item the user can see and undo.
+
+**`Quarantined` is its own word in the ring, not a kind of `Deferred`.** "It has
+never once been quick" is Shell's judgement and gets re-probed every 200 menus;
+"you told me to stop asking" is the user's and never does. Reporting them as one
+thing would make the feature's own effect look like a heuristic.
+
+Verified end to end on a real Explorer, 2026-08-24, reading the composed menu
+back through MSAA:
+
+| | menu items | the report |
+|---|---|---|
+| NanaZip quarantined | **29**, no NanaZip | `provider {CAE3F1D4-…} 0.0 ms quarantined NanaZip` |
+| released again | **30**, NanaZip back at 29 | `provider {CAE3F1D4-…} 7.2 ms ok NanaZip` |
+
+One thing this forced, and it is the kind of gap that only shows up when both
+halves exist: the report printed a *hash* and `-quarantine:add` wanted a
+**CLSID**, with nothing bridging them. The export directory carries the CLSID
+now and the report prints that instead, so the identifier a user reads is
+exactly the one the next command takes. Export version 4 → 5.
+
+What is still missing for the window: the window itself, and the "Repair
+takeover" row.
 
 The `Takeover` line's inputs also all exist now: `RegistryConfig::ModernMenuRedirectedToUs()`
 answers the TreatAs half (§01.9b), `IATHook::installed()` the interception half,

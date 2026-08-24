@@ -34,6 +34,14 @@ using namespace Nilesoft::Shell::Diagnostics;
 
 namespace
 {
+	// Any CLSID will do here: what is under test is the directory, not the
+	// identifier. {A0B1C2D3-E4F5-6789-ABCD-EF0123456789}
+	const GUID SampleClsid = { 0xA0B1C2D3, 0xE4F5, 0x6789,
+							   { 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89 } };
+}
+
+namespace
+{
 	PerfExportBlock make_block(uint32_t capacity = PERF_EXPORT_RECORDS)
 	{
 		PerfExportBlock block{};
@@ -611,7 +619,7 @@ TEST(perf_export, a_fresh_block_knows_no_provider_names)
 TEST(perf_export, a_noted_name_comes_back_for_its_hash)
 {
 	auto block = make_block();
-	CHECK(perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename"));
+	CHECK(perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
 	CHECK_EQ(block.header.directory_count, 1u);
 	CHECK(same(perf_export_find_name(block, 0xe345019du), L"Rename with PowerRename"));
 }
@@ -619,7 +627,7 @@ TEST(perf_export, a_noted_name_comes_back_for_its_hash)
 TEST(perf_export, an_unknown_hash_still_has_no_name)
 {
 	auto block = make_block();
-	perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename");
+	perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename");
 	CHECK(perf_export_find_name(block, 0x9e0df88cu) == nullptr);
 }
 
@@ -628,9 +636,9 @@ TEST(perf_export, an_unknown_hash_still_has_no_name)
 TEST(perf_export, noting_the_same_provider_twice_adds_nothing)
 {
 	auto block = make_block();
-	CHECK(perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename"));
-	CHECK(!perf_export_note_name(block, 0xe345019du, L"Rename with PowerRename"));
-	CHECK(!perf_export_note_name(block, 0xe345019du, L"Something else entirely"));
+	CHECK(perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
+	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
+	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, L"Something else entirely"));
 	CHECK_EQ(block.header.directory_count, 1u);
 
 	// The first title wins: an entry is never rewritten, which is what lets a
@@ -641,8 +649,8 @@ TEST(perf_export, noting_the_same_provider_twice_adds_nothing)
 TEST(perf_export, a_provider_with_no_title_is_not_recorded)
 {
 	auto block = make_block();
-	CHECK(!perf_export_note_name(block, 0xe345019du, nullptr));
-	CHECK(!perf_export_note_name(block, 0xe345019du, L""));
+	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, nullptr));
+	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, L""));
 	CHECK_EQ(block.header.directory_count, 0u);
 }
 
@@ -650,7 +658,7 @@ TEST(perf_export, a_name_that_fills_the_buffer_is_truncated_and_terminated)
 {
 	auto block = make_block();
 	std::wstring huge(PERF_EXPORT_PROVIDER_NAME + 40, L'x');
-	CHECK(perf_export_note_name(block, 1, huge.c_str()));
+	CHECK(perf_export_note_name(block, 1, SampleClsid, huge.c_str()));
 
 	auto got = perf_export_find_name(block, 1);
 	CHECK(got != nullptr);
@@ -667,13 +675,13 @@ TEST(perf_export, the_directory_fills_up_and_says_so_rather_than_overwriting)
 	{
 		wchar_t name[32];
 		::wsprintfW(name, L"provider %u", i);
-		CHECK(perf_export_note_name(block, 1000 + i, name));
+		CHECK(perf_export_note_name(block, 1000 + i, SampleClsid, name));
 	}
 	CHECK_EQ(block.header.directory_count, PERF_EXPORT_DIRECTORY);
 	CHECK_EQ(block.directory_dropped, 0u);
 
 	// One too many: refused, counted, and nothing already there is disturbed.
-	CHECK(!perf_export_note_name(block, 9999, L"one too many"));
+	CHECK(!perf_export_note_name(block, 9999, SampleClsid, L"one too many"));
 	CHECK_EQ(block.header.directory_count, PERF_EXPORT_DIRECTORY);
 	CHECK_EQ(block.directory_dropped, 1u);
 	CHECK(perf_export_find_name(block, 9999) == nullptr);
@@ -687,10 +695,10 @@ TEST(perf_export, the_directory_fills_up_and_says_so_rather_than_overwriting)
 TEST(perf_export, a_directory_count_beyond_the_array_is_refused_not_clamped)
 {
 	auto block = make_block();
-	perf_export_note_name(block, 1, L"first");
+	perf_export_note_name(block, 1, SampleClsid, L"first");
 	block.header.directory_count = PERF_EXPORT_DIRECTORY + 9;
 
-	CHECK(!perf_export_note_name(block, 2, L"second"));
+	CHECK(!perf_export_note_name(block, 2, SampleClsid, L"second"));
 	CHECK(same(block.directory[0].name, L"first"));
 
 	// A lookup clamps instead, because reading a slot inside the array is
@@ -726,7 +734,7 @@ TEST(perf_export, the_count_does_not_admit_an_entry_until_it_is_written)
 	*block = make_block();
 	seen.block = block.get();
 
-	perf_export_note_name(*block, 0x1234u, L"Rename with PowerRename",
+	perf_export_note_name(*block, 0x1234u, SampleClsid, L"Rename with PowerRename",
 		[](void *ctx)
 		{
 			auto *s = static_cast<Seen *>(ctx);
@@ -748,6 +756,24 @@ TEST(perf_export, the_count_does_not_admit_an_entry_until_it_is_written)
 	CHECK(same(perf_export_find_name(*block, 0x1234u), L"Rename with PowerRename"));
 }
 
+/*
+	The identifier the report prints has to be the one -quarantine:add accepts,
+	or the diagnosis and the treatment name the same extension two ways with
+	nothing connecting them. That is why the directory carries the CLSID and not
+	just the hash it is keyed by.
+*/
+TEST(perf_export, the_directory_remembers_the_clsid_the_hash_came_from)
+{
+	auto block = make_block();
+	CHECK(perf_export_note_name(block, 0xe345019du, SampleClsid, L"NanaZip"));
+
+	auto *entry = block.directory[0].clsid_hash == 0xe345019du ? &block.directory[0] : nullptr;
+	CHECK(entry != nullptr);
+	if(!entry)
+		return;
+	CHECK(0 == ::memcmp(&entry->clsid, &SampleClsid, sizeof(GUID)));
+}
+
 TEST(perf_export, the_reader_copies_the_directory_out_of_the_block)
 {
 	// The view is unmapped before perf_export_read returns, so a source that
@@ -756,7 +782,7 @@ TEST(perf_export, the_reader_copies_the_directory_out_of_the_block)
 	PerfExportWriter writer;
 	CHECK(writer.open());
 
-	writer.note_provider(0xabcd1234u, L"Search Everything");
+	writer.note_provider(0xabcd1234u, SampleClsid, L"Search Everything");
 	writer.store(make_record(999, ::GetTickCount64()));
 
 	PerfExportSource source{};
@@ -769,4 +795,11 @@ TEST(perf_export, the_reader_copies_the_directory_out_of_the_block)
 	CHECK(source.directory_count >= 1u);
 	CHECK(same(source.name_for(0xabcd1234u), L"Search Everything"));
 	CHECK(source.name_for(0x11112222u) == nullptr);
+
+	// The CLSID travels with it: this is what the report prints.
+	auto *clsid = source.clsid_for(0xabcd1234u);
+	CHECK(clsid != nullptr);
+	if(clsid)
+		CHECK(0 == ::memcmp(clsid, &SampleClsid, sizeof(GUID)));
+	CHECK(source.clsid_for(0x11112222u) == nullptr);
 }

@@ -13,6 +13,7 @@
 #include <RegistryConfig.h>
 #include <ConfigCheck.h>
 #include <PerfReport.h>
+#include <ProviderQuarantine.h>
 
 //#pragma comment(lib, "mincore.lib")
 #pragma comment(lib, "UxTheme.lib")
@@ -1021,24 +1022,33 @@ static int ReportPerf(bool detailed)
 					IExplorerCommand::GetTitle the first time it activated the
 					provider.
 
-					The hash stays on the line either way: it is the stable
-					identity, the title is not (a handler may title itself
-					differently for a different selection), and a quarantine
-					entry will be written against the hash.
+					The identifier printed is the CLSID, not the title: a handler
+					may title itself differently for a different selection, so
+					the title is a label and the CLSID is the identity. It is
+					also what `-quarantine:add` takes.
 				*/
-				if(auto known = source.name_for(record.providers[v].clsid_hash))
-				{
-					report.append_format(L"                 provider %08x  %u.%u ms  %s  %s\r\n",
-										 record.providers[v].clsid_hash, ms, tenth,
-										 perf_export_result_name(record.providers[v].result),
-										 known);
-				}
+				auto known = source.name_for(record.providers[v].clsid_hash);
+				auto clsid = source.clsid_for(record.providers[v].clsid_hash);
+
+				// The CLSID rather than the hash whenever this host knows it,
+				// because that is exactly what `shell.exe -quarantine:add`
+				// accepts. A report whose identifier the treatment command
+				// cannot take would leave the two halves of this feature
+				// speaking different languages. The hash is the fallback for a
+				// provider this host has never successfully activated - which
+				// is also one there is nothing useful to say about yet.
+				string identity;
+				if(clsid)
+					identity = Nilesoft::Shell::Quarantine::format_guid(*clsid).c_str();
 				else
-				{
-					report.append_format(L"                 provider %08x  %u.%u ms  %s\r\n",
-										 record.providers[v].clsid_hash, ms, tenth,
-										 perf_export_result_name(record.providers[v].result));
-				}
+					identity.append_format(L"%08x", record.providers[v].clsid_hash);
+
+				report.append_format(L"                 provider %-38s %u.%u ms  %s",
+									 identity.c_str(), ms, tenth,
+									 perf_export_result_name(record.providers[v].result));
+				if(known)
+					report.append_format(L"  %s", known);
+				report.append(L"\r\n");
 			}
 		};
 
@@ -1076,6 +1086,148 @@ static int ReportPerf(bool detailed)
 
 	write_console_line(header.c_str());
 	return 0;
+}
+
+/*
+	`shell.exe -quarantine[:list|:add|:remove] [clsid]`
+
+	The treatment for what `-report perf` diagnoses. A quarantined handler is one
+	Shell stops asking when it builds a menu; it keeps working everywhere else.
+	src/shared/ProviderQuarantine.h has the format and the reasoning.
+
+	Deliberately not elevated and deliberately not restarting anything. The file
+	is per-user under %LocalAppData% and every host re-reads it within a couple
+	of seconds, so the answer to "when does this take effect" is "the next menu".
+
+	Exit codes reuse ConfigCheckCode so a script sees the same vocabulary as
+	-check: 0 for a request that was carried out, UNUSABLE for one that could
+	not be understood or written.
+*/
+static int QuarantineCommand(const string &action, const string &argument)
+{
+	auto path = Nilesoft::Shell::Quarantine::default_path();
+	if(path.empty())
+	{
+		write_console_line(L"shell.exe -quarantine: could not locate %LocalAppData%.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	auto entries = Nilesoft::Shell::Quarantine::load(path);
+
+	auto show = [&]()
+	{
+		string line;
+		if(entries.empty())
+		{
+			line.append(L"Nilesoft Shell - no extensions are quarantined.\r\n");
+			line.append_format(L"  list: %s\r\n", path.c_str());
+			line.append(L"  Run `shell.exe -report perf` to see what a menu costs, then\r\n"
+						L"  `shell.exe -quarantine:add {clsid}` to stop Shell asking one.");
+		}
+		else
+		{
+			line.append_format(L"Nilesoft Shell - %u extension%s quarantined\r\n\r\n",
+							   static_cast<unsigned>(entries.size()),
+							   entries.size() == 1 ? L"" : L"s");
+			for(const auto &entry : entries)
+			{
+				// The hash is what a perf report prints, so it is shown
+				// alongside the CLSID the file holds - otherwise the two
+				// commands name the same extension two ways with nothing
+				// connecting them.
+				line.append_format(L"  %08x  %s", entry.hash,
+								   Nilesoft::Shell::Quarantine::format_guid(entry.clsid).c_str());
+				if(!entry.note.empty())
+					line.append_format(L"  %s", entry.note.c_str());
+				line.append(L"\r\n");
+			}
+			line.append_format(L"\r\n  list: %s\r\n", path.c_str());
+			line.append(L"  Takes effect on the next menu each host builds.");
+		}
+		write_console_line(line.c_str());
+	};
+
+	if(action.empty() || action.equals(L"list", true))
+	{
+		show();
+		return CONFIG_CHECK_OK;
+	}
+
+	auto adding = action.equals(L"add", true);
+	if(!adding && !action.equals(L"remove", true))
+	{
+		write_console_line(L"shell.exe -quarantine: the actions are `list`, `add` and `remove`.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	GUID clsid{};
+	if(!Nilesoft::Shell::Quarantine::parse_guid(argument.c_str(), clsid))
+	{
+		write_console_line(
+			L"shell.exe -quarantine: expected a CLSID, as {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}.\r\n"
+			L"  A perf report shows an extension's hash; its CLSID is in the package that\r\n"
+			L"  registered it.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	auto hash = Nilesoft::Shell::Quarantine::hash_clsid(clsid);
+	auto formatted = Nilesoft::Shell::Quarantine::format_guid(clsid);
+
+	size_t at = entries.size();
+	for(size_t i = 0; i < entries.size(); i++)
+	{
+		if(entries[i].hash == hash)
+		{
+			at = i;
+			break;
+		}
+	}
+
+	string line;
+	if(adding)
+	{
+		if(at < entries.size())
+		{
+			// Already listed is a success, not an error: the state the caller
+			// asked for is the state that holds.
+			line.append_format(L"Already quarantined: %s", formatted.c_str());
+			write_console_line(line.c_str());
+			return CONFIG_CHECK_OK;
+		}
+		if(entries.size() >= Nilesoft::Shell::Quarantine::MaxEntries)
+		{
+			write_console_line(L"shell.exe -quarantine: the list is full.");
+			return CONFIG_CHECK_UNUSABLE;
+		}
+
+		Nilesoft::Shell::Quarantine::Entry entry;
+		entry.clsid = clsid;
+		entry.hash = hash;
+		entries.push_back(std::move(entry));
+	}
+	else
+	{
+		if(at >= entries.size())
+		{
+			line.append_format(L"Not quarantined: %s", formatted.c_str());
+			write_console_line(line.c_str());
+			return CONFIG_CHECK_OK;
+		}
+		entries.erase(entries.begin() + static_cast<ptrdiff_t>(at));
+	}
+
+	if(!Nilesoft::Shell::Quarantine::save(path, entries))
+	{
+		string failed;
+		failed.append_format(L"shell.exe -quarantine: could not write %s", path.c_str());
+		write_console_line(failed.c_str());
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	line.append_format(adding ? L"Quarantined %s\r\n" : L"Released %s\r\n", formatted.c_str());
+	line.append(L"  Takes effect on the next menu each host builds.");
+	write_console_line(line.c_str());
+	return CONFIG_CHECK_OK;
 }
 
 bool Register(REGOP reg, HWND hwnd = nullptr)
@@ -1449,6 +1601,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 		// nothing, touches no running shell.
 		bool _report = false;
 		string report_what;
+
+		// -quarantine[:list|:add|:remove] [clsid]. The treatment for what
+		// -report perf diagnoses; writes a per-user file and exits.
+		// docs/refactor/05-capabilities.md section 1b.
+		bool _quarantine = false;
+		string quarantine_action;
+		string quarantine_argument;
 		//bool runglyphs = false;
         string cmd;
         for(auto op : cmdline)
@@ -1500,10 +1659,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 					if(!op->Value.empty())
 						report_what = op->Value;
 				}
+				else if(op->has_name(L"quarantine"))
+				{
+					_quarantine = true;
+					if(!op->Value.empty())
+						quarantine_action = op->Value;
+				}
             }
 			else if(op->has_name(L"check"))
 			{
 				_check = true;
+			}
+			else if(_quarantine && quarantine_argument.empty())
+			{
+				// The CLSID. Argument rather than Name for the same reason
+				// -check's path is: CommandLine splits at the first colon, and
+				// a GUID has none but a future subject might.
+				quarantine_argument = op->Argument;
 			}
 			else if(_report && report_what.empty())
 			{
@@ -1544,6 +1716,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 			}
 
 			auto code = ReportPerf(detailed);
+			_log->close();
+			return code;
+		}
+
+		if(_quarantine)
+		{
+			auto code = QuarantineCommand(quarantine_action, quarantine_argument);
 			_log->close();
 			return code;
 		}
@@ -1911,7 +2090,10 @@ BOOL CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, [[maybe_unused]] L
                 L"-check[:file]\tParse the configuration and report; change nothing.\r\n"
                 L"\t\tExits 0 when it parses and 1 when it does not.\r\n"
                 L"-report perf\tWhat the menus in every host on this desktop cost.\r\n"
-                L"\t\tAdd `perf:all` for every recorded session, not just the slowest.\r\n\r\n"
+                L"\t\tAdd `perf:all` for every recorded session, not just the slowest.\r\n"
+                L"-quarantine\tExtensions Shell stops asking when it builds a menu.\r\n"
+                L"\t\t-quarantine:add {clsid} / :remove {clsid} / :list (the default).\r\n"
+                L"\t\tThey keep working everywhere else. Next menu, no restart.\r\n\r\n"
                 //L"-runas:N\t\tLaunch with elevated privileges.\r\n"
                 //L"\t\tN=[admin | system | trustedinsaller]\r\n\r\n"
                 L"-?\t\tDispay this help message.\r\n\r\n"

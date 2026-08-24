@@ -90,6 +90,12 @@ namespace Nilesoft
 				Pending,		// GetState answered E_PENDING
 				Failed,			// activation or a metadata call failed
 				Deferred,		// missed its first-paint deadline (docs/refactor/02 section 2a)
+
+				// The user quarantined it (docs/refactor/05 section 1b). A
+				// separate word from Deferred on purpose: "it has never once
+				// been quick" and "you told me to stop asking" are different
+				// answers, and only one of them is Shell's own judgement.
+				Quarantined,
 			};
 
 			struct PhaseRecord
@@ -294,7 +300,7 @@ namespace Nilesoft
 
 				Costs a scan of at most 32 integers after the first sighting.
 			*/
-			void provider_name(uint32_t clsid_hash, const wchar_t *name) noexcept;
+			void provider_name(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name) noexcept;
 
 			// Publishes if this was the outermost begin(). Safe to call without a
 			// matching begin() - it does nothing, which is what a hook path that

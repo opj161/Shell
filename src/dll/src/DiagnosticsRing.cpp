@@ -118,12 +118,12 @@ namespace Nilesoft
 				t_session.record.add_provider(clsid_hash, microseconds, result);
 			}
 
-			void provider_name(uint32_t clsid_hash, const wchar_t *name) noexcept
+			void provider_name(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name) noexcept
 			{
 				// No session check: this is a property of the provider, not of
 				// the menu that happened to activate it, and it stays useful
 				// after that menu's record has aged out of the ring.
-				PerfExportWriter::instance().note_provider(clsid_hash, name);
+				PerfExportWriter::instance().note_provider(clsid_hash, clsid, name);
 			}
 
 			void session_decision(TakeoverDecision decision) noexcept

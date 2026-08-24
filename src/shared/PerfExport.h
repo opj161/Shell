@@ -111,7 +111,10 @@ namespace Nilesoft
 			// 3: PERF_EXPORT_PHASES 16 -> 24.
 			// 4: the block gained a provider-name directory, and the header's
 			//    `reserved` became `directory_count`.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 4;
+			// 5: a directory entry carries the provider's CLSID as well as its
+			//    hash, so the report prints the identity `-quarantine:add`
+			//    takes. A hash is not something a user can act on.
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 5;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -195,11 +198,22 @@ namespace Nilesoft
 				uint32_t result;				// Diagnostics::ProviderResult
 			};
 
-			// One directory entry: the hash a record carries, and the title the
-			// handler gave the first time this host activated it.
+			/*
+				One directory entry: the hash a record carries, the CLSID that
+				hash was computed from, and the title the handler gave the first
+				time this host activated it.
+
+				The CLSID is here so the report can print the thing
+				`shell.exe -quarantine:add` accepts. Without it a user reads
+				`provider e345019d` and has no way to act on it, which would
+				leave the diagnosis and the treatment speaking different
+				languages. GUID is a plain 16-byte POD, so it costs the layout
+				nothing across architectures.
+			*/
 			struct PerfExportName
 			{
 				uint32_t clsid_hash;
+				GUID clsid;
 				wchar_t name[PERF_EXPORT_PROVIDER_NAME];	// truncated, always terminated
 			};
 
@@ -274,7 +288,7 @@ namespace Nilesoft
 			static_assert(sizeof(PerfExportPhase) == 8 + PERF_EXPORT_NAME * sizeof(wchar_t),
 						  "PerfExportPhase gained padding");
 			static_assert(sizeof(PerfExportProvider) == 12, "PerfExportProvider gained padding");
-			static_assert(sizeof(PerfExportName) == 4 + PERF_EXPORT_PROVIDER_NAME * sizeof(wchar_t),
+			static_assert(sizeof(PerfExportName) == 4 + sizeof(GUID) + PERF_EXPORT_PROVIDER_NAME * sizeof(wchar_t),
 						  "PerfExportName gained padding");
 			static_assert(sizeof(PerfExportHeader) == 48 + PERF_EXPORT_HOST * sizeof(wchar_t),
 						  "PerfExportHeader gained padding");
@@ -378,7 +392,7 @@ namespace Nilesoft
 				a null check.
 			*/
 			inline bool perf_export_note_name(PerfExportBlock &block, uint32_t clsid_hash,
-											  const wchar_t *name,
+											  const GUID &clsid, const wchar_t *name,
 											  PerfExportInterpose interpose = nullptr,
 											  void *interpose_context = nullptr)
 			{
@@ -406,6 +420,7 @@ namespace Nilesoft
 
 				auto &entry = block.directory[count];
 				entry.clsid_hash = clsid_hash;
+				entry.clsid = clsid;
 
 				size_t at = 0;
 				for(; name[at] && at + 1 < PERF_EXPORT_PROVIDER_NAME; at++)
@@ -577,6 +592,7 @@ namespace Nilesoft
 					case 1: return L"pending";
 					case 2: return L"failed";
 					case 3: return L"deferred";
+					case 4: return L"quarantined";
 					default: return L"ok";
 				}
 			}
@@ -794,13 +810,13 @@ namespace Nilesoft
 					append-only table already gets from writing the entry before
 					the count.
 				*/
-				void note_provider(uint32_t clsid_hash, const wchar_t *name)
+				void note_provider(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name)
 				{
 					if(!name || !*name || !open())
 						return;
 
 					std::lock_guard<std::mutex> lock(_writer);
-					perf_export_note_name(*_block, clsid_hash, name);
+					perf_export_note_name(*_block, clsid_hash, clsid, name);
 				}
 
 			private:
@@ -856,12 +872,26 @@ namespace Nilesoft
 				// host has not activated it yet or the directory was full.
 				const wchar_t *name_for(uint32_t clsid_hash) const
 				{
+					auto *entry = entry_for(clsid_hash);
+					return entry && entry->name[0] ? entry->name : nullptr;
+				}
+
+				// The CLSID that hash was computed from - what the report
+				// prints and what `shell.exe -quarantine:add` accepts.
+				const GUID *clsid_for(uint32_t clsid_hash) const
+				{
+					auto *entry = entry_for(clsid_hash);
+					return entry ? &entry->clsid : nullptr;
+				}
+
+				const PerfExportName *entry_for(uint32_t clsid_hash) const
+				{
 					auto count = directory_count > PERF_EXPORT_DIRECTORY
 						? PERF_EXPORT_DIRECTORY : directory_count;
 					for(uint32_t i = 0; i < count; i++)
 					{
 						if(directory[i].clsid_hash == clsid_hash)
-							return directory[i].name[0] ? directory[i].name : nullptr;
+							return &directory[i];
 					}
 					return nullptr;
 				}
@@ -948,6 +978,7 @@ namespace Nilesoft
 					for(uint32_t i = 0; i < directory; i++)
 					{
 						source.directory[i].clsid_hash = block.directory[i].clsid_hash;
+						source.directory[i].clsid = block.directory[i].clsid;
 						for(size_t c = 0; c + 1 < PERF_EXPORT_PROVIDER_NAME; c++)
 							source.directory[i].name[c] = block.directory[i].name[c];
 						source.directory[i].name[PERF_EXPORT_PROVIDER_NAME - 1] = L'\0';
