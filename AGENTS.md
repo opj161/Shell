@@ -158,6 +158,16 @@ them avoidable:
   wrong. Nesting a heredoc inside another language multiplies the problem.
   Where a literal separator is genuinely needed, `const wchar_t sep = 0x5C;`
   sidesteps the question entirely.
+
+  **The same applies to *editing*, not only to creating.** A `python - <<'PY'`
+  patch script loses a backslash level exactly as a C++ heredoc does, and it
+  fails in both directions: a search string containing an escape silently
+  matches nothing, and a replacement containing one writes a *real* control
+  character into a string literal, giving `C2001: newline in constant` at a line
+  that looks fine. That happened four times in one session, including in the
+  edit that added this paragraph. Use the file-editing tool for anything
+  containing a backslash, or build the string with `chr(92)` so there is no
+  escape left to eat.
 - **Pass `-NoProfile` to every `powershell` invocation.** `build.ps1` already
   does for `check-invariants.ps1`. Without it the cost is whatever the
   machine's PowerShell profile costs — about forty seconds here — and it looks
@@ -254,6 +264,13 @@ Report suites individually rather than the aggregate check count.
 with objects that need unwinding, so those functions use plain-old-data helpers —
 `menu_perf_begin`/`menu_perf_end` rather than a scope timer, `ShellExtCapture::has`
 rather than `match`.
+
+The trap is that a call which *looks* like a plain call can be one of those
+objects. `_log.write(...)` is a variadic template that builds `string::Argument`
+temporaries in the **caller's** frame, so a single log line added to the hook's
+`__finally` fails the whole function with C2712 — and the error points at the
+`__try`, not at the line that caused it. Put the call in its own function;
+`log_breaker_opened()` in `Main.cpp` is exactly that and nothing else.
 
 **Re-entrancy.** `SendMessageW(WM_INITMENUPOPUP)` runs arbitrary host and
 third-party extension code synchronously. Hold no lock across it — not the hook

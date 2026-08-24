@@ -1,6 +1,6 @@
 # 08 — Handoff
 
-**Written 2026-08-24, branch `refactor/takeover-master-plan`.**
+**Updated 2026-08-24, branch `refactor/takeover-master-plan`.**
 Read this first, then `06-phases-and-tests.md` for the per-item status table.
 `00`–`05` are the plan; `07` is the audit that corrected it; this is where the
 work actually stands and what to do next.
@@ -14,13 +14,13 @@ followed, and the departure is deliberate: work is sequenced by **what can be
 proved on this machine**, taking small verified defects first and large
 speculative pieces last, so every commit ships.
 
-Four rules have held throughout and are worth keeping:
+Five rules have held throughout and are worth keeping:
 
 1. **Measure before designing.** Every latency item in this branch was probed
-   first, and in four cases the number changed the design — twice it changed
-   which problem was worth solving at all. Probes live in the session scratchpad,
-   never in the tree; their results live in a comment next to the code that
-   depends on them.
+   first, and in five cases the number changed the design — three times it
+   changed which problem was worth solving at all. Probes live in the session
+   scratchpad, never in the tree; their results live in a comment next to the
+   code that depends on them.
 2. **Every test is checked to catch its defect.** Re-introduce the bug, rebuild,
    watch that specific test fail, restore. This has found flaws in the *tests*
    as often as it has confirmed them — a test that passed for the wrong reason,
@@ -28,12 +28,17 @@ Four rules have held throughout and are worth keeping:
 3. **Cite the contract, quote the passage.** Both in the code and in the commit
    message. Where documentation is silent, the harness measures it and the
    conclusion is labelled as measurement, not contract.
-4. **Three platforms green before every commit.** `.\build.ps1 -Platform all`,
+4. **Declining is a result, and it gets written down.** Three items in this
+   branch were measured and *not* built. Each is recorded with its numbers in
+   the plan document that proposed it, so it is not re-proposed by the next
+   reader: the icon cache (§04.7), `MSAAMENUINFO` (§05.3), and the taskbar
+   rectangle model (§02.5a).
+5. **Three platforms green before every commit.** `.\build.ps1 -Platform all`,
    0 warnings, invariants clean.
 
-## 2. What landed in this session
+## 2. What has landed on this branch
 
-Seven commits, `940ff6a`..`08653c0` plus the MSAA finding.
+Twelve commits, `940ff6a`..`cc5550d`.
 
 | Commit | What |
 |---|---|
@@ -43,6 +48,12 @@ Seven commits, `940ff6a`..`08653c0` plus the MSAA finding.
 | `5fe6354` | **Provider budget and reuse** — a warm menu went from ~170 ms to ~41 ms |
 | `745dd81` | **GDI leak** — ~16 bitmaps leaked per right-click in explorer.exe |
 | `08653c0` | **Mnemonics** — typing a letter in the menu did nothing at all |
+| `690b807` | **MSAA finding** — §05.3's premise was wrong; the work was not needed |
+| `72d2516` | **Taskbar** — one cached UIA round trip instead of four; the bounded wait is now counted; the rectangle model measured and declined |
+| `9c18c79` | **`shell.exe -check`** — parse and report; a missing file no longer reports ok |
+| `a63c7a2` | **Bypass gesture and circuit breaker** — one gesture classifier, so reload and bypass cannot both fire |
+| `46c7a06` | **Config watcher** — save `shell.nss` and the menu follows, with no key combination |
+| `cc5550d` | **Type-ahead** — typing a name selects it; mnemonics keep precedence |
 
 ### The measurements that changed decisions
 
@@ -56,6 +67,8 @@ Seven commits, `940ff6a`..`08653c0` plus the MSAA finding.
 | `TPM_RETURNCMD`, not `TPM_NONOTIFY`, suppresses `WM_COMMAND` | `TPM_NONOTIFY` must never be added — it suppresses `WM_INITMENUPOPUP`, which the bridge needs |
 | Native replay is **posted**, after the call returns | QA-03 inverted: posting, not sending |
 | Owner-drawn + `MIIM_STRING` exposes names to a screen reader — **and Shell already sets it** | §05.3's premise is wrong; `MSAAMENUINFO` would be risk spent on a solved problem |
+| A rectangle model of the taskbar agrees with `ElementFromPoint` **49.6 %** of the time (84.2 % scoped to the XAML frame) | §02.5's Stage 2 as written would claim the system tray as background. Declined |
+| `ElementFromPointBuildCache` matches the four-call form at **1440 / 1440** points | Taken, for the call count rather than the 0.5 ms — a wedged provider now has one call to hang in, not four |
 
 ## 3. Where to pick up
 
@@ -63,54 +76,49 @@ Ordered by user value, with what is known about each.
 
 ### 3.1 Confirm MSAA with a real screen reader — *blocked on a deployed build*
 
-The single loose end from this session. §05.3's box records that Shell's items go
-in with `MIIM_STRING` and that the mechanism demonstrably works, but **nothing
-has confirmed Shell's own composed menu reaching Narrator**. Deploy
+The oldest loose end. §05.3's box records that Shell's items go in with
+`MIIM_STRING` and that the mechanism demonstrably works, but **nothing has
+confirmed Shell's own composed menu reaching Narrator**. Deploy
 (`.\scripts\backup-and-upgrade.ps1`, asks before restarting Explorer) and check.
 If it works, close §05.3 as already-satisfied and delete the `MSAAMENUINFO`
 design. If it does not, find out *why* before reaching for `MSAAMENUINFO` — the
 mechanism is proven, so a failure means something else is interfering.
 
-### 3.2 Taskbar Stage 2 (§02.5)
-
-Replace three per-property UIA calls with a cached request producing plain
-rectangles, published atomically; the UI thread then hit-tests rectangles with no
-COM and no wait. The 250 ms bounded wait stays as the cold-layout fallback and
-the ring records how often it is taken. **Do not** reinstate Stage 1 — §07 A2
-explains why, and `AGENTS.md` records the same decision.
-
-### 3.3 `shell.exe -check` (§03.1b)
-
-Parse and report; publish nothing; non-zero exit on error. The plan called this
-XS and it is not: `shell.exe` does not link the parser and is a Windows-subsystem
-binary with no console. It needs an export from `shell.dll` plus
-`AttachConsole(ATTACH_PARENT_PROCESS)`.
-
-### 3.4 Circuit breaker and bypass gesture (§01.7, §05.2)
-
-Both now have somewhere to record themselves — `TakeoverDecision` is already
-plumbed through the ring, with `TakeOver` and `FailOpen` populated. `BypassOnce`
-and `Degraded` are defined and unused, which is the shape of the remaining work.
-Default gesture `Ctrl+Alt+right-click`; `Ctrl+Shift` is taken by config reload
-and is evaluated in the same hook body, so harness probe 4 (gesture
-non-interference) belongs with this.
-
-### 3.5 The takeover half of the harness
+### 3.2 The takeover half of the harness — *blocked on a deployed build*
 
 Everything in `src/tests/hostprobe/` records **untouched Windows**. Running the
 same scenarios through Shell's hook and diffing needs a deployed, injected build.
 That is what would verify `b63fdc2`'s replay and `a634ab6`'s INIT/UNINIT pairing
-against something other than reasoning. Harness probes 3 (UNINIT tolerance) and 4
-(gesture non-interference) are both waiting on it.
+against something other than reasoning. Harness probe 3 (UNINIT tolerance) is
+still waiting on it; **probe 4 no longer is** — see §01.7a, the gesture rules
+became a pure function and the property is now structural.
+
+### 3.3 `TakeoverSession` and the WinEvent lifecycle (§01.1, §01.6)
+
+Pure consolidation, no user-visible value, but it unblocks §04.4 steps 5–7 and
+it is the last structural item before the seam work. The hook body has grown
+three more decisions this session (gesture, breaker, decision-preservation in
+the `__finally`) and is the right size to be consolidated now rather than later.
+
+### 3.4 Smart columns (§05.5)
+
+Small, self-contained presenter logic over the existing measure pass, and the
+machinery exists on both sides already (`cyMax` scrolling landed in `a3431df`;
+NSS `column` maps to `MFT_MENUBREAK`). Nothing blocks it.
+
+### 3.5 CoCI policy compile and conditional attach (§01.9)
+
+`Include/ComActivationPolicy.h` already exists — it landed with the Alt-held
+blocklist fix (`f2975f9`). What remains is compiling the policy at config
+publish time, attaching the detour only when the policy is non-empty, and the
+router de-dup of the Win11 suppression.
 
 ### 3.6 Then
 
-`TakeoverSession` and the WinEvent lifecycle (§01.1, §01.6, pure consolidation,
-no user-visible value but it unblocks §04.4 steps 5–7) · flicker-hack A/B
-(§02.4) · config watcher (§03.3) · CoCI policy compile and conditional attach
-(§01.9) · smart columns (§05.5) · type-ahead (§05.4 Stage 2) · Reliability
-Center UI (§05.1, the telemetry it needs now exists) · targeted moveto (§04.6) ·
-favorites and the rule inspector (§05.6–7).
+Flicker-hack A/B (§02.4 — note the *visible* half needs eyes on a real menu) ·
+Reliability Center UI (§05.1; its telemetry now exists, including the taskbar
+counters) · targeted moveto (§04.6) · favorites and the rule inspector
+(§05.6–7) · seam steps 5–7 of §04.4.
 
 ## 4. Things that will bite
 
@@ -128,12 +136,25 @@ favorites and the rule inspector (§05.6–7).
 - **The provider cache is thread-local and holds live third-party COM objects.**
   That is what makes it apartment-safe without marshalling. Do not hoist it to
   process scope.
+- **The hook's `__finally` must not overwrite a decision that was already
+  recorded.** `BypassOnce` and `Degraded` are set before `__leave`; blanket
+  `FailOpen` would erase the only evidence of why a menu was the host's own.
+- **`ConfigWatcher` runs `init()` on its own thread.** Safe by the snapshot
+  design and serialised by `_reload_mutex`, but it is the one place in the tree
+  where a parse runs off a menu thread, and it has not been exercised inside a
+  real `explorer.exe`.
+- **`string::Copy(dst, src, count)` writes `count + 1` slots** — count
+  characters and *then* a terminator. Passing the capacity overruns by one. Same
+  family as the `release(n - 1)` shape.
 - **`hostprobe.exe` is built but never run by `build.ps1`.** It creates a window
   and shows real menus. It does not inject desktop-wide input — keys are posted
   to its own thread queue — but it will put popups on screen.
 - Re-record fixtures with `--record` and *always* re-run `--verify` twice
   afterwards. Two scenarios were non-reproducible once (`WM_DRAWITEM` is a paint,
   not a contract) and the fix was to stop recording it inline.
+- Two traps that cost real time this session are now in `AGENTS.md`: a variadic
+  template call inside an SEH function (C2712, reported at the `__try`), and
+  heredoc'd patch scripts eating a backslash level in **both** directions.
 
 ## 5. Verifying the tree
 
@@ -142,13 +163,24 @@ favorites and the rule inspector (§05.6–7).
 .\src\bin\x64\hostprobe.exe --verify .\src\tests\hostprobe\fixtures
 ```
 
-At the time of writing: 25,940 checks / 0 failures on x64 and x86, arm64 builds
+At the time of writing: 26,303 checks / 0 failures on x64 and x86, arm64 builds
 and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)`,
 23 harness scenarios / 0 failures.
 
+`shell.exe -check` is worth running by hand as well — it is the one piece of
+this branch a user drives directly:
+
+```powershell
+.\src\bin\x64\shell.exe -check:path\to\shell.nss
+```
+
+Note that neither `cmd` nor PowerShell waits for a Windows-subsystem process, so
+read the exit code with `Start-Process -Wait -PassThru`. §03.1b records why that
+is not being fixed yet.
+
 **Nothing in this branch has run inside a real Explorer.** All of it is
 unit-verified or probe-verified. The provider reuse, the INIT/UNINIT pairing, the
-`TPM_RETURNCMD` replay and the MSAA question all want a deployed build and, for
-the replay in particular, a third-party host — Total Commander or Directory Opus,
-which are exactly the hosts these changes are for and exactly the ones this
-machine cannot test.
+`TPM_RETURNCMD` replay, the bypass gesture, the watcher's off-thread parse and
+the MSAA question all want a deployed build and, for the replay in particular, a
+third-party host — Total Commander or Directory Opus, which are exactly the hosts
+these changes are for and exactly the ones this machine cannot test.
