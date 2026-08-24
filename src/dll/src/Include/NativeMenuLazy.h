@@ -32,8 +32,16 @@ namespace Nilesoft
 		{
 			// Root level only; a submenu is initialised when it is opened.
 			Lazy,
-			// Whole tree up front, the pre-1.9.20 behaviour. Diagnostic escape
-			// hatch for configurations or hosts that turn out to need it.
+			// Root level, plus only the submenus a parent-moving rule actually
+			// named - and their ancestors, since there is no way to reach one
+			// without opening those. docs/refactor/04-code-health.md section 6,
+			// Include/NativeMenuTargets.h.
+			TargetedDiscovery,
+			// Whole tree up front, the pre-1.9.20 behaviour. Still the answer
+			// when a rule's location cannot be reduced to a literal path - a
+			// wildcard, or an expression that would not evaluate - and the
+			// diagnostic escape hatch for configurations or hosts that turn out
+			// to need it.
 			LegacyEager
 		};
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Include/TypeAhead.h"
 
@@ -15,6 +15,7 @@ constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 
 #include "Include/Theme.h"
 #include "Include/NativeMenuLazy.h"
+#include "Include/NativeMenuTargets.h"
 #include "Include/OneShotMarshal.h"
 
 struct IExplorerCommand;
@@ -742,6 +743,11 @@ plutovg_move_to(pluto, start.x, start.y);
 			bool _uninitialized = false;
 
 			NativeTreePolicy _native_policy = NativeTreePolicy::Lazy;
+
+			// Which submenus TargetedDiscovery is allowed to open. Empty for
+			// every other policy, and rebuilt per menu because the rules that
+			// fill it depend on the selection.
+			NativeTargets _native_targets;
 			HMENU _native_notify = nullptr;
 			HMENU _native_uninit_notify = nullptr;
 
@@ -825,6 +831,11 @@ plutovg_move_to(pluto, start.x, start.y);
 			bool materialize_native_children(menuitem_t *node);
 			void apply_system_modify_rules(menuitem_t *node, bool is_root);
 			bool has_applicable_native_moveto_rule() const;
+
+			// Fills `targets` with every submenu the applicable parent-moving
+			// rules name. False means one of them could not be reduced to a
+			// literal path, and the menu keeps LegacyEager.
+			bool collect_native_targets(NativeTargets &targets);
 			void append_explorer_commands(menuitem_t *root);
 			bool materialize_explorer_command_children(menuitem_t *node);
 			bool invoke_explorer_command(MenuItemInfo *item);

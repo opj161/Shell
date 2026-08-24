@@ -4902,7 +4902,23 @@ namespace Nilesoft
 							itemPtr->native_popup.handle = mii.hSubMenu;
 							itemPtr->native_popup.parent_position = static_cast<UINT>(i);
 
-							if(_native_policy == NativeTreePolicy::LegacyEager)
+							auto descend = _native_policy == NativeTreePolicy::LegacyEager;
+
+							if(!descend && _native_policy == NativeTreePolicy::TargetedDiscovery)
+							{
+								// The path this submenu would be known by, built
+								// the same way __map_system_menu builds it below,
+								// because that is what the rules are matched
+								// against.
+								string path = item->name;
+								if(!item->path.empty())
+									path = item->path + L'/' + path;
+
+								descend = _native_targets.needs(
+									std::wstring(path.c_str() ? path.c_str() : L""));
+							}
+
+							if(descend)
 							{
 								initialize_native_popup(itemPtr->native_popup);
 								enumerate_native_menu_level(mii.hSubMenu, itemPtr, false);
@@ -5021,6 +5037,107 @@ namespace Nilesoft
 			}
 
 			return false;
+		}
+
+		/*
+			Which submenus the applicable parent-moving rules actually name.
+
+			Returns false when any one of them cannot be reduced to a literal
+			path, which is the whole menu's cue to fall back to LegacyEager.
+			docs/refactor/04-code-health.md section 6 and
+			Include/NativeMenuTargets.h have the reasoning; the short version is
+			that a rule which talks about "every level" has to have every level.
+
+			Both ends of a move are collected. `location` says which submenu's
+			children the rule matches against; `moveto` says which submenu an
+			item is moved into, and that destination is resolved through
+			__map_system_menu, which only holds levels that were enumerated.
+			Collecting sources alone would send moved items to
+			__movable_system_items instead - a silent behaviour change rather
+			than a slow menu.
+
+			Evaluated without a `this`: these expressions are read before any
+			native item exists, so a rule whose location depends on the item it
+			is matching cannot be answered here. Eval failing, or answering
+			empty, is treated as "not literal" and takes the eager path.
+		*/
+		bool ContextMenu::collect_native_targets(NativeTargets &targets)
+		{
+			if(!_cache)
+				return false;
+
+			auto previous_this = _context._this;
+			_context._this = nullptr;
+
+			auto literal = true;
+
+			for(auto rule : _cache->statics)
+			{
+				if(!rule || rule->has_clsid
+					|| !native_moveto_requires_descendant_discovery(
+						static_cast<bool>(rule->moveto), static_cast<bool>(rule->location)))
+					continue;
+
+				if(!Selected.verify_types(rule->fso))
+					continue;
+
+				/*
+					Returns false only when the value cannot be reduced to a
+					literal path at all. Two things that are *not* failures, and
+					were written as failures first:
+
+					- an empty value. For a location it means the root level,
+					  which needs no descendant; for a moveto it means the item
+					  moves to the root, which is always materialised. Treating
+					  empty as unknown sent the commonest rule shape there is -
+					  `modify(in="View" find="..." menu="")`, lift an item out to
+					  the top - straight back to the eager walk.
+					- a value that names a submenu which does not exist. Nothing
+					  is opened for it, the rule matches nothing, and that is the
+					  same outcome the eager walk would have reached.
+
+					A wildcard is a real failure: `*` matches every level, so
+					every level has to be there.
+				*/
+				auto collect = [&](Expression *expression)
+				{
+					if(!expression)
+						return true;
+
+					string value;
+					try
+					{
+						if(!_context.Eval(expression, value, true))
+							return false;
+					}
+					catch(...)
+					{
+						return false;
+					}
+
+					std::wstring text(value.c_str() ? value.c_str() : L"");
+					if(NativeTargets::is_wildcard(text))
+						return false;
+
+					targets.add(text);		// no-op for an empty path
+					return true;
+				};
+
+				if(!collect(rule->location) || !collect(rule->moveto))
+				{
+					literal = false;
+					break;
+				}
+			}
+
+			_context._this = previous_this;
+
+			// `literal` alone, not `literal && !targets.empty()`. An empty set
+			// is a legitimate answer - every applicable rule turned out to be
+			// root-only - and it means "descend into nothing", which is
+			// correct and strictly better than the eager walk. Requiring a
+			// non-empty set sent exactly that case back to eager.
+			return literal;
 		}
 
 		bool ContextMenu::Initialize()
@@ -5207,6 +5324,27 @@ namespace Nilesoft
 					_settings.modify_items.parent,
 					has_applicable_native_moveto_rule(),
 					diagnostic_eager);
+
+				/*
+					Eager means "every submenu of the host's menu, before the
+					first pixel" - measured at 95 ms average against ~13 ms lazy
+					on this machine, with one third-party submenu accounting for
+					22 ms of it. Most of that is avoidable: a rule that names a
+					literal location needs *that* submenu and its ancestors, not
+					the other nine.
+
+					Only downgraded from eager, never up from lazy, and never
+					when the diagnostic override asked for eager on purpose.
+					docs/refactor/04-code-health.md section 6.
+				*/
+				if(_native_policy == NativeTreePolicy::LegacyEager && !diagnostic_eager)
+				{
+					Diagnostics::MenuPerfScope perf(L"native.target_scan");
+					_native_targets = NativeTargets{};
+					if(collect_native_targets(_native_targets))
+						_native_policy = NativeTreePolicy::TargetedDiscovery;
+					perf.annotate(static_cast<long>(_native_targets.size()));
+				}
 
 				if(0 == ::GetPropW(hwnd.owner, UxSubclass))
 				{
