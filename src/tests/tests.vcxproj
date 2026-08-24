@@ -142,6 +142,7 @@
     <ClCompile Include="test_com_activation_policy.cpp" />
     <ClCompile Include="test_config_check.cpp" />
     <ClCompile Include="test_config_lifecycle.cpp" />
+    <ClCompile Include="test_config_watcher.cpp" />
     <ClCompile Include="test_package_catalog.cpp" />
     <ClCompile Include="test_config_shadow.cpp" />
     <ClCompile Include="test_host_contract.cpp" />

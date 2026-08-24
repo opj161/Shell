@@ -2,6 +2,7 @@
 #include "Include/ConfigLifecycle.h"
 #include "Include/Theme.h"
 #include "Include/TakeoverGesture.h"
+#include "Include/ConfigWatcher.h"
 #include <ConfigCheck.h>
 #include <mutex>
 #include <memory>
@@ -52,6 +53,13 @@ namespace Nilesoft
 			// Shared by the publishing path and by check(), which builds the
 			// same thing and then throws it away.
 			std::unique_ptr<Parser> prepare_parser(const string *config_path, CACHE *cache);
+
+			// Point the process's watcher at the set that was just loaded.
+			// docs/refactor/03-config-safety.md section 3.
+			static void start_watching(const std::vector<std::wstring> &files);
+
+			// What the watcher calls when one of those files is written.
+			static void on_config_file_changed();
 
 		public:
 

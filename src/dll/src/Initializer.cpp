@@ -149,6 +149,62 @@ namespace Nilesoft
 		}
 
 		/*
+			The process's one configuration watcher.
+
+			Process lifetime and no destructor, like the other services here.
+			uninit() stops it; nothing destroys it, because a static whose
+			destructor could run while its thread is still in a callback is a
+			crash waiting for an unlucky shutdown.
+		*/
+		ConfigWatcher &config_watcher()
+		{
+			static auto *watcher = new ConfigWatcher();
+			return *watcher;
+		}
+
+		/*
+			What the watcher does when one of the loaded files is written.
+
+			Runs the ordinary init() publish path on the watcher's own thread.
+			That is safe for the reason the snapshot design exists: init()
+			builds a whole new CACHE and swaps a shared_ptr under
+			_snapshot_mutex, and a menu that is already open holds its own copy
+			of the generation it started with. It never touches a live session.
+
+			init() also takes _reload_mutex, which is what serialises this
+			against a menu thread reloading from a keyboard combo at the same
+			moment.
+
+			A failed parse is not an error here: last-known-good keeps the
+			previous generation live and the error surfaces the usual way. That
+			is precisely what makes reloading on every save safe to do at all -
+			a half-typed file mid-edit costs nothing.
+		*/
+		void Initializer::on_config_file_changed()
+		{
+			if(auto *initializer = Initializer::instance)
+			{
+				if(Status.Disabled.load(std::memory_order_relaxed))
+					return;
+
+				initializer->init();
+			}
+		}
+
+		/*
+			Point the watcher at the set that was just loaded.
+
+			Best-effort throughout: a configuration on a network share may never
+			notify at all (FindFirstChangeNotification's own page says so), so a
+			watcher that fails to start is not an error and the keyboard combos
+			remain exactly as they were.
+		*/
+		void Initializer::start_watching(const std::vector<std::wstring> &files)
+		{
+			config_watcher().start(files, &Initializer::on_config_file_changed);
+		}
+
+		/*
 			The setup a Parser needs before Load() can be called.
 
 			Extracted so that check() can build exactly what the publishing path
@@ -324,6 +380,13 @@ namespace Nilesoft
 						ConfigShadow::save(ConfigShadow::default_directory(), loaded.front(), loaded);
 				}
 
+				// Watch what was actually read, whichever set that turned out
+				// to be. Re-pointed on every successful load, because an edit
+				// can add or remove an import and the old watch set would then
+				// be watching the wrong directories.
+				// docs/refactor/03-config-safety.md section 3.
+				start_watching(parser->LoadedFiles());
+
 				return true;
 			}
 			catch(...)
@@ -337,6 +400,10 @@ namespace Nilesoft
 
 		bool Initializer::uninit()
 		{
+			// Before the snapshot goes, so nothing is watching for a
+			// configuration this process has stopped serving.
+			config_watcher().stop();
+
 			try
 			{
 				{

@@ -194,7 +194,8 @@ still shows Shell's menu; no `WM_SETTINGCHANGE` broadcast observable around a me
 
 Seam steps 5–7 of §04.4 (selection layering, MenuModel, presenter) · targeted moveto
 (§04.6) · icon-cache extension + memoization whitelist behind measurement (§04.7) ·
-config watcher (§03.3). Each step independent; order flexible after Phase 3.
+~~config watcher (§03.3)~~ **landed 2026-08-24, see §03.3a**. Each step
+independent; order flexible after Phase 3.
 
 ## Phase 5 — capability wave (per §05)
 

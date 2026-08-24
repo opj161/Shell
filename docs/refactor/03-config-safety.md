@@ -196,6 +196,53 @@ Ordering rule (R1 compliance): the watcher only ever *publishes snapshots*; it n
 touches live sessions. Open menus hold their generation until closed — unchanged
 property of the snapshot design.
 
+### 3a. As implemented (2026-08-24) — three departures, all because the tree moved first
+
+`Include/ConfigWatcher.h`, started from the publish path in `load_generation`
+and stopped in `uninit()`.
+
+**The watch set was already computed.** This section expected to reach into the
+parser's `_imports` stack, or to extend the parser to record import paths.
+`Parser::LoadedFiles()` has done exactly that since the last-known-good shadow
+landed — root first, every import after — so the watcher takes the same list the
+shadow does, and the parser change this section budgeted for is not needed.
+
+**`FindFirstChangeNotification`, not `ReadDirectoryChangesW`.** The latter is
+the right call when you need to know *which* file changed, and its own page says
+so of the former: "This function does not indicate the change that satisfied the
+wait condition. To retrieve information about the specific change as part of the
+notification, use the `ReadDirectoryChangesW` function"
+(<https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstchangenotificationw>).
+But a reload re-parses the whole set regardless, so the filename would be
+discarded the moment it arrived. What the simpler primitive avoids is a
+caller-owned buffer, overlapped I/O, and the `ERROR_NOTIFY_ENUM_DIR` overflow
+path where the notifications have to be reconstructed by rescanning — three
+failure modes bought for information this code does not want.
+
+**A wakeup is a hint, not an answer.** Watching directories rather than files
+means any change in the same folder wakes the thread, so every wakeup re-reads
+the write times of the files that were actually loaded and does nothing unless
+one moved. That check also makes the documented gap between the wait returning
+and `FindNextChangeNotification` re-arming harmless: a notification lost in that
+window is covered by the next one and by the timestamps not matching. Both rules
+are pinned, and both were checked to be caught — trusting the wakeup fails
+`an_unrelated_file_in_the_same_directory_reloads_nothing`, and removing the
+debounce fails `writing_a_watched_file_triggers_exactly_one_reload`.
+
+Best-effort throughout, and the keyboard combos stay exactly as they are. The
+same page: "Notifications may not be returned when calling
+FindFirstChangeNotification for a remote file system" — a configuration on a
+share may never notify, so nothing here is allowed to be the only way back.
+
+**The residual risk, stated.** The reload runs `init()` on the watcher's own
+thread, as this section specifies. That is safe by the snapshot design — a whole
+new `CACHE` is built and a `shared_ptr` swapped under `_snapshot_mutex`, while
+an open menu holds its own copy of the generation it started with — and `init()`
+takes `_reload_mutex`, which serialises it against a menu thread reloading from
+a keyboard combo at the same moment. What has *not* been verified is a parse
+running on a non-menu thread inside a real `explorer.exe`; the suite exercises
+the watcher against real files, not the parse under injection.
+
 ## 4. Interplay with other subsystems
 
 | Concern | Resolution |
@@ -217,10 +264,14 @@ property of the snapshot design.
       files; see the caveat in §1b about which shells wait for the exit code.
 - [ ] A shadow whose manifest fails verification is refused, and the process falls
       back to the never-loaded refusal rather than parsing it.
-- [ ] Fix config → new generation active without Explorer restart (watcher); before the
-      watcher lands, recovery is the manual Shift+Ctrl+right-click reload — no poll
-      fallback is assumed (none exists today, §1).
+- [x] Fix config → new generation active without Explorer restart (watcher).
+      Landed; see §3a. The manual Shift+Ctrl+right-click reload stays, because
+      the watcher is best-effort and a configuration on a network share may
+      never notify.
 - [ ] Fresh machine with corrupt stock config → clean "never loaded" refusal + log
       (no half-menus).
-- [ ] Suite pins all three states; watcher covered by a real-file integration test with
-      injected short debounce.
+- [x] Suite pins all three states; watcher covered by a real-file integration
+      test. Not with an injected short debounce, as sketched — the tests wait
+      for the watcher's own reload counter to move rather than sleeping for a
+      duration, so the shipping debounce is the one under test. Stable over
+      five consecutive runs of the whole suite.
