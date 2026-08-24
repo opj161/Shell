@@ -179,6 +179,94 @@ halves exist: the report printed a *hash* and `-quarantine:add` wanted a
 now and the report prints that instead, so the identifier a user reads is
 exactly the one the next command takes. Export version 4 → 5.
 
+### 1c. Identity was made to depend on presentation — found 2026-08-24, by reading a report
+
+§1a moved names beside the records and §1b made the identifier printed be the
+CLSID `-quarantine:add` accepts. Both are right, and together they left a gap
+that only shows up in a report from a machine with a genuinely slow extension on
+it. This desktop's, unedited:
+
+```text
+provider {CAE3F1D4-7765-4D98-A060-52CD14D56EAB}  5.0 ms  ok  NanaZip
+provider 4f1b2d3a                               70.0 ms  ok
+provider ab7282d1                                0.0 ms  deferred
+```
+
+The second line is **89 % of a 78.6 ms menu**, and it prints a hash. The command
+that would do something about it takes a CLSID. So the single provider on this
+machine that the Reliability Center exists to catch is the one it cannot hand to
+the treatment — and six deferred providers below it are in the same position,
+which is worse, because a deferral is Shell's own judgement re-probed every 200
+menus and quarantine is the user making it permanent.
+
+**The cause is a coupling, not a missing feature.** `ExplorerCommand.cpp`
+records the CLSID and the title in one call:
+
+```cpp
+if(!item->title.empty())
+    Diagnostics::provider_name(hash, reg.clsid, item->title.c_str());
+```
+
+and `note_provider` returns early on `!name || !*name`. A provider that
+activates fine and returns an empty title therefore has no directory entry, so
+no CLSID; and the quarantined and deferred paths `continue` well before this
+line, so they never had one either. The identifier is only ever learned as a
+side effect of learning the *label*.
+
+That also makes §1a's own comment wrong on this machine — "the hash is the
+fallback for a provider this host has never successfully activated, which is
+also one there is nothing useful to say about yet". `4f1b2d3a` reports `ok` and
+cost 70 ms. There is a great deal to say about it.
+
+**The fix is to record identity where identity is known.** `reg.clsid` is in
+scope at the top of the candidate loop, before the quarantine check, before the
+health check, before any activation — every `continue` in the loop is below it.
+Identity goes there; presentation stays where it is, because the title genuinely
+does come from `GetTitle` and genuinely does need the selection.
+
+Two rules worth keeping distinct after this, because collapsing them is what
+caused the gap:
+
+- **Identity is a property of the registration.** It is knowable without
+  activating anything, it never changes, and every provider the menu considered
+  has one — including the ones it deliberately did not ask.
+- **Presentation is a property of one activation against one selection.** It is
+  a label, it may differ per selection, and its absence says nothing about
+  whether the provider is worth naming.
+
+**As implemented (2026-08-24).** `Diagnostics::provider_identity(hash, clsid)`
+at the top of the candidate loop, `provider_name` left where it was, and
+`perf_export_note_provider` taking a nullable name. One consequence had to be
+thought about rather than assumed: an entry now gains its name *after* it is
+published, which is the one rewrite the append-only directory permits. It is
+safe because the block is zero-filled, a name is only ever written into an
+entry that has none, and characters are filled from index 0 upward — so a
+reader copying mid-write sees a **prefix** of the name followed by the zeros
+that were already there. A truncated name, never a torn one, and never a name
+belonging to a different provider.
+
+Verified in a real Explorer the same day, on the machine whose report opened
+this section:
+
+| | the report |
+|---|---|
+| before | `provider 4f1b2d3a  70.0 ms  ok` — and six deferred hashes |
+| after | every provider printing a CLSID, including six with no name at all |
+| quarantining one of those CLSIDs | `provider {1FA0E654-…B00}  0.0 ms  quarantined` on the next menu |
+
+The six nameless ones turned out to be a single handler family registering six
+sequential CLSIDs that return no title for a desktop background selection —
+exactly the shape §1a's comment assumed could not exist.
+
+Two rules are pinned by `test_perf_export.cpp`, and both were checked to catch
+their defect: re-introducing the name gate fails
+`a_provider_with_no_title_is_still_identified`, `an_empty_title_is_the_same_as_none`
+and `a_name_learned_later_fills_in_the_entry_that_is_already_there`, and nothing
+else. The first version of that first test **crashed the suite** instead of
+reporting, because it dereferenced the pointer whose nullness is the defect —
+the flaw `08-handoff.md` §1 rule 2 exists to find. The check short-circuits now,
+and says in a comment why.
+
 What is still missing for the window: the window itself, and the "Repair
 takeover" row.
 

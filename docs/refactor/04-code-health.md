@@ -98,6 +98,27 @@ Rule throughout: move code, don't improve it in the same commit; each seam lands
 its unit suite where pure (lifecycle/policy/table logic) or harness coverage where
 hosted.
 
+### 4a. What each remaining step actually costs — audited 2026-08-24
+
+Steps 1–4 landed. Steps 5–7 were being treated as one block gated on the same
+prerequisite, and they are not:
+
+| Step | Where the code lives | Linked by `tests.vcxproj`? | Gate |
+|---|---|---|---|
+| 5 — selection layering | `Selections.cpp` (1,496 lines); `QueryShellWindow` at `:1308` | **yes** | none |
+| 6 — `MenuModel` | `ContextMenu.cpp` (7,559 lines) | no | rendering coverage |
+| 7 — `Win32MenuPresenter` | `ContextMenu.cpp`, `OnDrawItem` `:1828`–`:2873` and `CreateLayer` `:6368`–`:6657` | no | rendering coverage |
+
+**Step 5 is unit-testable today.** `tests.vcxproj` has included
+`..\dll\src\Selections.cpp` since `test_selection_path_resolver.cpp` was
+written, so the capture-first / enrichment-second layering §5 describes can land
+with a suite against the real object, in the file it already lives in, without
+the composed-menu rendering harness that 6 and 7 need. `08-handoff.md` §3.6 used
+to block all three on that harness; that was true of 6 and 7 and never of 5.
+
+The ordering that follows is: **5 first**, because it is provable here and it
+shrinks what 6 has to move; then the rendering coverage; then 6; then 7.
+
 ## 5. Selection layering detail
 
 Capture-first rule concretely: `ShellExtMatch` result (exact HMENU-bound capture)

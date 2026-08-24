@@ -619,7 +619,7 @@ TEST(perf_export, a_fresh_block_knows_no_provider_names)
 TEST(perf_export, a_noted_name_comes_back_for_its_hash)
 {
 	auto block = make_block();
-	CHECK(perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
+	CHECK(perf_export_note_provider(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
 	CHECK_EQ(block.header.directory_count, 1u);
 	CHECK(same(perf_export_find_name(block, 0xe345019du), L"Rename with PowerRename"));
 }
@@ -627,7 +627,7 @@ TEST(perf_export, a_noted_name_comes_back_for_its_hash)
 TEST(perf_export, an_unknown_hash_still_has_no_name)
 {
 	auto block = make_block();
-	perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename");
+	perf_export_note_provider(block, 0xe345019du, SampleClsid, L"Rename with PowerRename");
 	CHECK(perf_export_find_name(block, 0x9e0df88cu) == nullptr);
 }
 
@@ -636,9 +636,9 @@ TEST(perf_export, an_unknown_hash_still_has_no_name)
 TEST(perf_export, noting_the_same_provider_twice_adds_nothing)
 {
 	auto block = make_block();
-	CHECK(perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
-	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
-	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, L"Something else entirely"));
+	CHECK(perf_export_note_provider(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
+	CHECK(!perf_export_note_provider(block, 0xe345019du, SampleClsid, L"Rename with PowerRename"));
+	CHECK(!perf_export_note_provider(block, 0xe345019du, SampleClsid, L"Something else entirely"));
 	CHECK_EQ(block.header.directory_count, 1u);
 
 	// The first title wins: an entry is never rewritten, which is what lets a
@@ -646,19 +646,80 @@ TEST(perf_export, noting_the_same_provider_twice_adds_nothing)
 	CHECK(same(perf_export_find_name(block, 0xe345019du), L"Rename with PowerRename"));
 }
 
-TEST(perf_export, a_provider_with_no_title_is_not_recorded)
+/*
+	A provider with no title is still identified.
+
+	This is the defect docs/refactor/05-capabilities.md section 1c is about,
+	as a test: identity used to be a side effect of learning the *label*, so a
+	handler that cost 70 ms and returned no title reported a bare hash - and
+	`shell.exe -quarantine:add` takes a CLSID. The provider a user most wants
+	to act on was the one the report could not name to the command.
+*/
+TEST(perf_export, a_provider_with_no_title_is_still_identified)
 {
 	auto block = make_block();
-	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, nullptr));
-	CHECK(!perf_export_note_name(block, 0xe345019du, SampleClsid, L""));
-	CHECK_EQ(block.header.directory_count, 0u);
+	CHECK(perf_export_note_provider(block, 0xe345019du, SampleClsid, nullptr));
+	CHECK_EQ(block.header.directory_count, 1u);
+
+	// The CLSID is there, which is the actionable half. The second check
+	// short-circuits deliberately: with the defect this test exists to catch,
+	// the lookup returns null, and a bare dereference would abort the whole
+	// suite instead of reporting this one test - which is how a defect gets
+	// mistaken for a broken harness.
+	auto clsid = perf_export_find_clsid(block, 0xe345019du);
+	CHECK(clsid != nullptr);
+	CHECK(clsid && ::IsEqualGUID(*clsid, SampleClsid) != FALSE);
+
+	// The name is not, and says so rather than returning an empty string that
+	// a report would print as a blank column.
+	CHECK(perf_export_find_name(block, 0xe345019du) == nullptr);
+}
+
+TEST(perf_export, an_empty_title_is_the_same_as_none)
+{
+	auto block = make_block();
+	CHECK(perf_export_note_provider(block, 0xe345019du, SampleClsid, L""));
+	CHECK_EQ(block.header.directory_count, 1u);
+	CHECK(perf_export_find_name(block, 0xe345019du) == nullptr);
+	CHECK(perf_export_find_clsid(block, 0xe345019du) != nullptr);
+}
+
+/*
+	The sequence every menu actually produces: identity for every candidate at
+	the top of the loop, then a name from whichever activation first returned a
+	title. The entry must be the same one - appending a second would burn a
+	directory slot per provider and make the same handler appear twice.
+*/
+TEST(perf_export, a_name_learned_later_fills_in_the_entry_that_is_already_there)
+{
+	auto block = make_block();
+	CHECK(perf_export_note_provider(block, 0xe345019du, SampleClsid));
+	CHECK(!perf_export_note_provider(block, 0xe345019du, SampleClsid, L"NanaZip"));
+
+	CHECK_EQ(block.header.directory_count, 1u);
+	CHECK(same(perf_export_find_name(block, 0xe345019du), L"NanaZip"));
+	CHECK(perf_export_find_clsid(block, 0xe345019du) != nullptr);
+}
+
+// Filling in a missing name is the only rewrite allowed, and it happens once.
+// A handler may title itself differently for a different selection; letting
+// the later title win would make the label move under a reader.
+TEST(perf_export, a_name_already_recorded_is_never_replaced)
+{
+	auto block = make_block();
+	perf_export_note_provider(block, 0xe345019du, SampleClsid);
+	perf_export_note_provider(block, 0xe345019du, SampleClsid, L"NanaZip");
+	perf_export_note_provider(block, 0xe345019du, SampleClsid, L"Something else entirely");
+
+	CHECK_EQ(block.header.directory_count, 1u);
+	CHECK(same(perf_export_find_name(block, 0xe345019du), L"NanaZip"));
 }
 
 TEST(perf_export, a_name_that_fills_the_buffer_is_truncated_and_terminated)
 {
 	auto block = make_block();
 	std::wstring huge(PERF_EXPORT_PROVIDER_NAME + 40, L'x');
-	CHECK(perf_export_note_name(block, 1, SampleClsid, huge.c_str()));
+	CHECK(perf_export_note_provider(block, 1, SampleClsid, huge.c_str()));
 
 	auto got = perf_export_find_name(block, 1);
 	CHECK(got != nullptr);
@@ -675,13 +736,13 @@ TEST(perf_export, the_directory_fills_up_and_says_so_rather_than_overwriting)
 	{
 		wchar_t name[32];
 		::wsprintfW(name, L"provider %u", i);
-		CHECK(perf_export_note_name(block, 1000 + i, SampleClsid, name));
+		CHECK(perf_export_note_provider(block, 1000 + i, SampleClsid, name));
 	}
 	CHECK_EQ(block.header.directory_count, PERF_EXPORT_DIRECTORY);
 	CHECK_EQ(block.directory_dropped, 0u);
 
 	// One too many: refused, counted, and nothing already there is disturbed.
-	CHECK(!perf_export_note_name(block, 9999, SampleClsid, L"one too many"));
+	CHECK(!perf_export_note_provider(block, 9999, SampleClsid, L"one too many"));
 	CHECK_EQ(block.header.directory_count, PERF_EXPORT_DIRECTORY);
 	CHECK_EQ(block.directory_dropped, 1u);
 	CHECK(perf_export_find_name(block, 9999) == nullptr);
@@ -695,10 +756,10 @@ TEST(perf_export, the_directory_fills_up_and_says_so_rather_than_overwriting)
 TEST(perf_export, a_directory_count_beyond_the_array_is_refused_not_clamped)
 {
 	auto block = make_block();
-	perf_export_note_name(block, 1, SampleClsid, L"first");
+	perf_export_note_provider(block, 1, SampleClsid, L"first");
 	block.header.directory_count = PERF_EXPORT_DIRECTORY + 9;
 
-	CHECK(!perf_export_note_name(block, 2, SampleClsid, L"second"));
+	CHECK(!perf_export_note_provider(block, 2, SampleClsid, L"second"));
 	CHECK(same(block.directory[0].name, L"first"));
 
 	// A lookup clamps instead, because reading a slot inside the array is
@@ -734,7 +795,7 @@ TEST(perf_export, the_count_does_not_admit_an_entry_until_it_is_written)
 	*block = make_block();
 	seen.block = block.get();
 
-	perf_export_note_name(*block, 0x1234u, SampleClsid, L"Rename with PowerRename",
+	perf_export_note_provider(*block, 0x1234u, SampleClsid, L"Rename with PowerRename",
 		[](void *ctx)
 		{
 			auto *s = static_cast<Seen *>(ctx);
@@ -765,7 +826,7 @@ TEST(perf_export, the_count_does_not_admit_an_entry_until_it_is_written)
 TEST(perf_export, the_directory_remembers_the_clsid_the_hash_came_from)
 {
 	auto block = make_block();
-	CHECK(perf_export_note_name(block, 0xe345019du, SampleClsid, L"NanaZip"));
+	CHECK(perf_export_note_provider(block, 0xe345019du, SampleClsid, L"NanaZip"));
 
 	auto *entry = block.directory[0].clsid_hash == 0xe345019du ? &block.directory[0] : nullptr;
 	CHECK(entry != nullptr);

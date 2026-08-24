@@ -14,7 +14,9 @@ followed, and the departure is deliberate: work is sequenced by **what can be
 proved on this machine**, taking small verified defects first and large
 speculative pieces last, so every commit ships.
 
-Six rules have held throughout and are worth keeping:
+Six rules have held throughout and are worth keeping. A seventh (rule 6) was
+learned late, by an audit that found this document had quietly stopped being
+true:
 
 1. **Measure before designing.** Every latency item in this branch was probed
    first, and in six cases the number changed the design — three times it
@@ -37,7 +39,14 @@ Six rules have held throughout and are worth keeping:
    `TreatAs` redirect (§01.9b).
 5. **Three platforms green before every commit.** `.\build.ps1 -Platform all`,
    0 warnings, invariants clean.
-6. **Check what the experiment is actually testing.** Two separate mechanisms
+6. **Audit this document against the plan, not against itself.** Added
+   2026-08-24. Each session updates §3.6 from what it just did, and after a few
+   of those the list of remaining work describes the recent past rather than the
+   backlog. Reconciling it item by item against `00-master-plan.md` §3 found one
+   item missing altogether (the interception backend, §01.9c) and one
+   prerequisite attached to the wrong seam (§3.6). Both had been invisible for
+   several sessions precisely because every individual update was accurate.
+7. **Check what the experiment is actually testing.** Two separate mechanisms
    were found this session that made a real-Explorer experiment silently
    measure something else — a deploy that landed one restart late, and registry
    values Explorer could not see. Both are now in `AGENTS.md` under "Two ways an
@@ -115,7 +124,9 @@ Thirty-six commits, `940ff6a`..`6b26e61`.
 ## 3. Where to pick up
 
 Ordered by user value, with what is known about each. Everything above §3.6 has
-now landed; what is left is either large, or needs a person at the machine.
+now landed. What is left is one large item, one presentation item, one decision
+that was being made by omission, and — found by an audit of this section against
+the master plan's backlog — one small defect in the flagship feature (§3.6a).
 
 ### 3.1 A real *file* context menu in a third-party host — smaller than it looks
 
@@ -245,10 +256,27 @@ different name.
 
 ### 3.6 What is genuinely left
 
-Three things, and they are honest about their size.
+This section said "three things" and was audited on 2026-08-24 against the
+master plan's own twenty-item backlog rather than against its own memory. That
+found one item it had lost entirely and one prerequisite it had assigned to the
+wrong piece of work. Both corrections are below, in place.
+
+The tally against `00-master-plan.md` §3: **fourteen items closed** — built, or
+measured and declined with the numbers written down — **three partial**, **three
+open**.
 
 **The Reliability Center window (§05.1).** Additive, no risk to the menu path,
 and verifiable by launching it. It is presentation over data that all exists.
+
+**Interception backend abstraction (§01.9, backlog item 8).** *This section used
+to omit it altogether.* `rg 'PopupInterceptionBackend|Win32uIatBackend|PerModuleIatFallback'`
+over the tree returns nothing: both mechanisms exist — `rt.ntuser_popup_hook`
+and the per-module `rt.popup_hooks` fallback — but not behind the interface, and
+there is no per-entry health probe or unhealthy-implies-fail-open path. It is
+the master plan's **R2**, the one governing rule with no implementation, so
+silence about it is the single option this branch's own rules forbid. It needs a
+decision on its merits and that decision written down; see §01.9c, where it has
+now been taken.
 
 **Seam steps 5–7 of §04.4** — selection layering, `MenuModel`,
 `Win32MenuPresenter`. This is the one large item on the branch, and it is the
@@ -256,15 +284,23 @@ gate for both remaining capabilities: favorites (§05.6) needs origin-stable
 identity from `MenuModel`, and the rule inspector (§05.7) needs that plus
 file-and-line provenance threaded through the parser.
 
-It has not been started, deliberately. `ContextMenu.cpp` is 7,500 lines, the
-test project does **not** link it, and the seams that remain are the paint and
-window-message halves — the parts whose regressions look like a menu that draws
-slightly wrong rather than a test that fails. The verification available here is
-one Explorer and a screenshot, which is not enough to move that code
+**Steps 6–7 have not been started, deliberately.** `ContextMenu.cpp` is 7,559
+lines, the test project does **not** link it, and those two seams are the paint
+and window-message halves — the parts whose regressions look like a menu that
+draws slightly wrong rather than a test that fails. The verification available
+here is one Explorer and a screenshot, which is not enough to move that code
 confidently. §04.4's own rule ("move code, don't improve it in the same commit;
 each seam lands with its unit suite where pure or harness coverage where
 hosted") is the right one, and satisfying it needs the harness to grow coverage
-of composed-menu *rendering* first. That is the next real piece of work.
+of composed-menu *rendering* first.
+
+**Step 5 is not blocked by that, and saying it was is the second correction.**
+Step 5 is selection layering, and the code it moves is not in
+`ContextMenu.cpp`: `Selections::QueryShellWindow` is `Selections.cpp:1308`, and
+`tests.vcxproj` **already links `..\dll\src\Selections.cpp`** — which is how
+`test_selection_path_resolver.cpp` exists at all. So step 5 can land with a unit
+suite today, on this machine, with no rendering harness in front of it. It is
+the cheapest of the three and it shrinks what 6–7 have to move.
 
 **Two judgements that need a person at the machine**, both already measured and
 neither blocking:
@@ -272,6 +308,47 @@ neither blocking:
 - the *visual* half of the flicker wait (§02.4a) — its cost is 7 ms, its benefit
   is a transient a screenshot cannot show;
 - whether any real third-party host takes the non-`RETURNCMD` path (§3.1).
+
+**Two measurement close-outs**, both cheap and both now answerable because the
+ring exists:
+
+- §04.7's lazy large-selection item is gated on `selection.preparing` appearing
+  in the ring's p95s. It reads **0.0 ms** warm in a real Explorer — but for a
+  single-file selection, which is not the case the item is about. One
+  large-selection measurement closes it either way.
+- §03.5 still has two untested acceptance criteria: a shadow whose manifest
+  fails verification being refused, and a fresh machine with a corrupt stock
+  config reaching the clean never-loaded refusal.
+
+### 3.6a The flagship's loop does not close for the provider that matters most
+
+Found 2026-08-24 by reading `shell.exe -report perf` on this desktop rather than
+by reading the code that produces it. The report as it stands:
+
+```text
+provider {CAE3F1D4-7765-4D98-A060-52CD14D56EAB}  5.0 ms  ok  NanaZip
+provider 4f1b2d3a                               70.0 ms  ok
+provider ab7282d1                                0.0 ms  deferred
+```
+
+The second line is **89 % of a 78.6 ms menu** and prints a bare hash.
+`-quarantine:add` takes a CLSID, so the one provider on this machine worth
+quarantining is the one the user cannot name to the command. Six more deferred
+providers below it are in the same position — and those are ones Shell has
+*already judged slow*, where quarantine is the difference between a decision
+re-probed every 200 menus and a permanent one.
+
+The cause is that provider **identity** was made to depend on provider
+**presentation**. `ExplorerCommand.cpp` records the CLSID and the title in one
+call, gated on `!item->title.empty()`, and the quarantined and deferred paths
+`continue` before reaching it. §05.1a's own comment claims the hash fallback is
+only for "a provider this host has never successfully activated — which is also
+one there is nothing useful to say about yet"; this machine's data contradicts
+both halves, because `4f1b2d3a` reports `ok`.
+
+`reg.clsid` is in scope at the top of the candidate loop, before every one of
+those `continue`s, so identity can be recorded there and presentation left where
+it is. §05.1c has what was done.
 
 ### 3.7 The tools this branch has accumulated
 

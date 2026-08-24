@@ -108,7 +108,22 @@ in each is stated below rather than in a separate tracker.
 | ✅ | `shell.exe -check` with no argument — could never find a configuration on any machine, because the export skips the bootstrap that sets the paths up | 3 |
 | ✅ | **§03.5's last acceptance criterion** — invalid config, Explorer restarted, menus served from the persisted shadow. Verified in a real Explorer; the menu came back at 213 × 680, identical to baseline | 3 |
 | ⬜ | Reliability Center **window** (§05.1) — every row it would show exists in text; this is presentation over data that is already actionable | 5 |
-| ⬜ | Seam steps 5–7 (§04.4) — the one large item left, and the gate for favorites (§05.6) and the rule inspector (§05.7). Not started deliberately: the remaining seams are the paint and window-message halves of a 7,500-line file the test project does not link | 4 |
+| ⬜ | Seam step 5 (§04.4a) — selection layering. **Not** blocked by the rendering harness: it lives in `Selections.cpp`, which `tests.vcxproj` already links | 4 |
+| ⬜ | Seam steps 6–7 (§04.4a) — `MenuModel` and the presenter, the gate for favorites (§05.6) and the rule inspector (§05.7). Not started deliberately: these two are the paint and window-message halves of a 7,559-line file the test project does not link | 4 |
+| ⬜ | Interception backend abstraction (§01.9, backlog item 8) — **found missing by the 2026-08-24 audit**, having been absent from the handoff's own list of remaining work. It is the master plan's R2 | 3 |
+| ⬜ | Provider identity in the report (§05.1c) — the slowest provider on the reference machine prints a hash, so the flagship's diagnosis cannot be handed to its own treatment | 5 |
+
+### The 2026-08-24 backlog audit
+
+The status table above is maintained per session and had drifted from the
+backlog it tracks. Reconciled item by item against `00-master-plan.md` §3:
+**fourteen closed** (built, or measured and declined with numbers recorded),
+**three partial** (item 9 conditional attach, item 14 the window, item 20
+memoization and lazy selection), **three open** (items 8, 17, 19).
+
+Two of those had been invisible for several sessions because every individual
+update to the table was itself accurate — the failure was that nothing was
+reconciling the table against the plan. `08-handoff.md` §1 rule 6 now says to.
 
 ### What the harness settled (2026-08-24)
 

@@ -423,6 +423,16 @@ namespace Nilesoft
 
 				auto hash = provider_hash(reg.clsid);
 
+				// Identity first, before any decision that might skip this
+				// provider. The report prints the CLSID and `-quarantine:add`
+				// takes it, so recording it only where a *title* was obtained
+				// left the two cases a user most wants to act on - a handler
+				// that cost 70 ms and returned no title, and every provider
+				// Shell deferred without asking - printing a bare hash the
+				// treatment command does not accept.
+				// docs/refactor/05-capabilities.md section 1c.
+				Diagnostics::provider_identity(hash, reg.clsid);
+
 				// Quarantine is checked before health, and before anything is
 				// activated: the whole point is that this provider costs the
 				// menu nothing at all. It is the user's declaration rather than

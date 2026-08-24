@@ -349,12 +349,10 @@ namespace Nilesoft
 			*/
 			using PerfExportInterpose = void (*)(void *);
 
-			/*
-				Look a provider's name up in the directory. Null when this host
-				has not activated it, which is normal on the first menu and for
-				anything past the cap - the caller prints the hash then.
-			*/
-			inline const wchar_t *perf_export_find_name(const PerfExportBlock &block, uint32_t clsid_hash)
+			// The directory entry for a hash, or null when this host's menu has
+			// not considered that provider - or when it did, but past the cap.
+			inline const PerfExportName *perf_export_find_provider(const PerfExportBlock &block,
+																   uint32_t clsid_hash)
 			{
 				auto count = block.header.directory_count;
 				if(count > PERF_EXPORT_DIRECTORY)
@@ -363,24 +361,74 @@ namespace Nilesoft
 				for(uint32_t i = 0; i < count; i++)
 				{
 					if(block.directory[i].clsid_hash == clsid_hash)
-						return block.directory[i].name[0] ? block.directory[i].name : nullptr;
+						return &block.directory[i];
 				}
 				return nullptr;
 			}
 
 			/*
-				Record a provider's name, once.
+				Look a provider's name up in the directory. Null when no
+				activation has yet produced a title for it - which is normal on
+				the first menu, and permanent for a handler that returns none.
 
-				Append-only and idempotent: an entry is never rewritten, so a
-				reader copying the block while this appends sees either the old
-				`directory_count` or the new one, and the entries below that
-				count are complete either way. That is why the name is written
-				*before* the count is raised, and why this needs no sequence
-				bump of its own.
+				Null here does *not* mean the provider is unknown: identity is
+				recorded for every candidate. Use perf_export_find_clsid for
+				the question a report needs to answer.
+			*/
+			inline const wchar_t *perf_export_find_name(const PerfExportBlock &block, uint32_t clsid_hash)
+			{
+				auto entry = perf_export_find_provider(block, clsid_hash);
+				if(!entry || !entry->name[0])
+					return nullptr;
+				return entry->name;
+			}
 
-				Returns true when a new entry was added, which is the only case
-				that costs anything - a provider that has appeared before is a
-				scan of at most 32 integers.
+			// The CLSID a report prints and `-quarantine:add` takes. Known for
+			// every provider this host's menu considered, whether or not it
+			// was ever activated and whether or not it has a name.
+			inline const GUID *perf_export_find_clsid(const PerfExportBlock &block, uint32_t clsid_hash)
+			{
+				auto entry = perf_export_find_provider(block, clsid_hash);
+				return entry ? &entry->clsid : nullptr;
+			}
+
+			/*
+				Record a provider in the directory: its identity always, its
+				name when the host happens to know it.
+
+				`name` is optional, and that is the whole point of this
+				function's shape. Identity and presentation are learned at
+				different moments and one of them may never be learned at all:
+
+				  - The CLSID is a property of the *registration*. It is known
+					before anything is activated, it never changes, and every
+					provider the menu considered has one - including the ones
+					it deliberately did not ask, because they were quarantined
+					or deferred.
+				  - The name comes from IExplorerCommand::GetTitle, which takes
+					the selection and is answered by the handler. It exists
+					only after a successful activation, and a handler is free
+					to return nothing.
+
+				Coupling them cost this feature its most useful line: a
+				provider that cost 70 ms of a 78 ms menu reported a bare hash,
+				because its title was empty, and `-quarantine:add` takes a
+				CLSID. docs/refactor/05-capabilities.md section 1c.
+
+				Ordering, and what a concurrent reader can see. The identifying
+				half - hash and CLSID - is written before the count is raised,
+				so a reader in another process either does not see the entry at
+				all or sees those two fields complete. The name is the one
+				field that may be filled in after publication, and that is
+				safe for a reason worth stating rather than assuming: the block
+				is zero-filled when it is created, a name is only ever written
+				into an entry that has none, and the writer fills characters
+				from index 0 upward. So a reader copying mid-write sees a
+				*prefix* of the name followed by the zeros that were already
+				there - a truncated name, never a torn one, and never a name
+				belonging to some other provider.
+
+				Returns true when a new entry was added.
 
 				`interpose` runs between the entry being written and the count
 				being raised, which is the only way to observe the ordering this
@@ -391,14 +439,11 @@ namespace Nilesoft
 				reason, as perf_export_load's. Production passes nothing and pays
 				a null check.
 			*/
-			inline bool perf_export_note_name(PerfExportBlock &block, uint32_t clsid_hash,
-											  const GUID &clsid, const wchar_t *name,
-											  PerfExportInterpose interpose = nullptr,
-											  void *interpose_context = nullptr)
+			inline bool perf_export_note_provider(PerfExportBlock &block, uint32_t clsid_hash,
+												  const GUID &clsid, const wchar_t *name = nullptr,
+												  PerfExportInterpose interpose = nullptr,
+												  void *interpose_context = nullptr)
 			{
-				if(!name || !*name)
-					return false;
-
 				auto count = block.header.directory_count;
 				if(count > PERF_EXPORT_DIRECTORY)
 				{
@@ -409,8 +454,24 @@ namespace Nilesoft
 				}
 
 				for(uint32_t i = 0; i < count; i++)
-					if(block.directory[i].clsid_hash == clsid_hash)
-						return false;
+				{
+					if(block.directory[i].clsid_hash != clsid_hash)
+						continue;
+
+					// Known already. Fill in the name if this is the first
+					// activation that produced one - the entry keeps its
+					// identity and gains a label, and never the other way
+					// round, so nothing a reader already copied becomes wrong.
+					if(name && *name && !block.directory[i].name[0])
+					{
+						auto &known = block.directory[i];
+						size_t at = 0;
+						for(; name[at] && at + 1 < PERF_EXPORT_PROVIDER_NAME; at++)
+							known.name[at] = name[at];
+						known.name[at] = L'\0';
+					}
+					return false;
+				}
 
 				if(count >= PERF_EXPORT_DIRECTORY)
 				{
@@ -423,15 +484,16 @@ namespace Nilesoft
 				entry.clsid = clsid;
 
 				size_t at = 0;
-				for(; name[at] && at + 1 < PERF_EXPORT_PROVIDER_NAME; at++)
-					entry.name[at] = name[at];
+				if(name)
+					for(; name[at] && at + 1 < PERF_EXPORT_PROVIDER_NAME; at++)
+						entry.name[at] = name[at];
 				entry.name[at] = L'\0';
 
 				// Last: the entry must be complete before the count admits it.
 				// A reader copies the directory outside the sequence protocol,
 				// so the count is the only thing telling it how far the table
 				// is valid. Raising it first would let a reader in another
-				// process copy a name that is still being written.
+				// process copy a CLSID that is still being written.
 				if(interpose)
 					interpose(interpose_context);
 
@@ -791,17 +853,25 @@ namespace Nilesoft
 				}
 
 				/*
-					The name a handler gave itself, so a report can say which
-					extension cost 186 ms rather than which hash did.
+					A provider the menu considered: its CLSID always, and the
+					name the handler gave itself when there is one.
+
+					`name` may be null, and callers use both forms. The
+					identity is recorded for every candidate, before the
+					quarantine and health checks that may skip it; the name is
+					recorded later, by whichever activation first produced a
+					title. See perf_export_note_provider for why those are two
+					moments rather than one, and what a reader can observe in
+					between.
 
 					Unlike `store`, this one *is* on the measured path - it is
-					called while the menu is being built, right after the
-					GetTitle that produced the name. What it costs there is an
-					uncontended lock and a scan of at most 32 integers, and only
-					the first sighting of a provider also copies 40 characters.
-					Set against the 3-60 ms the GetState/GetTitle/GetIcon
-					sequence next to it costs, that is noise - but it is not
-					zero, and saying it is off the path would be wrong.
+					called while the menu is being built, once per candidate
+					provider. What it costs there is an uncontended lock and a
+					scan of at most 32 integers, and only the first sighting of
+					a provider also copies a CLSID and up to 40 characters. Set
+					against the 3-60 ms the GetState/GetTitle/GetIcon sequence
+					next to it costs, that is noise - but it is not zero, and
+					saying it is off the path would be wrong.
 
 					The directory is deliberately *not* under the block's
 					sequence counter. Bumping that here would put a seqlock
@@ -810,13 +880,13 @@ namespace Nilesoft
 					append-only table already gets from writing the entry before
 					the count.
 				*/
-				void note_provider(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name)
+				void note_provider(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name = nullptr)
 				{
-					if(!name || !*name || !open())
+					if(!open())
 						return;
 
 					std::lock_guard<std::mutex> lock(_writer);
-					perf_export_note_name(*_block, clsid_hash, clsid, name);
+					perf_export_note_provider(*_block, clsid_hash, clsid, name);
 				}
 
 			private:

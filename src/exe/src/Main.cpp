@@ -1086,9 +1086,17 @@ static int ReportPerf(bool detailed)
 				// because that is exactly what `shell.exe -quarantine:add`
 				// accepts. A report whose identifier the treatment command
 				// cannot take would leave the two halves of this feature
-				// speaking different languages. The hash is the fallback for a
-				// provider this host has never successfully activated - which
-				// is also one there is nothing useful to say about yet.
+				// speaking different languages.
+				//
+				// The host knows it for every provider its menu *considered*,
+				// including ones it quarantined or deferred without asking -
+				// identity is recorded from the registration, before any of
+				// those decisions. So the hash is now only ever seen for a
+				// provider past the directory's 32-entry cap, which
+				// `directory_dropped` reports. It used to be seen for any
+				// provider that returned no title, which included the slowest
+				// one on the reference machine.
+				// docs/refactor/05-capabilities.md section 1c.
 				string identity;
 				if(clsid)
 					identity = Nilesoft::Shell::Quarantine::format_guid(*clsid).c_str();

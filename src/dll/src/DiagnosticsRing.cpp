@@ -118,6 +118,15 @@ namespace Nilesoft
 				t_session.record.add_provider(clsid_hash, microseconds, result);
 			}
 
+			void provider_identity(uint32_t clsid_hash, const GUID &clsid) noexcept
+			{
+				// Every candidate, before anything decides to skip it. The
+				// CLSID is what the report prints and what -quarantine:add
+				// takes, so a provider Shell declined to ask is precisely one
+				// the user has to be able to name.
+				PerfExportWriter::instance().note_provider(clsid_hash, clsid);
+			}
+
 			void provider_name(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name) noexcept
 			{
 				// No session check: this is a property of the provider, not of

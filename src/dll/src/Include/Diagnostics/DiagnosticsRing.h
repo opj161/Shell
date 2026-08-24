@@ -288,18 +288,34 @@ namespace Nilesoft
 			void session_decision(TakeoverDecision decision) noexcept;
 
 			/*
-				The title a provider gave itself, for the export's name
-				directory.
+				A provider the menu considered, for the export's directory.
 
-				Deliberately not part of the session record. A record carries a
-				hash so the measured path never copies a string and so a report
-				can say "these forty menus were all the same handler"; the name
-				belongs to the *provider*, not to the menu, so it is written
-				once per distinct CLSID per process and read beside the records.
-				docs/refactor/05-capabilities.md section 1.
+				Two calls rather than one, because identity and presentation
+				are known at different moments and one of them may never be
+				known at all - see docs/refactor/05-capabilities.md section 1c
+				for the report line that made this distinction necessary.
 
-				Costs a scan of at most 32 integers after the first sighting.
+				`provider_identity` is what makes a provider *actionable*: the
+				CLSID is what `shell.exe -quarantine:add` takes, and it is
+				knowable from the registration alone. Call it for every
+				candidate, including the ones about to be skipped - a
+				quarantined or deferred provider is exactly the one a user
+				wants to name to a command.
+
+				`provider_name` is the label, from IExplorerCommand::GetTitle,
+				and only exists after a successful activation.
+
+				Neither is part of the session record. A record carries a hash
+				so the measured path never copies a string and so a report can
+				say "these forty menus were all the same handler"; both of
+				these belong to the *provider* rather than to the menu, so they
+				are written once per distinct CLSID per process and read beside
+				the records.
+
+				Each costs a scan of at most 32 integers after the first
+				sighting.
 			*/
+			void provider_identity(uint32_t clsid_hash, const GUID &clsid) noexcept;
 			void provider_name(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name) noexcept;
 
 			// Publishes if this was the outermost begin(). Safe to call without a
