@@ -80,7 +80,7 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Diagnostics ring (§02.6) — always-on phase timing, 47.8 ns per phase; the registry value now gates only the log file | 1.4 |
 | ✅ | Cold-start measured, and §02.1 step 3 **declined**: `catalog.first_wait` never fires, even on a menu raised the moment a restarted Explorer's desktop view exists | 1.5 |
 | ✅ | TPM normalization — `TPM_RETURNCMD` always added, native replay posted, synthetic identifiers no longer reach the host | 2.3 |
-| ⬜ | `TakeoverSession` and the WinEvent lifecycle (§01.1, §01.6) — the last structural item before the seams | 2 |
+| ✅ | WinEvent lifecycle (§01.6) — the six-state machine **measured for and declined**; the real defect was the popup stack and the window map removing by two different keys. `TakeoverSession` as an object is not buildable in an SEH hook body (C2712) and the consolidation happened in plain-old-data form instead. §01.6a | 2 |
 | ✅ | Mnemonics (§05.4 Stage 1) — `WM_MENUCHAR` was unanswered, so a typed letter beeped | 5 |
 | ✅ | Type-ahead (§05.4 Stage 2) — typing a name selects it; mnemonics keep precedence on the first character | 5 |
 | ✅ | Packaged verbs no longer leak a GDI bitmap per right-click (§02.2a-ii) | 1 |
@@ -100,7 +100,15 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Host tracking flags in the report — which half of `complete_host_contract` a real host exercises. Explorer and Everything both set `TPM_RETURNCMD` | 2 |
 | ✅ | Flicker A/B (§02.4a) — 7.0 ms per menu, landing *after* `popup.total_pre_display` stops. Gated on `flicker`, reported as its own phase | 2 |
 | ✅ | Targeted moveto (§04.6) — a location-bearing moveto rule opens the submenu it named, not all of them. Measured on a real Explorer: 85.5 ms → 20.2 ms, same menu | 4 |
-| ◐ | Third-party hosts (§3.1) — Everything driven and the breaker fix confirmed there; a *file* menu in Everything or Opus still open | 5 |
+| ◐ | Third-party hosts (§3.1) — Everything driven and the breaker fix confirmed there. The non-`RETURNCMD` code path *is* covered by `takeover.a_native_item_replays_its_own_identifier` against a real borrowed shell menu; what is open is whether any shipping host chooses those flags, which needs a person with a lister open | 5 |
+| ✅ | Provider names in the report (§05.1a) — names live beside the records, so the measured path stays string-free and the identifier printed is the CLSID `-quarantine:add` takes | 5 |
+| ✅ | Quarantine (§05.1b) — `shell.exe -quarantine`, per-user, effective next menu. Skips the provider rather than refusing its activation. Verified through MSAA on a real Explorer: 29 menu items against 30 | 5 |
+| ✅ | Takeover status in the report (§05.1) — the row that matters most when nothing has been measured | 5 |
+| ✅ | Popup stack (§01.6a) — `_level` removes by handle, so it can no longer disagree with `_map` about which window went away | 2 |
+| ✅ | `shell.exe -check` with no argument — could never find a configuration on any machine, because the export skips the bootstrap that sets the paths up | 3 |
+| ✅ | **§03.5's last acceptance criterion** — invalid config, Explorer restarted, menus served from the persisted shadow. Verified in a real Explorer; the menu came back at 213 × 680, identical to baseline | 3 |
+| ⬜ | Reliability Center **window** (§05.1) — every row it would show exists in text; this is presentation over data that is already actionable | 5 |
+| ⬜ | Seam steps 5–7 (§04.4) — the one large item left, and the gate for favorites (§05.6) and the rule inspector (§05.7). Not started deliberately: the remaining seams are the paint and window-message halves of a 7,500-line file the test project does not link | 4 |
 
 ### What the harness settled (2026-08-24)
 

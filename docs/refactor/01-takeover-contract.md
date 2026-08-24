@@ -647,7 +647,16 @@ switched on. The hook next door is correct by accident, because it assigns to a
 - [ ] Every hook exit maps to a logged `TakeoverDecision`.
 - [ ] Trace harness shows host-observable message equivalence for native items across
       all four `TPM_*` combinations (§06.2 matrix).
-- [ ] INIT/UNINIT pairing asserted exactly-once by unit tests in all three policies.
+- [x] INIT/UNINIT pairing asserted exactly-once by unit tests. Not "in all three
+      policies", and that phrasing is worth correcting rather than satisfying:
+      `NativePopupNotifications` records whatever received an INIT and hands it
+      back exactly once, with no knowledge of any policy. The policies decide
+      *which* popups are initialised; the pairing tracks whatever that set turns
+      out to be, so the invariant holds across all three by construction. Adding
+      a third synthetic leg to the policy test would assert that a popup the
+      test itself initialised was initialised — a test that passes for the wrong
+      reason, which §1 rule 2 exists to catch. The real borrowed-menu case is
+      covered by `takeover.every_borrowed_popup_is_told_it_is_finished`.
 - [ ] Breaker trips only on repeated takeover failures; bypass gesture works with
       Shell fully disabled otherwise.
 - [ ] No behavioral change visible in default Explorer flows except bug fixes above.

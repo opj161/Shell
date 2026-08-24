@@ -124,6 +124,29 @@ the case that is. §2 below is still worth having, but it is the second half.
    The reproduction is the artifact itself, which is the rule `AGENTS.md` states
    for anything the tests cannot reach.
 
+   **And a consequence of the fix worth knowing before reading a `-check`
+   report.** Now that the paths are established, `app.dir` resolves to the
+   directory of the *exe that was run* - which is what it means, and what the
+   DLL uses at load time. The stock configuration builds its language import
+   out of it:
+
+   ```
+   $loc_path = app.dir + '\imports\lang\'
+   import lang loc_path + "en.nss"
+   ```
+
+   So `src\bin\x64\shell.exe -check:"C:\Program Files\Nilesoft Shell\shell.nss"` reports **9 files** where
+   the installed `shell.exe` reports **10**: the build output has no
+   `imports\lang` beside it, so that one import resolves to nothing. Entry
+   counts are identical either way, because the language file defines strings
+   rather than menu entries.
+
+   That is correct behaviour rather than a defect - `-check` tells you what
+   *that copy of Shell* would load - but it means **a configuration that uses
+   `app.dir` should be checked with the Shell that will actually load it**.
+   Before the fix the question did not arise, because `app.dir` was empty and
+   the path fell through to the importing file's own directory.
+
 **As implemented (2026-08-24).** Steps 1–3 landed as `src/shared/ConfigShadow.h`
 plus `Parser::LoadedFiles()`, with two departures from the sketch above:
 

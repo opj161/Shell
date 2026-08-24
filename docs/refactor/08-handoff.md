@@ -46,7 +46,7 @@ Six rules have held throughout and are worth keeping:
 
 ## 2. What has landed on this branch
 
-Twenty-seven commits, `940ff6a`..`4f574d1`.
+Thirty-six commits, `940ff6a`..`6b26e61`.
 
 | Commit | What |
 |---|---|
@@ -76,6 +76,11 @@ Twenty-seven commits, `940ff6a`..`4f574d1`.
 | `6658371` | **Two ways an experiment lied** — the deploy ordering and the registry visibility, both now in `AGENTS.md` |
 | `d2216c3` | **Catalog persistence declined** — `catalog.first_wait` never fires, so §02.1 step 3 would buy nothing |
 | `4f574d1` | **Targeted moveto** — a moveto rule opens the submenu it named, not all of them. 85.5 ms → 20.2 ms |
+| `5c63b28` | **Popup stack** — the level stack and the window map removed by two different keys; one disagreement is a dangling pointer |
+| `a70124b` | **Provider names** — the report names the extension, not its hash. Found a concurrent-writer gap in the export on the way |
+| `2e662c3` | **Quarantine** — `-quarantine:add {clsid}` and Shell stops asking that handler. Verified through MSAA: 29 items against 30 |
+| `898c680` | **Takeover status** — the report says whether takeover is set up, which matters most when it has measured nothing |
+| `6b26e61` | **`-check` with no argument** — could never find a configuration on any machine. Unblocked §03.5's last acceptance criterion |
 
 ### The measurements that changed decisions
 
@@ -101,37 +106,55 @@ Twenty-seven commits, `940ff6a`..`4f574d1`.
 | **Pre-display p50 10.3 ms warm in a real Explorer**, 60 ms on the first menu in a process | The first measurement of this branch's first-paint work where it runs, and it is inside §06.4's 15 ms budget |
 | **`menu.flicker_wait` averages 7.0 ms, up to 15.1** — and lands *after* `popup.total_pre_display` stops | Right-click to pixels is ~23 ms, not the ~16 ms every phase report showed. Gated and reported; §02.4a |
 | Explorer and Everything both pass **`TPM_RETURNCMD`** | The identifier half of `complete_host_contract` is what runs; the posted-notification half is still harness-only |
+| A four-level cascade, three ways, produced **no duplicate CREATE, no reentrant SHOW, and no wrong positional pop** | §01.6's six-state machine is declined. The defect was next door: two different keys for one removal |
+| `provider e345019d 186 ms` **names nothing a user can act on** | Names moved into the export beside the records; the identifier printed is the CLSID `-quarantine:add` accepts |
+| A quarantined provider costs **0.0 ms**, and the menu loses exactly that item (29 against 30, read through MSAA) | Skipping beats refusing the activation: surgical, and the only version that saves the cost |
+| Bare `shell.exe -check` answered "no configuration file was found" **on a machine whose config was fine** | The export skips `BootstrapOnce`, so the paths it needs were never set up. The bare form had never worked |
+| A broken config, an Explorer restart, and the menu **still came back at 213 × 680 — identical to baseline** | §03.5's last outstanding acceptance criterion, met in a real Explorer for the first time |
 
 ## 3. Where to pick up
 
-Ordered by user value, with what is known about each.
+Ordered by user value, with what is known about each. Everything above §3.6 has
+now landed; what is left is either large, or needs a person at the machine.
 
-### 3.1 A real *file* context menu in a third-party host — the last piece of §3.1
+### 3.1 A real *file* context menu in a third-party host — smaller than it looks
 
-Half of this is done. **Everything 1.5a was restarted onto this build and
-driven**, and what it showed is `5085b93` working where it had never run:
-Shell's hook sees the host's own frame menus, declines them, and the circuit
-breaker stays closed. Before that fix, three such declines — which Everything
-produced in ordinary use within seconds — would have switched takeover off for
-the rest of the process. It also passes `TPM_RETURNCMD`, like Explorer.
+**The code path is verified. What is open is a fact about other people's
+software.** That distinction was not clear before and it changes what this item
+is worth.
 
-What is left is a menu on an actual *file* inside Everything or Directory Opus,
-which is what would exercise the non-`RETURNCMD` replay if any host takes it.
-Everything's result list does not respond to a posted `WM_CONTEXTMENU` in
-either its keyboard or its point form — it handles right-click in its own
-subclass — so driving it means real input into a host, or a person with the
-window in front of them. Directory Opus was left running rather than
-restarted; it holds an older `shell.dll` and needs a restart to be measurable.
+`takeover.a_native_item_replays_its_own_identifier` builds its menu the way a
+file manager does — `SHParseDisplayName` → `SHBindToParent` → `GetUIObjectOf` →
+`IContextMenu::QueryContextMenu` — tracks it through Shell's hook **without**
+`TPM_RETURNCMD`, and asserts the host is told which of *its* items was chosen by
+wID exactly once. So the non-`RETURNCMD` half of `complete_host_contract` does
+run, against a real borrowed shell menu, on this machine, every time the harness
+is run.
 
-**The tooling for the answer now exists and takes one command.** Right-click a
-file in the host, then:
+What nobody has established is whether any shipping third-party host actually
+chooses those flags. Explorer and Everything both set `TPM_RETURNCMD`, so both
+take the other half. That is a survey question, not a correctness question, and
+answering it needs a menu on an actual file inside Everything or Directory Opus.
+Everything's result list does not respond to a posted `WM_CONTEXTMENU` in either
+its keyboard or its point form — it handles right-click in its own subclass — so
+driving it means real input into a host, or a person with the window in front of
+them.
+
+Both hosts run on this desktop with **no top-level window at all**, and both hold
+a `shell.dll` mapped from before the current build (`GetModuleFileName` reports
+the name the file had at load, so the path in the module list says nothing about
+which build it is — `AGENTS.md`). Restarting them is cheap and invisible; opening
+a lister to right-click a file in is not, and was not done.
+
+**One command answers it** once somebody has that window open. Right-click a file
+in the host, then:
 
 ```powershell
 .\src\bin\x64\shell.exe -report perf
 ```
 
-The `decisions` line says whether Shell composed the menu, and `host flags`
-says which half of `complete_host_contract` that host exercises.
+`host flags` says which half that host exercises, and `decisions` says whether
+Shell composed the menu at all.
 
 ### 3.2 Ring export — **landed**, and both halves of the mystery are solved
 
@@ -155,21 +178,60 @@ So the previous session's probes were all correct — the registry read, the log
 path, the permissions. Explorer had simply never seen the value, and was not
 running the build that would have logged it.
 
-### 3.3 `TakeoverSession` and the WinEvent lifecycle (§01.1, §01.6)
+### 3.3 `TakeoverSession` and the WinEvent lifecycle — **settled, and mostly declined**
 
-Pure consolidation, no user-visible value, but it unblocks §04.4 steps 5–7 and
-it is the last structural item before the seam work. The hook body has grown
-several more decisions (gesture, breaker, decision-preservation in the
-`__finally`, the host-flags capture) and is the right size to be consolidated
-now rather than later.
+§01.6's six-state machine was **measured for and not built**; §01.6a records the
+numbers. A four-level cascade driven three ways (escape out, select deep, walk
+across siblings) produced no duplicate `EVENT_OBJECT_CREATE`, no
+`EVENT_OBJECT_SHOW` inside a CREATE handler, and no case where a positional pop
+removed the wrong window. `Created`/`Prepared`/`Closing` would be states nothing
+drives.
 
-### 3.4 Reliability Center (§05.1) — its two prerequisites now both exist
+What *was* wrong sat next to it and did not depend on the events misbehaving at
+all: `WM_NCDESTROY` erased the `WND` from `_map` **by handle** and popped the
+**last** entry off `_level`. Two keys for one removal; the first disagreement
+leaves a pointer to a destroyed object that the next submenu placement
+dereferences. `Include/PopupLifecycle.h` removes by handle, and
+`_level.size() == 1` became `parent_of_top() == nullptr`, which says the same
+thing without assuming the stack is exactly in step.
 
-The telemetry has existed since `1f17d00`; the export it needed to leave the
-process landed in `0b20dde`. `shell.exe -report perf` is already most of the
-"Last menus" and "Providers" rows in §05.1's sketch, in text. What is missing
-is the window, the provider *names* (the ring carries CLSID hashes, not
-names), and the quarantine action.
+`TakeoverSession` as an *object* is not buildable in the hook and that is worth
+recording rather than re-attempting: the hook body is an SEH function, and MSVC
+refuses (C2712) to compile one that holds anything needing unwinding. The
+consolidation the section wanted has happened anyway, in plain-old-data form —
+`perf::session_*`, `takeover_breaker()`, `plan_host_track`,
+`complete_host_contract` — each of which is separately testable in a way a
+single struct would not have been.
+
+### 3.4 Reliability Center (§05.1) — everything except the window
+
+Four of the five rows §05.1 sketches now exist, in text, for every host on the
+desktop:
+
+```text
+Takeover
+    handler          registered
+    Windows 11 menu  redirected to Shell (-treat)
+
+Explorer.EXE  pid 29804  x64  -  6 menus, 6 held
+    pre-display  p50 9.8 ms   p95 55.1 ms   n=6
+    decisions  6 takeover
+                 provider {CAE3F1D4-...} 7.2 ms  ok           NanaZip
+                 provider {AAF1E27D-...} 0.0 ms  quarantined  Unlock with File Locksmith
+```
+
+- **Last menus** — `0b20dde`, the ring export.
+- **Providers, by name** — §05.1a. Names live in a directory beside the records
+  rather than in them, because nothing outside a host that has built a menu can
+  resolve a CLSID to a name: it comes from `GetTitle`, which takes the selection.
+- **Quarantine** — §05.1b. `shell.exe -quarantine:add {clsid}`, a per-user file,
+  effective on the next menu. It **skips** the provider rather than refusing its
+  activation, which is both surgical and the only version that saves the cost.
+- **Takeover** — `898c680`. Machine state, read from the registry by the manager.
+
+What is left is **the window**, and the "Repair takeover" action. Everything it
+would present is available and actionable from the command line today, which is
+why it is last rather than first — this is presentation over data that exists.
 
 ### 3.5 CoCI router de-dup and `priority` — **landed**, see §01.9b
 
@@ -181,14 +243,35 @@ and `shell.exe -check` now says so. Making `TreatAs` "authoritative when
 healthy" — §9's original bullet — would have been the same behaviour with a
 different name.
 
-### 3.6 Then
+### 3.6 What is genuinely left
 
-Favorites and the rule inspector (§05.6–7) · seam steps 5–7 of §04.4 · a
-*visual* judgement on the flicker wait now that its cost is known (§02.4a).
+Three things, and they are honest about their size.
 
-Two items that were on this list are done: targeted moveto (§04.6a, 85.5 ms →
-20.2 ms on a real Explorer) and the cold-start measurement that gated §02.1's
-persistence decision (Phase 1.5, declined with numbers).
+**The Reliability Center window (§05.1).** Additive, no risk to the menu path,
+and verifiable by launching it. It is presentation over data that all exists.
+
+**Seam steps 5–7 of §04.4** — selection layering, `MenuModel`,
+`Win32MenuPresenter`. This is the one large item on the branch, and it is the
+gate for both remaining capabilities: favorites (§05.6) needs origin-stable
+identity from `MenuModel`, and the rule inspector (§05.7) needs that plus
+file-and-line provenance threaded through the parser.
+
+It has not been started, deliberately. `ContextMenu.cpp` is 7,500 lines, the
+test project does **not** link it, and the seams that remain are the paint and
+window-message halves — the parts whose regressions look like a menu that draws
+slightly wrong rather than a test that fails. The verification available here is
+one Explorer and a screenshot, which is not enough to move that code
+confidently. §04.4's own rule ("move code, don't improve it in the same commit;
+each seam lands with its unit suite where pure or harness coverage where
+hosted") is the right one, and satisfying it needs the harness to grow coverage
+of composed-menu *rendering* first. That is the next real piece of work.
+
+**Two judgements that need a person at the machine**, both already measured and
+neither blocking:
+
+- the *visual* half of the flicker wait (§02.4a) — its cost is 7 ms, its benefit
+  is a transient a screenshot cannot show;
+- whether any real third-party host takes the non-`RETURNCMD` path (§3.1).
 
 ### 3.7 The tools this branch has accumulated
 
@@ -216,6 +299,31 @@ hand:
 - **A registry value set from an agent's shell is invisible to `explorer.exe`,
   and elevation does not help.** Use a scheduled task; `AGENTS.md` has the
   recipe. Files and HKLM are unaffected.
+- **`ShellCheckConfig` must not call `BootstrapOnce`, but it does have to call
+  `init(HINSTANCE)`.** The first half is why the export exists at all - asking
+  the DLL a question must not install a hook in the asking process. The second
+  half was missing, and bare `shell.exe -check` therefore answered "no
+  configuration file was found" on every machine ever. The call is guarded on
+  `Initializer::instance` being null so it only ever *establishes* paths; the
+  export is callable from a live host, where resetting `application.Config`
+  underneath an open menu would turn a read-only diagnostic into something that
+  changes what it is diagnosing.
+- **The export's block is written by several threads.** `export_session` runs
+  outside the ring's mutex, so two menu threads publishing at once both drove
+  the seqlock - which protects a *reader* and does nothing against concurrent
+  writers. `PerfExportWriter` serialises now. The file comment's "exactly one
+  writer for its whole life" means one *process* per block, which is what makes
+  the security descriptor the right boundary; it was never a claim about
+  threads.
+- **The provider-name directory is read outside the sequence protocol, on
+  purpose.** It is append-only and the entry is written before the count admits
+  it, so the worst a reader sees is one name short. Folding it into the seqlock
+  would put a shared-memory write on the menu path and make a reader retry
+  whenever a provider first appeared.
+- **`PopupStack` removes by handle, not by position.** Restoring `pop_back()`
+  reintroduces a dangling pointer that only bites when the events arrive out of
+  order - which this machine never produced, which is exactly why it has to be
+  structural rather than tested for.
 - **`scripts/backup-and-upgrade.ps1` restarts Explorer last, and verifies it.**
   Do not reorder it, and do not read the installed file's creation time to
   decide whether a deploy is current — NTFS file tunneling puts the old one
@@ -293,16 +401,26 @@ hand:
 .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
 ```
 
-At the time of writing: 32,275 checks / 0 failures on x64 and x86, arm64 builds
-and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)`,
-23 harness scenarios native and 27 through takeover, 0 failures.
+At the time of writing: **32,509 checks / 0 failures** on x64 and x86, arm64
+builds and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)` -
+both formerly-deferred rules turned on with their phase, as section 06.3
+intended - 23 harness scenarios native and 27 through takeover, 0 failures.
 
-`shell.exe -check` and `shell.exe -report perf` are the two pieces of this
-branch a user drives directly:
+`shell.exe -check`, `-report perf` and `-quarantine` are the three pieces of
+this branch a user drives directly:
 
 ```powershell
 .\src\bin\x64\shell.exe -check:path\to\shell.nss
+.\src\bin\x64\shell.exe -report perf
+.\src\bin\x64\shell.exe -quarantine:add {CAE3F1D4-7765-4D98-A060-52CD14D56EAB}
 ```
+
+`-check` with no argument works now too, and reads the `shell.nss` beside the
+exe it was run from. That is **not** the same as "whatever this machine would
+load" when you run the copy in `src\bin\x64\`, which has no configuration beside
+it — a distinction that cost an experiment, because the first attempt at §03.5's
+acceptance test used the bare form to confirm a file was broken and so confirmed
+nothing at all.
 
 Note that neither `cmd` nor PowerShell waits for a Windows-subsystem process, so
 read the exit code with `Start-Process -Wait -PassThru`. §03.1b records why that
@@ -324,6 +442,23 @@ corrected deploy ordering, driven by posting `WM_CONTEXTMENU` to
 - the `TreatAs` redirect, not `priority`, decides the Windows 11 menu;
 - the vertical-blank wait costs another ~7 ms after pre-display stops.
 
-**Still unverified there:** a file context menu in a third-party host (§3.1),
-and therefore the non-`RETURNCMD` half of `complete_host_contract`, which both
-hosts measured so far avoid by setting `TPM_RETURNCMD`.
+Added 2026-08-24, same method:
+
+- **submenu placement** — a submenu opens at x=612 against a root whose right
+  edge is 614, not at the root's own x=401, which is the shape a broken
+  `parent_of_top()` would produce; the stack drains to zero on close (section 3.3);
+- **provider names and quarantine** — `NanaZip` reported at 7.2 ms, then
+  quarantined and reported at 0.0 ms, with the composed menu read back through
+  MSAA at **29 items against 30** (section 05.1b);
+- **the last-known-good shadow** — the installed `shell.nss` broken until
+  `-check` reported `(43,28): error: Property unexpected`, Explorer restarted,
+  and the menu still came back at **213 x 680, identical to the baseline**. This
+  is section 03.5's outstanding acceptance criterion and the in-memory design
+  could never have covered it;
+- **bare `-check`** from the installed directory now exits 0 rather than
+  reporting no configuration at all.
+
+**Still unverified there:** whether any real third-party host takes the
+non-`RETURNCMD` path (section 3.1 — the code path itself *is* covered, by
+`takeover.a_native_item_replays_its_own_identifier` against a real borrowed
+shell menu), and the *visual* half of the flicker wait (section 02.4a).
