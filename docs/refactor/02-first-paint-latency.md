@@ -219,6 +219,40 @@ budget instead of costing ~700 ms; a provider that has never been quick is
 skipped and recorded as `Deferred` in the ring; and no provider's exclusion is
 permanent.
 
+### 2a-ii. The icon path — a leak found, and a cache declined
+
+Splitting the ~32 ms of icon work measured above turned up something worth more
+than the milliseconds:
+
+| | |
+|---|---|
+| `GetIcon`, the COM call | ~18 ms — per selection, not cacheable |
+| `SHDefExtractIconW` + `GetIconInfo` | ~11 ms — *is* cacheable by resource string |
+
+**A cache buys 11 ms and is not worth its ownership surface yet.** `BitmapCache`
+never destructively evicts precisely so borrowers can hold raw handles; adding a
+second class of borrowed bitmap to a field that had just been given clear
+ownership is a poor trade for 11 ms. Recorded as measured-and-declined rather
+than left as an open item.
+
+**The leak was the real find.** `GetIconInfo` "creates bitmaps for the hbmMask
+and hbmColor … The calling application must manage these bitmaps and delete them
+with `DeleteObject`"
+(<https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-geticoninfo>).
+The mask was freed; the colour bitmap was returned and freed by nobody — because
+the field it lands in, `menuitem_t::image`, is *borrowed* for every other kind of
+item (`MenuItemInfo::FindImage` returns the host's own `hbmpItem`), so a
+destructor that deleted unconditionally would have destroyed Explorer's bitmaps.
+Nothing deleted anything, and the one path that genuinely owned its handle
+leaked it.
+
+Measured: 16 of 23 handlers return an icon, and a probe keeping the colour
+bitmap took the process from 4 GDI objects to 164 across ten rounds. **16 GDI
+objects per right-click in explorer.exe, against a default per-process limit of
+10,000** — on the order of six hundred right-clicks before Explorer starts
+failing to draw. Fixed by `Include/IconResource.h` (ownership expressed as a
+type) plus an `image_owned` flag on `menuitem_t`.
+
 ## 3. Selection array reuse
 
 Keep current preference order but add an assertion/log when the

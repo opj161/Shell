@@ -191,6 +191,7 @@
     <ClInclude Include="src\Include\ComActivationPolicy.h" />
     <ClInclude Include="src\Include\HostContract.h" />
     <ClInclude Include="src\Include\ProviderHealth.h" />
+    <ClInclude Include="src\Include\IconResource.h" />
     <ClInclude Include="src\Include\ConfigLifecycle.h" />
     <ClInclude Include="src\Include\PackageCatalogService.h" />
     <ClInclude Include="src\Include\ShellExt.h" />

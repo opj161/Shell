@@ -2,6 +2,7 @@
 #include "Include/ExplorerCommandCatalog.h"
 #include "Include/PackageCatalogService.h"
 #include "Include/ProviderHealth.h"
+#include "Include/IconResource.h"
 #include "Include/Diagnostics/DiagnosticsRing.h"
 #include "Include/ContextMenu.h"
 
@@ -34,42 +35,9 @@ namespace Nilesoft
 				return s.move();
 			}
 
-			HBITMAP icon_from_resource(const string &spec)
-			{
-				if(spec.empty())
-					return nullptr;
-				string path = spec;
-				int index = 0;
-				auto comma = path.last_index_of(',', false);
-				if(comma != string::npos && comma > 0)
-				{
-					index = static_cast<int>(string::ToInt(path.c_str() + comma + 1, 0LL));
-					path = path.substr(0, comma).move();
-				}
-				path.trim(L'"');
-				HICON large = nullptr, small_icon = nullptr;
-				// GetIcon returns the standard "file,-id" resource string.
-				// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-geticon
-				// nIconSize is LOWORD=large, HIWORD=small. 0 means the system defaults.
-				// https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shdefextracticonw
-				if(FAILED(::SHDefExtractIconW(path.c_str(), index, 0, &large, &small_icon,
-					static_cast<UINT>(MAKELONG(16, 16)))))
-					return nullptr;
-				HICON use = small_icon ? small_icon : large;
-				HBITMAP bitmap = nullptr;
-				if(use)
-				{
-					ICONINFO info{};
-					if(::GetIconInfo(use, &info))
-					{
-						if(info.hbmMask) ::DeleteObject(info.hbmMask);
-						bitmap = info.hbmColor;
-					}
-				}
-				if(small_icon) ::DestroyIcon(small_icon);
-				if(large && large != small_icon) ::DestroyIcon(large);
-				return bitmap;
-			}
+			// Extraction moved to Include/IconResource.h, where the ownership it
+			// creates is expressed by a type rather than left to a raw HBITMAP
+			// that nobody deleted. See the note there for the leak this was.
 
 			IExplorerCommand *activate_explorer_command(const GUID &clsid)
 			{
@@ -256,7 +224,10 @@ namespace Nilesoft
 				if(SUCCEEDED(cmd->GetIcon(selection, &icon)) && icon && *icon)
 				{
 					string spec = take_cotask_string(icon).move();
-					item->image = icon_from_resource(spec);
+					// The item owns this one, unlike a native item's bitmap
+					// which is borrowed from the host's MENUITEMINFO.
+					item->image = icon_bitmap_from_resource(spec.c_str()).release();
+					item->image_owned = item->image != nullptr;
 				}
 				else if(icon)
 					::CoTaskMemFree(icon);

@@ -143,6 +143,14 @@ TargetedDiscovery.
 - Icon cache key extension: resource/path + size + DPI (+ filetime for file assets);
   covers image files, editable SVG, `GetIcon`, `SHDefExtractIconW` paths (A2§19).
   Same synchronized/bounded/no-destructive-eviction contract as `BitmapCache.h`.
+
+  **Measured and declined for the packaged-verb path (2026-08-24).** Of the
+  ~32 ms an icon costs there, only ~11 ms is the extraction a resource-string
+  cache could remove; the other ~18 ms is the `GetIcon` COM call, which is
+  per-selection and cacheable by nothing. Eleven milliseconds does not justify
+  adding a second class of borrowed bitmap to a field that had just been given
+  unambiguous ownership — see §02.2a-ii, and the GDI leak that clarifying it
+  uncovered. Revisit if the ring's p95s ever show icon work mattering.
 - Per-session memoization whitelist (A2§20): literals, `sys.*`, `theme.*`, pure string
   ops, one-shot DWM color reads at snapshot build; explicitly exclude
   `io/reg/clipboard/input/cmd`. Keyed `(Expression*, selection index)` inside session;

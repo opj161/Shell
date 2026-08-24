@@ -97,7 +97,15 @@ namespace Nilesoft
 			bool radio_check = false;
 			int checked = 0;
 			ULONG_PTR dwItemData = 0;
+
+			// Borrowed for a native item - MenuItemInfo::FindImage returns the
+			// host's own hbmpItem/hbmpUnchecked/hbmpChecked - and owned when this
+			// item built it from a packaged verb's icon resource. Deleting
+			// unconditionally would destroy Explorer's bitmaps; deleting never,
+			// which is what this used to do, leaked one GDI object per packaged
+			// verb per menu. See Include/IconResource.h for the measurement.
 			HBITMAP image = nullptr;
+			bool image_owned = false;
 			menuitem_t *parent = nullptr;
 			string path;
 			Position position = Position::Auto;
@@ -125,6 +133,9 @@ namespace Nilesoft
 				if(explorer_command_owned && explorer_command)
 					static_cast<IUnknown *>(explorer_command)->Release();
 				explorer_command = nullptr;
+				if(image_owned && image)
+					::DeleteObject(image);
+				image = nullptr;
 			}
 
 			bool is_separator() const { return type == 2; }
