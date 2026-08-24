@@ -1402,8 +1402,7 @@ namespace Nilesoft
 			}
 
 			_items.reserve(items.size());
-			_items_command.reserve(items.size());
-			_items_popup.reserve(items.size());
+			_model.reserve(items.size());
 
 			DC dc = hwnd.owner;
 			dc.set_font(font.handle);
@@ -1511,18 +1510,17 @@ namespace Nilesoft
 						_items.push_back(item);
 					}
 
+					// Exactly the membership the three vectors encoded, said
+					// once instead of three times. A dynamic popup was an
+					// _items_popup entry and a dynamic command an
+					// _items_command one - the same table, different columns -
+					// and a packaged verb joined the commands. The popup flag
+					// is what keeps an identifier lookup off a submenu, which
+					// used to be a property of which vector it was not in.
 					if(item->dynamic && item->is_popup_or_item())
-					{
-						if(item->is_popup())
-							_items_popup.push_back(item);
-						else
-							_items_command.push_back(item);
-					}
+						_model.add(item, ItemOrigin::Custom, item->wID, item->is_popup());
 					else if(item->explorer_command && item->is_item())
-						_items_command.push_back(item);
-
-					if(menu->is_main && item->is_popup())
-						_main_popup.push_back(item);
+						_model.add(item, ItemOrigin::ExplorerCommand, item->wID, false);
 
 					i += res;
 				}
@@ -1739,19 +1737,7 @@ namespace Nilesoft
 		// actually owns first.
 		bool ContextMenu::owns_item(const MenuItemInfo *item) const
 		{
-			if(!item)
-				return false;
-			for(auto known : _items_command)
-			{
-				if(known == item)
-					return true;
-			}
-			for(auto known : _items_popup)
-			{
-				if(known == item)
-					return true;
-			}
-			return false;
+			return _model.owns(item);
 		}
 
 		//
@@ -5484,14 +5470,11 @@ namespace Nilesoft
 			{
 				if(ident.equals(id)) 
 				{
-					for(auto item : _items_command)
-					{
-						if(item->wID == static_cast<uint32_t>(id))
-						{
-							invoke_item = item;
-							break;
-						}
-					}
+					// Was a forward scan of _items_command that stopped at the
+					// first match; MenuModel::command keeps both halves of
+					// that - popups are not candidates, and the earliest entry
+					// wins a duplicate identifier.
+					invoke_item = _model.command(static_cast<uint32_t>(id));
 
 					id = 0;
 					if(invoke_item && invoke_item->explorer_command)

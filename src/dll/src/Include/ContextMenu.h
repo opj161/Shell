@@ -16,6 +16,7 @@ constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 #include "Include/Theme.h"
 #include "Include/NativeMenuLazy.h"
 #include "Include/NativeMenuTargets.h"
+#include "Include/MenuModel.h"
 #include "Include/OneShotMarshal.h"
 #include "Include/PopupLifecycle.h"
 
@@ -703,10 +704,16 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			MenuItemInfo *invoke_item{};
 			std::vector<MenuItemInfo *> _items;
-			std::vector<MenuItemInfo *> _items_command;
-			std::vector<MenuItemInfo *> _items_popup;
 
-			std::vector<MenuItemInfo *> _main_popup;
+			// Every item this menu composed, with where it came from. Replaces
+			// _items_command and _items_popup, which held one fact between them
+			// - membership - and were read back by scanning both. See
+			// Include/MenuModel.h, including why mirrored native items are
+			// deliberately not in here.
+			//
+			// _main_popup went with them and is not replaced: it had been
+			// written on every top-level popup and read by nothing at all.
+			MenuModel<MenuItemInfo> _model;
 			std::unordered_map<HMENU, menu_t> _menus;
 
 			WinEventHook _winEventHook;
