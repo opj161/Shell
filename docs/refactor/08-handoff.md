@@ -1,6 +1,6 @@
 ﻿# 08 — Handoff
 
-**Updated 2026-08-24, branch `refactor/takeover-master-plan`.**
+**Updated 2026-08-25, branch `refactor/takeover-master-plan`.**
 Read this first, then `06-phases-and-tests.md` for the per-item status table.
 `00`–`05` are the plan; `07` is the audit that corrected it; this is where the
 work actually stands and what to do next.
@@ -55,7 +55,7 @@ true:
 
 ## 2. What has landed on this branch
 
-Thirty-six commits, `940ff6a`..`6b26e61`.
+Forty-three commits, `940ff6a`..`3723e78`.
 
 | Commit | What |
 |---|---|
@@ -95,7 +95,7 @@ Thirty-six commits, `940ff6a`..`6b26e61`.
 | `294d471` | **Selection providers** — `QuerySelected` split in two, 271 lines verified byte-identical |
 | `20e061e` | **Selection routing** — a host whose window class looks like Explorer's no longer loses the selection it already gave us. §04.4b |
 | `c76c2e9` | **Reliability Center window** — `shell.exe -reliability`. §05.1d |
-| *(this session)* | **Selection array reuse** — a menu over 200 files went from **645 ms to 30 ms**. §02.3a |
+| `3723e78` | **Selection array reuse** — a menu over 200 files went from **645 ms to 30 ms**. §02.3a |
 
 ### The measurements that changed decisions
 
@@ -276,9 +276,14 @@ master plan's own twenty-item backlog rather than against its own memory. That
 found one item it had lost entirely and one prerequisite it had assigned to the
 wrong piece of work. Both corrections are below, in place.
 
-The tally against `00-master-plan.md` §3: **fourteen items closed** — built, or
-measured and declined with the numbers written down — **three partial**, **three
-open**.
+The tally against `00-master-plan.md` §3, after the 2026-08-25 session:
+**seventeen items closed** — built, or measured and declined with the numbers
+written down — **one partial** (item 9, conditional attach, deferred with
+reasons in §01.9a), **two open**: seam steps 6–7 (item 17) and what they gate
+(item 19).
+
+**What is left is now genuinely one thing and its consequence.** Everything
+else in this section is recorded as landed or declined.
 
 **The Reliability Center window (§05.1) — landed.** `shell.exe -reliability`:
 the providers every host asked, merged and sorted slowest first, with
@@ -335,13 +340,12 @@ neither blocking:
   is a transient a screenshot cannot show;
 - whether any real third-party host takes the non-`RETURNCMD` path (§3.1).
 
-**Two measurement close-outs**, both cheap and both now answerable because the
-ring exists:
+**One measurement close-out remains**, and one was taken:
 
-- §04.7's lazy large-selection item is gated on `selection.preparing` appearing
-  in the ring's p95s. It reads **0.0 ms** warm in a real Explorer — but for a
-  single-file selection, which is not the case the item is about. One
-  large-selection measurement closes it either way.
+- §04.7's lazy large-selection item is **closed, declined** (2026-08-25).
+  `selection.preparing` is 0.0 ms and metadata 1.3 ms for 200 items. Taking
+  that measurement is what found the 645 ms menu next to it — see §02.3a,
+  which is the largest first-paint defect this branch has fixed.
 - §03.5 still has two untested acceptance criteria: a shadow whose manifest
   fails verification being refused, and a fresh machine with a corrupt stock
   config reaching the clean never-loaded refusal.
@@ -513,7 +517,7 @@ hand:
 .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
 ```
 
-At the time of writing: **32,509 checks / 0 failures** on x64 and x86, arm64
+At the time of writing: **32,592 checks / 0 failures** on x64 and x86, arm64
 builds and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)` -
 both formerly-deferred rules turned on with their phase, as section 06.3
 intended - 23 harness scenarios native and 27 through takeover, 0 failures.
