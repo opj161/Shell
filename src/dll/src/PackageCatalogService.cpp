@@ -1,6 +1,7 @@
 #include <pch.h>
 #include "Include/PackageCatalogService.h"
 #include "Include/Packages.h"
+#include "Include/Diagnostics/MenuPerf.h"
 
 #include <objbase.h>
 
@@ -183,11 +184,29 @@ namespace Nilesoft
 			if(!ensure_started() || !_published)
 				return {};
 
+			// Timed, because this wait is the entire case for an on-disk
+			// catalog. docs/refactor/02-first-paint-latency.md step 3 defers
+			// persistence "behind measurement": warm-on-start already removes
+			// the stall, and what persistence would buy is whatever is spent
+			// here on the first menu of a process. A phase that is almost
+			// always absent, and says how long when it is not, is that
+			// measurement - and it costs nothing on every menu after the first,
+			// because this whole function returns above.
+			Diagnostics::MenuPerfScope perf(L"catalog.first_wait");
+
 			DWORD index = 0;
 			auto hr = ::CoWaitForMultipleHandles(0, FirstScanBudgetMs, 1, &_published, &index);
 			if(FAILED(hr))
-				return {};	// budget spent; the scan keeps running and lands for the next menu
+			{
+				// Budget spent; the scan keeps running and lands for the next
+				// menu. Counted separately, because "waited 400 ms and gave up"
+				// and "waited 400 ms and got it" are opposite outcomes that a
+				// duration alone cannot tell apart.
+				perf.annotate(0);
+				return {};
+			}
 
+			perf.annotate(1);
 			return _store.current();
 		}
 

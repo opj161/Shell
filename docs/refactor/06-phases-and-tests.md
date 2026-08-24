@@ -78,9 +78,9 @@ in each is stated below rather than in a separate tracker.
 | ✅ | **0.0 trace harness** — `src/tests/hostprobe/`, 19 scenarios, baselines committed; Phase 2.3 and the four items gated on it are unblocked | 0 |
 | ✅ | Provider budget and deferral (§02.2a) — live providers reused per thread, whole-menu budget, slow ones remembered. Warm menu ~170 ms → ~41 ms | 1.3 |
 | ✅ | Diagnostics ring (§02.6) — always-on phase timing, 47.8 ns per phase; the registry value now gates only the log file | 1.4 |
-| ⬜ | Cold-start measurement, then the persistence decision for §02.1 step 3 | 1.5 |
+| ✅ | Cold-start measured, and §02.1 step 3 **declined**: `catalog.first_wait` never fires, even on a menu raised the moment a restarted Explorer's desktop view exists | 1.5 |
 | ✅ | TPM normalization — `TPM_RETURNCMD` always added, native replay posted, synthetic identifiers no longer reach the host | 2.3 |
-| ⬜ | `TakeoverSession`, WinEvent lifecycle, flicker A/B | 2 |
+| ⬜ | `TakeoverSession` and the WinEvent lifecycle (§01.1, §01.6) — the last structural item before the seams | 2 |
 | ✅ | Mnemonics (§05.4 Stage 1) — `WM_MENUCHAR` was unanswered, so a typed letter beeped | 5 |
 | ✅ | Type-ahead (§05.4 Stage 2) — typing a name selects it; mnemonics keep precedence on the first character | 5 |
 | ✅ | Packaged verbs no longer leak a GDI bitmap per right-click (§02.2a-ii) | 1 |

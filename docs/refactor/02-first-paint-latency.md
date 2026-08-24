@@ -41,13 +41,37 @@ Behavior:
 2. **Stale-while-revalidate.** `snapshot()` always returns the last good snapshot;
    expiry queues a refresh (coalesced); results publish atomically. A stale catalog is
    benign: activation failures are skipped and recorded (A2§14).
-3. **Persist across restarts — deferred behind measurement (§07 A7).** Ship steps 1
-   and 2 (in-memory, async warm, atomic `shared_ptr<const>` publish) first, then
-   measure cold start. Warm-on-start already removes the stall; persistence buys only
-   the first second or so after Explorer launch, in exchange for a new on-disk
-   format, multi-writer swap logic, fail-closed parsing, and a new trust boundary.
-   Deciding that trade without a measurement is exactly what this repo's
-   "measure before optimising" rule exists to prevent.
+3. **Persist across restarts — measured, and declined (2026-08-24).** Steps 1
+   and 2 shipped first, as this said, and then cold start was measured. The
+   answer is that persistence has nothing left to buy.
+
+   What it would remove is the wait in `snapshot_for_menu()`: the first menu in
+   a process blocks for up to 400 ms if no catalog has been published yet. That
+   wait is a phase now — `catalog.first_wait`, present only when it happens —
+   and on the coldest right-click reachable on this machine **it never
+   happened**. Explorer was killed, the desktop view polled for at 50 ms
+   intervals, and a menu raised the moment it existed; three rounds, the view
+   appearing 2.67–2.83 s after the kill, and no `catalog.first_wait` in any of
+   them. `warm_async()` starts the scan at the tail of `BootstrapOnce`, and on a
+   `-treat` machine Explorer asks Shell for a class object well before a user
+   can reach a right-click.
+
+   What the cold first menu *does* cost is 58–60 ms of pre-display, of which
+   `explorer.commands` is 56 ms: activating twenty-odd packaged verb handlers
+   for the first time. An on-disk catalog would remove none of that — the
+   catalog says *which* CLSIDs to activate, not what activating them costs. The
+   only thing that would help is persisting provider *presentations*, and
+   §2a-i declined that on staleness grounds: `GetTitle` and `GetState` genuinely
+   depend on the selection.
+
+   So the trade the rest of this step describes — a new on-disk format,
+   multi-writer swap logic, fail-closed parsing and a new trust boundary —
+   would be paid for a wait that does not occur. **Declined.** Revisit if
+   `catalog.first_wait` ever appears in a report, which is now the cheap way to
+   find out.
+
+   The integrity note below stays, because it is the rule any future on-disk
+   cache in this tree has to satisfy, not just this one.
 
    **Integrity boundary, stated as an invariant rather than a hardening note.**
    The cache is written under `%LocalAppData%` by a medium-integrity process and
