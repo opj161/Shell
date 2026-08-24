@@ -846,6 +846,58 @@ static int CheckConfig(const wchar_t *config_path)
 	machine where no menu has been opened correctly reports nothing at all, and
 	says so rather than printing an empty table.
 */
+/*
+	Is takeover set up on this machine at all?
+
+	docs/refactor/05-capabilities.md section 1 puts this line at the top of the
+	Reliability Center, and it is the one thing the timing report could not say.
+	Everything below it describes menus that happened; this describes whether
+	they can. It matters most in the case the report was previously silent
+	about - no host has a ring, which reads as "nothing has been measured" when
+	the real answer may be "Shell is not registered".
+
+	Machine state only, and deliberately: the two facts here are registry, so
+	shell.exe reads them directly rather than asking a host through the export.
+	Whether the popup hook is installed *inside* a given host is already
+	answered better by that host's own decision counts - nine takeovers is a
+	working hook, and a fail-open is a broken one with a reason attached.
+*/
+static void AppendTakeoverStatus(string &out)
+{
+	auto treat = QueryTreatAs();
+	auto registered = RegistryConfig::IsRegistered();
+
+	out.append(L"Takeover\r\n");
+
+	out.append_format(L"    handler          %s\r\n",
+					  registered ? L"registered"
+								 : L"NOT REGISTERED - run `shell.exe -register` as administrator");
+
+	switch(treat)
+	{
+		case TreatAsState::ours:
+			out.append(L"    Windows 11 menu  redirected to Shell (-treat)\r\n");
+			break;
+		case TreatAsState::absent:
+			// Not an error. Plenty of people run this way on purpose; it just
+			// means the classic menu is behind "Show more options" unless the
+			// configuration asks for it.
+			out.append(L"    Windows 11 menu  not redirected - Shell appears under "
+					   L"\"Show more options\"\r\n"
+					   L"                     unless `settings { priority = 1 }` is set. "
+					   L"`shell.exe -register -treat` changes this.\r\n");
+			break;
+		case TreatAsState::foreign:
+			out.append(L"    Windows 11 menu  redirected to something that is NOT Shell - "
+					   L"left alone deliberately\r\n");
+			break;
+		default:
+			out.append(L"    Windows 11 menu  could not be read (needs no elevation to read; "
+					   L"the key may be locked down)\r\n");
+			break;
+	}
+}
+
 static int ReportPerf(bool detailed)
 {
 	using namespace Nilesoft::Shell::Diagnostics;
@@ -1069,7 +1121,13 @@ static int ReportPerf(bool detailed)
 		if(unsupported)
 			line.append_format(L"\r\n  %u process%s had a ring this build cannot read - restart them to pick up this Shell.",
 							   static_cast<unsigned>(unsupported), unsupported == 1 ? L"" : L"es");
-		line.append(L"\r\n  Raise a context menu in Explorer and run this again.");
+		line.append(L"\r\n  Raise a context menu in Explorer and run this again.\r\n\r\n");
+
+		// This is the case the status line exists for. "Nothing has been
+		// measured" and "Shell is not registered, so nothing ever will be" read
+		// identically without it, and the second is the one worth acting on.
+		AppendTakeoverStatus(line);
+
 		write_console_line(line.c_str());
 		return 1;
 	}
@@ -1082,6 +1140,8 @@ static int ReportPerf(bool detailed)
 	if(unsupported)
 		header.append_format(L", %u unreadable", static_cast<unsigned>(unsupported));
 	header.append(L"\r\n\r\n");
+	AppendTakeoverStatus(header);
+	header.append(L"\r\n");
 	header.append(report);
 
 	write_console_line(header.c_str());
