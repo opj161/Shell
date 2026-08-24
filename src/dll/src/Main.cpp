@@ -1334,6 +1334,32 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		perf::session_end();
 		if(need_uninit_com)
 			::CoUninitialize();
+
+		/*
+			Hand back the last error the tracking call left, not whatever the
+			teardown above happened to set.
+
+			TrackPopupMenu documents the pairing: "If the function fails, the
+			return value is zero. To get extended error information, call
+			GetLastError."
+			https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenu
+
+			Everything between the tracking call and this line - InvokeCommand,
+			complete_host_contract, PostMessage, WIC::release, session_end,
+			CoUninitialize - can set the thread's last-error value, and several
+			of them do. The host is then told a menu it never saw simply
+			returned zero, with no way to tell a cancelled menu from a call that
+			failed.
+
+			That distinction is not hypothetical here: Include/HostContract.h
+			depends on exactly this signal, because adding TPM_RETURNCMD makes
+			both cases return zero. Shell was consuming a contract it destroyed
+			for its own callers. Caught by running the trace harness through the
+			hook - src\tests\hostprobe\fixtures\question.a_failed_track_sets_a_last_error.trace
+			was the one scenario in twenty-three whose host-observable result
+			differed.
+		*/
+		::SetLastError(track_error);
 		return result;
 	}
 }

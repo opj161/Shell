@@ -7,6 +7,45 @@ a menu's owner window observe, for one scenario in `Scenarios.cpp`.
 `hostprobe.exe --record`. Re-check with `hostprobe.exe --verify <this dir>`,
 which exits non-zero on the first differing line.
 
+## The same fixtures are the takeover gate
+
+```powershell
+src\bin\x64\hostprobe.exe --takeover --verify src\tests\hostprobe\fixtures
+```
+
+`--takeover` loads Shell into the probe process and runs every scenario through
+its hook (see `../Takeover.h`; it needs no injection and no deployed build).
+There is deliberately **no second set of fixtures**, because the answer turned
+out to be stronger than a second baseline would be: all 23 scenarios are
+byte-identical through the hook. Whatever Shell decides to do about a menu, the
+host observes what Windows would have shown it.
+
+That is worth stating precisely, because two different properties produce it:
+
+- Shell **declines** these menus. `Selections::QueryShellWindow` recognises
+  Explorer's window classes, the taskbar, and any host that reached Shell
+  through its `IContextMenu` handler; the probe's own window is none of those,
+  so `ContextMenu::Initialize` returns false and the hook falls open. After
+  three such menus the circuit breaker opens and the rest are not attempted.
+  So what these traces verify is the **fail-open and breaker paths**, exercised
+  in a real host for the first time — not the replay.
+- Verifying that the *replay* reproduces the baseline needs Shell to actually
+  compose a menu, which means a scenario that builds its menu the way a file
+  manager does — `IShellFolder::GetUIObjectOf` → `QueryContextMenu` → track.
+  Not built yet.
+
+**One scenario did differ, and it was a defect in Shell.**
+`question.a_failed_track_sets_a_last_error` came back `lasterror none` where
+Windows sets one: everything between the tracking call and the hook's return —
+`InvokeCommand`, `complete_host_contract`, `PostMessage`, `WIC::release`,
+`session_end`, `CoUninitialize` — can set the thread's last-error value, and the
+hook was handing the host whichever one happened to be left. `TrackPopupMenu`
+documents the pairing ("If the function fails, the return value is zero. To get
+extended error information, call GetLastError"), and `Include/HostContract.h`
+consumes exactly that signal — so Shell was destroying, for its own callers, a
+contract it depends on. Fixed by restoring the tracking call's error at the end
+of the hook's `__finally`.
+
 These are measurements, not specifications. A different Windows build may
 legitimately produce a different stream; that is the thing the fixtures exist to
 notice. When one changes, record the new build and the diff rather than

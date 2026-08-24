@@ -5,6 +5,15 @@
 		hostprobe.exe <substring>           run the scenarios whose name matches
 		hostprobe.exe --record <dir>        write each trace to <dir>\<name>.trace
 		hostprobe.exe --verify <dir>        diff each trace against that fixture
+		hostprobe.exe --takeover            run them through Shell's hook instead
+		hostprobe.exe --shell <dll>         which Shell to load for --takeover
+
+	Without --takeover every trace records what *untouched Windows* does, which
+	is the baseline. With it, Shell is loaded into this process and its hook
+	intercepts the same calls, so the two sets of traces can be diffed - see
+	Takeover.h for why that needs no injection and no deployed build. Takeover
+	traces belong in their own fixture directory: the whole point is that they
+	differ from the baseline, and the review is of *how*.
 
 	Execution needs an interactive desktop: it creates a real window and tracks
 	real menus. It does *not* inject desktop-wide input - keystrokes are posted
@@ -19,6 +28,7 @@
 */
 
 #include "Scenarios.h"
+#include "Takeover.h"
 
 #include <cstdio>
 #include <string>
@@ -178,6 +188,8 @@ int __cdecl wmain(int argc, wchar_t **argv)
 	std::wstring filter;
 	std::wstring record_dir;
 	std::wstring verify_dir;
+	std::wstring shell_dll;
+	bool takeover = false;
 
 	for(int i = 1; i < argc; i++)
 	{
@@ -186,8 +198,33 @@ int __cdecl wmain(int argc, wchar_t **argv)
 			record_dir = argv[++i];
 		else if(arg == L"--verify" && i + 1 < argc)
 			verify_dir = argv[++i];
+		else if(arg == L"--shell" && i + 1 < argc)
+			shell_dll = argv[++i];
+		else if(arg == L"--takeover")
+			takeover = true;
 		else
 			filter = arg;
+	}
+
+	// Before the window exists, so nothing this process owns has been shown to
+	// a hook that is about to be installed. Shell pins itself once its hooks
+	// are in, so this is one-way: a run is either native or takeover.
+	if(takeover)
+	{
+		auto load = load_shell(shell_dll);
+		::wprintf(L"takeover: %s\n         %s\n", load.path.c_str(), load.detail.c_str());
+		if(!load.loaded || !load.bootstrapped)
+		{
+			::wprintf(L"could not put Shell into this process\n");
+			return 124;
+		}
+		::wprintf(L"         every trace below is what a host observes through "
+				  L"Shell, not through Windows\n");
+	}
+	else if(!shell_dll.empty())
+	{
+		::wprintf(L"--shell has no meaning without --takeover\n");
+		return 123;
 	}
 
 	auto &probe = Probe::instance();
