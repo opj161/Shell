@@ -55,15 +55,6 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
-		inline static MenuItemInfo *get_item(uint32_t id, const std::vector<MenuItemInfo *> &list)
-		{
-			for(auto item : list)
-			{
-				if(item->wID == id) return item;
-			}
-			return nullptr;
-		}
-
 		inline static MenuItemInfo *get_item(uint32_t id, HMENU hMenu, const std::vector<MenuItemInfo *> &list)
 		{
 			for(auto item : list)
@@ -1261,12 +1252,6 @@ namespace Nilesoft
 			}
 
 			return lret;
-		}
-
-		HBITMAP crop_image(const RECT rectangle, const HBITMAP source_image)
-		{
-			return static_cast<HBITMAP>(CopyImage(source_image, IMAGE_BITMAP, rectangle.right - rectangle.left,
-																rectangle.bottom - rectangle.top, LR_CREATEDIBSECTION));
 		}
 
 		void ContextMenu::screenshot()
