@@ -273,3 +273,81 @@ shown it. Reading then finds no `#32768` at all, which reads as "Shell drew
 nothing" rather than as "we looked too early". `Probe::wait_for_popups` polls
 until two consecutive readings agree, which is the same settling rule
 `AGENTS.md` states for reading a menu after an Explorer restart.
+
+## The transient, diagnosed (2026-08-25)
+
+For three sessions a full run failed roughly once in four, and
+`docs/refactor/08-handoff.md` recorded it as "an observation rather than a
+diagnosis" because nobody had captured which scenario failed. It was the
+harness, not Windows and not Shell.
+
+**Why it was never captured.** A fixture mismatch was reported by `diff()`,
+which prints the offending line and nothing else — no `FAIL`, no scenario name.
+So a run printed `23 scenario(s), 1 failure(s)` with nothing in its output that
+a filter for the word every other failure uses would show. It reads as a bug in
+the counter. It names the scenario now, and the very next run said
+`select.plain.ex`.
+
+**The rule worth taking from that:** when a failure is hard to reproduce, check
+first that it is reported in the same words as every other failure.
+
+**What it was.** `TrackPopupMenu`'s remarks:
+
+> when the current window is the foreground window, the second time this menu is
+> displayed, it appears and then immediately disappears. To correct this, you
+> must force a task switch to the application that called **TrackPopupMenu**.
+> This is done by posting a benign message to the window or thread
+
+(<https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenu>)
+
+This harness shows 23–31 menus in a row from one window, so every one after the
+first is "the second time". When it bit, the menu vanished before the driver
+pressed anything: no `WM_MENUSELECT` at all, a return of 0, and a trace that no
+longer matched.
+
+Three faults, fixed in the order the evidence arrived:
+
+1. **The documented pair was missing** — `SetForegroundWindow` before the call,
+   `PostMessage(WM_NULL)` after it. Took the failure rate from ~1 in 3 to ~1 in
+   10.
+2. **A blind wait that `TPM_NONOTIFY` makes impossible.** The driver waited
+   800 ms for the "menu is up" event, but under that flag the only surviving
+   message is `WM_MENUSELECT`, which does not arrive until something is
+   selected — and nothing is selected until the driver presses a key. So for
+   every NONOTIFY scenario the event never fired and the driver pressed keys at
+   a menu it had never confirmed. It now waits for a visible popup window owned
+   by its own thread, which needs no notifications.
+3. **No settle between scenarios**, which is what actually closed it. Measured
+   rather than guessed: the flake scales with how many menus the process has
+   already shown, not with which scenario — 0 failures in 20 runs of four
+   scenarios and 8 runs of eight, against 2 in 14 runs of twenty-three, in four
+   different scenarios that each pass indefinitely alone. The harness opened the
+   next menu the instant the previous tracking call returned, which no host
+   does. It pumps rather than sleeps: the teardown that has to finish is
+   message-driven.
+
+**26 consecutive clean runs** afterwards — 16 native, 10 takeover.
+
+Running on a quiet desktop still matters, for a different reason: a second popup
+belonging to another application makes the `render.*` readings meaningless, and
+they now say so instead of asserting anyway.
+
+## What a run costs, and why it is not made faster
+
+| | |
+| --- | --- |
+| unit suite (`tests.exe`, 32,623 checks) | 5.9 s |
+| harness, native, 23 scenarios | 24.4 s |
+| harness, takeover, 31 scenarios | 31.8 s |
+
+97% of the unit suite is two suites — `config_watcher` (3.6 s) and
+`threadsafety` (2.1 s) — and both are slow for load-bearing reasons. The watcher
+tests wait on the *shipping* debounce rather than an injected short one, which
+is the whole point of them; a race detector needs its iterations. Making either
+faster subtracts from what it detects.
+
+The harness is ~1 s per scenario, dominated by the watchdog and the per-key
+waits. Those trade directly against the flakiness above, so they are left alone.
+What *was* removed is work no scenario asserts on: three of the four `render.*`
+cases used to open a submenu that only the fourth reads. The suite is now
+slightly faster than before the settle was added.

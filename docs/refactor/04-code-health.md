@@ -179,6 +179,59 @@ where the settled menu has Shell's `New+`. Steady-state readings are 27, against
 a 28-item baseline differing by one transient OneDrive item. A menu read during
 Explorer's startup measures Explorer settling, not the change.
 
+### 4c. Steps 6 and 7 as implemented (2026-08-25)
+
+**Step 6 — `MenuModel`.** `Include/MenuModel.h`, the origin table §01.4
+specified. Three parallel vectors held one fact between them: which vector an
+item landed in *was* the fact, encoded in an if/else at the composition site and
+read back by scanning both. `_main_popup` had stopped being read at all.
+
+Two rules were implicit in the vectors and are now stated, because getting
+either wrong is silent — a popup is never a command (`_items_command` never held
+one), and the first entry wins a duplicated identifier (the old lookup was a
+forward scan that stopped at the first hit, so the index uses `emplace` rather
+than `operator[]`). Templated on the item type for the same reason `PopupStack`
+is, so `test_menu_model.cpp` drives the real code with a two-field fake.
+
+**Native items are deliberately absent**, and §01.4's sketch lists them, so the
+header says why: this table is about ownership, and mapping a chosen identifier
+back to a host's original wID is `Include/HostContract.h`'s job, which landed
+with step 4. Adding them would change what `owns_item` answers and therefore
+which items a keystroke can match — a behaviour change inside a move commit.
+
+**Step 7 — the presenter.** 1,606 lines to `src/dll/src/MenuPresenter.cpp` in
+two commits: the item painting (`draw_string`, `draw_rect`, `DRAWITEMSTATE`,
+`OnDrawItem`, `OnMeasureItem`) and then the layer compositing (`screenshot`,
+`draw_layer`, `UpdateLayered`, `CreateLayer`). `ContextMenu.cpp` goes from 7,542
+lines to 5,852. Both halves were extracted by line range and verified
+byte-identical against the pre-move blob, not reviewed by eye.
+
+The functions are still `ContextMenu::` members. Naming the class needs an
+interface onto `ContextMenu`'s private state, and that interface cannot be
+designed honestly until the dependency is visible — which is what splitting the
+translation unit achieves: whatever `MenuPresenter.cpp` reaches for is the
+presenter's surface, now readable off one file.
+
+Two mechanics worth recording for the next split:
+
+- **A definition in a header cannot be included twice.**
+  `plutovg_stbi_write_png` has external linkage and is defined in
+  `Include/stb_image_write.h`, so the second translation unit declares it. A
+  duplicate symbol reports itself at link time, far from the mistake.
+- **A type cannot be forward-declared into use.** `DWM`, `GET_HMENU` and `ver`
+  moved to `Include/DwmWindow.h`; `ver` became an inline variable, which keeps
+  it one object with one initialisation across both units.
+
+**What made this checkable at all** is the composed-menu rendering coverage
+built the same day (§08.3.8): four `render.*` scenarios read the live menu back
+through MSAA and assert item order against the composed HMENU, layout
+containment and submenu placement. Verified against the built DLL rather than
+the installed one, through a per-user CLSID override.
+
+**Two dead functions the split exposed**, deleted separately so each move
+stayed provable: `crop_image` and `get_item`'s two-argument overload, neither
+called from anywhere.
+
 ## 5. Selection layering detail
 
 Capture-first rule concretely: `ShellExtMatch` result (exact HMENU-bound capture)

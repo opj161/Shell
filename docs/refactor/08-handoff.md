@@ -102,6 +102,10 @@ decision or fixed something; pure documentation commits are omitted.
 | `3723e78` | **Selection array reuse** — a menu over 200 files went from **645 ms to 30 ms**. §02.3a |
 | `f17373c` | **Rendering coverage** — four `render.*` scenarios read the live menu back through MSAA. The gate steps 6–7 waited on for three sessions. §3.8 |
 | `17321b2` | **Seam step 6** — `MenuModel`. Three vectors held one fact between them; `_main_popup` was read by nobody. §04.4 |
+| `279340f` | **Seam step 7a** — the item painting leaves `ContextMenu.cpp`, 1,206 lines, byte-identical |
+| `f465242` | **Seam step 7b** — the layer compositing follows it, 400 more. `ContextMenu.cpp` 7,542 → 5,852 |
+| `4e81381` | **The harness transient** — ours, and a documented contract. 26 clean runs against 2-in-14 |
+| `32aaaa4` | **Dead code the split found** — `crop_image` and a `get_item` overload, called by nobody |
 
 ### The measurements that changed decisions
 
@@ -145,9 +149,10 @@ decision or fixed something; pure documentation commits are omitted.
 Ordered by user value, with what is known about each. Everything above §3.6 has
 now landed, and so has everything §3.6 listed as remaining except one item.
 
-**If you read nothing else: §3.6 is the tally, §3.8 is what to do next.** The
-only large thing left is seam steps 6–7, and §3.8 says concretely what has to
-exist before they are safe to move.
+**If you read nothing else: §3.6 is the tally, and §3.9 is what to do next.**
+Item 17 is closed — every seam step has landed — so the backlog is eighteen
+closed, one partial and **one open**, and the open one is a capability rather
+than a refactor.
 
 ### 3.1 A real *file* context menu in a third-party host — smaller than it looks
 
@@ -288,13 +293,13 @@ found one item it had lost entirely and one prerequisite it had assigned to the
 wrong piece of work. Both corrections are below, in place.
 
 The tally against `00-master-plan.md` §3, after the second 2026-08-25 session:
-**seventeen items closed** — built, or measured and declined with the numbers
-written down — **two partial**, **one open**.
+**eighteen items closed** — built, or measured and declined with the numbers
+written down — **one partial**, **one open**.
 
 | | Items |
 |---|---|
-| closed | 1–8, 10–16, 18, 20 |
-| partial | 9 (conditional attach deferred, §01.9a) · 17 (seam steps 5 and 6 landed, **7 open**) |
+| closed | 1–8, 10–18, 20 |
+| partial | 9 (conditional attach deferred, §01.9a) |
 | open | 19 (favorites, inspector) |
 
 **Item 19's gate was stated wrongly for several sessions and is now corrected.**
@@ -336,28 +341,39 @@ What was built is the part that was genuinely missing — *which* mechanism is
 live, published per host and printed as an `intercept` line by
 `shell.exe -report perf`. Measured in a real Explorer: `win32u import`.
 
-**Seam step 7 of §04.4** — `Win32MenuPresenter`. The last large piece, and the
-only part of item 17 still open. Steps 5 and 6 have landed.
+**Seam step 7 of §04.4 — landed, and item 17 with it.** The painting and the
+layer compositing are now `src/dll/src/MenuPresenter.cpp`: 1,606 lines out of
+`ContextMenu.cpp`, which goes from 7,542 to 5,852. Both halves were extracted
+by line range and verified byte-identical against the pre-move blob rather than
+reviewed by eye, which is what made step 5 safe and is §04.4's rule for every
+seam.
 
-**The gate it waited on is now built.** "Harness coverage of composed-menu
-rendering" was repeated for three sessions without anyone saying what it was;
-§3.8 said, and `f17373c` built it. Four `render.*` scenarios read the live menu
-back through MSAA while the owner is blocked inside its tracking call, and
-assert readability, order against the composed HMENU, layout containment and
-submenu placement. Those are exactly the regressions the presenter can
-introduce and that no other test would notice.
+**What remains of step 7 is the naming, and it is deliberately not done.** The
+functions are still `ContextMenu::` members. A `Win32MenuPresenter` class needs
+an interface onto `ContextMenu`'s private state — `_theme`, `_items`,
+`_hTheme`, `symbol`, `composition`, the DC and font caches — and that interface
+cannot be designed honestly until the dependency is visible. Splitting the
+translation unit is what makes it visible: **whatever `MenuPresenter.cpp`
+reaches for is the presenter's surface**, and it is now a list somebody can
+read off one file instead of inferring from seven thousand lines. That is the
+next commit on this seam, and it is design work rather than moving.
 
-**What is left of it is a move, not a design.** The paint code is two blocks of
-`ContextMenu.cpp` — `draw_string`/`draw_rect`/`OnDrawItem`/`OnMeasureItem`
-(~1,180 lines) and `screenshot`/`draw_layer`/`UpdateLayered`/`CreateLayer`
-(~490) — and §04.4's own rule says to move it without improving it. Do the file
-split first and verify it byte-identical, the way step 5's extraction was;
-turning it into a class with a real interface is a second commit, and it needs
-the presenter's dependency on `ContextMenu`'s private state made visible before
-it can be designed honestly.
+Two things a translation-unit split cannot do by declaring, both recorded
+because the next split will hit them too:
 
-**It is no longer a capability gate**, and that correction matters more than the
-work: see the tally above. Favorites needs `MenuModel`, which has landed.
+- **A definition in a header cannot be included twice.**
+  `plutovg_stbi_write_png` has external linkage and is *defined* in
+  `Include/stb_image_write.h`, so the second translation unit declares it
+  instead. A duplicate symbol reports itself at link time, a long way from the
+  mistake.
+- **A type cannot be forward-declared into use.** `DWM`, `GET_HMENU` and the
+  `ver` singleton were file-scope helpers, correct while there was one file.
+  `Include/DwmWindow.h` is where they live now; `ver` became an inline
+  variable, which is what keeps it one object with one initialisation across
+  both units.
+
+**It was never a capability gate**, and that correction still matters more than
+the work: favorites needs `MenuModel`, which landed as step 6.
 
 **Step 5 was not blocked by that, and saying it was is the second correction —
 it has now landed.** Step 5 is selection layering, and the code it moves is not
@@ -555,6 +571,45 @@ forever. `EndMenu` ends "the calling thread's active menu" and the reader is not
 that thread, so the documented alternative — posting `WM_CANCELMODE` to the
 owner — is the one to use.
 
+### 3.9 The next real piece of work
+
+**Item 19 — favorites (§05.6) and the rule inspector (§05.7).** The last open
+backlog item, and no longer blocked by anything. Take them in that order;
+favorites is the smaller and needs nothing new.
+
+**Favorites needs no new machinery, which is the point of seam step 6.**
+§05.6 asks for identity that survives a session and is not a session wID:
+an `IExplorerCommand`'s canonical CLSID, an NSS rule's identity, and a native
+item's normalised parent-path-plus-title signature. `MenuModel` already
+records the first two per composed item, with `ItemOrigin` saying which — see
+`Include/MenuModel.h`. Two things to decide rather than assume:
+
+- **Natives are deliberately not in `MenuModel`**, and favorites wants them.
+  The header says why the table is scoped to what Shell owns and what adding
+  them would change (`owns_item`, and therefore which items a keystroke can
+  match). Widening it is a real decision with a measurable consequence, not a
+  field to add quietly.
+- §05.6 proposes ProgramData JSON. Prefer `%LocalAppData%`, for the reason
+  §05.1b already established for quarantine: ProgramData needs elevation, and
+  this is a per-user preference.
+
+**The inspector's long pole is the parser, not the menu.** §05.7 says so and
+it is still true: file-and-line provenance has to be threaded through the
+parser, and `Parser::LoadedFiles()` already proves that recording per-file
+facts there is cheap. Everything else it needs — origin, matched rule, timing
+— the session already holds.
+
+**Also open, and smaller than either:**
+
+- §03.5's two untested acceptance criteria (a shadow whose manifest fails
+  verification being refused; a fresh machine with a corrupt stock config
+  reaching the clean never-loaded refusal). Both need a machine state this one
+  is not in.
+- The `Win32MenuPresenter` class itself — see the step 7 entry in §3.6. Design
+  work over a surface that is now readable off one file.
+- Item 9's conditional attach, deferred with reasons in §01.9a. Nothing has
+  changed those reasons.
+
 ## 4. Things that will bite
 
 - **A registry value set from an agent's shell is invisible to `explorer.exe`,
@@ -630,15 +685,30 @@ owner — is the one to use.
 - **`hostprobe.exe` is built but never run by `build.ps1`.** It creates a window
   and shows real menus. It does not inject desktop-wide input — keys are posted
   to its own thread queue — but it will put popups on screen.
-- **Run the harness on a quiet desktop.** Observed once on 2026-08-24: a native
-  run started seconds after `backup-and-upgrade.ps1` restarted Explorer, and
-  while a script was posting `WM_CONTEXTMENU` at the desktop, reported
-  `23 scenario(s), 1 failure(s)`. Five consecutive runs afterwards were clean,
-  and which scenario failed was not captured. So this is recorded as an
-  observation rather than a diagnosis: a run that overlaps an Explorer restart
-  or another menu on the same desktop is not a run to trust. Re-run before
-  believing a single harness failure — and capture the output when you do,
-  which is what was not done here.
+- **The harness transient is diagnosed and fixed (2026-08-25).** It was ours,
+  not Windows': `TrackPopupMenu`'s remarks say that when the caller is already
+  the foreground window, *"the second time this menu is displayed, it appears
+  and then immediately disappears"* unless a benign message forces a task
+  switch. This harness shows 23–31 menus in a row from one window, so every one
+  after the first is "the second time". Three things were wrong and all three
+  are fixed: the documented `SetForegroundWindow`/`PostMessage(WM_NULL)` pair
+  was missing; the driver blind-waited 800 ms for a "menu is up" event that
+  **`TPM_NONOTIFY` makes impossible** and then pressed keys at a menu it had
+  never confirmed; and scenarios ran back to back with no settle, so teardown
+  raced the next `TrackPopupMenu`. 26 consecutive clean runs afterwards,
+  against 2 failures in 14 before.
+
+  **What made it findable is worth more than the fix.** A fixture mismatch went
+  through `diff()`, which prints the offending line and *no* `FAIL` and *no*
+  scenario name — so the run reported a failure count with nothing in the
+  output that any filter for "FAIL" would show. That is why two sessions saw
+  it and neither could say what failed. It names the scenario now. **When a
+  failure is hard to reproduce, check first that it is reported in the same
+  words as every other failure.**
+
+  The advice to run on a quiet desktop still stands for a different reason: a
+  second popup belonging to another application makes the `render.*` readings
+  meaningless, and they now say so rather than asserting anyway.
 - **`--takeover` is one-way within a run.** Shell pins its own module once its
   hooks are installed, so a process cannot go back to native afterwards. Never
   mix takeover and native scenarios in one invocation.

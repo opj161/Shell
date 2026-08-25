@@ -246,6 +246,19 @@ presence of config-driven items (`New+`, `Terminal`, `File manage`, `Go To` in
 the stock configuration) is the cheap proof, because their absence means you are
 diffing Windows' own menu against Shell's.
 
+**A fourth, added 2026-08-25: a failure reported in different words from every
+other failure is a failure nobody can find.** The trace harness failed about one
+run in four for three sessions and was written up twice as an unexplained
+transient, because a fixture mismatch printed the offending line and *no*
+`FAIL` and *no* scenario name — so a run said `23 scenario(s), 1 failure(s)`
+with nothing in its output that a filter for the word every other failure uses
+would show. It read as a bug in the counter. Making it say
+`FAIL <name> does not match its recorded baseline` is what turned three
+sessions of folklore into a bug report on the next run; the cause was a
+documented `TrackPopupMenu` contract the harness had never met. When something
+is hard to reproduce, check first that it is reported the same way as
+everything else.
+
 Then encode the invariant in `src/tests`. The suites are dependency-free and
 self-registering; see `src/tests/test.h`. Prefer testing a real invariant over a
 mock: `test_native_menu_lazy` drives a real owner window whose child popups sleep

@@ -118,7 +118,8 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Per-session memoization (§04.7) — **measured and declined**, which closes item 20. `native.modify_rules` is 0.1 ms across eleven consecutive menus, for ~240 rule evaluations against 27-35 native items: about 0.4 us each. The whitelist's purity claim is the real cost, and a stale menu item is a silent wrong answer | 4 |
 | ✅ | **Composed-menu rendering coverage** (§08.3.8) — four `render.*` scenarios read the live menu back through MSAA and assert readability, order against the composed HMENU, layout containment and submenu placement. The gate seam steps 6-7 had been waiting on for three sessions | 0 |
 | ✅ | Seam step 6 (§04.4) — `MenuModel`, the origin table §01.4 specified. Three parallel vectors held one fact between them and `_main_popup` was read by nothing at all | 4 |
-| ⬜ | Seam step 7 (§04.4) — `Win32MenuPresenter`. The paint half, ~1,700 lines across two blocks of `ContextMenu.cpp`. No longer a capability gate: favorites needs `MenuModel`, which landed, and the inspector needs that plus parser provenance | 4 |
+| ✅ | Seam step 7 (§04.4) — the painting and the layer compositing leave `ContextMenu.cpp` for `MenuPresenter.cpp`, 1,606 lines, both halves verified byte-identical. 7,542 → 5,852. **Closes item 17.** Naming the `Win32MenuPresenter` class remains, and is design work over a surface the split has just made readable | 4 |
+| ✅ | The harness transient — diagnosed and fixed. A documented `TrackPopupMenu` contract the harness never met, a blind wait `TPM_NONOTIFY` makes impossible, and no settle between menus. 26 clean runs against 2-in-14. Found only once a fixture mismatch started printing `FAIL` like every other failure | 0 |
 
 ### The 2026-08-24 backlog audit
 
@@ -129,8 +130,9 @@ backlog it tracks. Reconciled item by item against `00-master-plan.md` §3:
 memoization and lazy selection), **three open** (items 8, 17, 19).
 
 Item 8 was closed the same day (§01.9c). By the end of 2026-08-25 the tally is
-**seventeen closed** (items 1–8, 10–16, 18, 20), **two partial** (9, 17) and
-**one open** (19). `08-handoff.md` §3.6 names what is partial about each.
+**eighteen closed** (items 1–8, 10–18, 20), **one partial** (9) and **one
+open** (19). `08-handoff.md` §3.6 names what is partial about each, and §3.9
+says what to do next — item 19, which seam step 6 unblocked.
 
 Item 20 is closed by measurement rather than by building, in all three of its
 parts: the icon cache was declined in §04.7; the lazy large-selection item on
