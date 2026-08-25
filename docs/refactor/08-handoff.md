@@ -461,7 +461,43 @@ hand:
 - `shell.exe -report perf` now tells you what any host on the desktop paid,
   what Shell decided, and which flags the host passed.
 - A per-user `HKCU\Software\Classes\CLSID\…\InprocServer32` override points COM
-  at a build without touching HKLM or restarting Explorer.
+  at a build without touching HKLM or restarting Explorer. **This is how to run
+  the harness against the build you just made rather than the installed one**,
+  and it is what made seam steps 6 and 7 verifiable without a deploy. The whole
+  recipe, because two thirds of it are not obvious:
+
+  ```powershell
+  # 1. the build output has no configuration beside it, so the composed menu
+  #    would contain no custom items at all - stage the stock one first
+  Copy-Item src\bin\shell.nss src\bin\x64\shell.nss -Force
+  Copy-Item src\bin\imports  src\bin\x64\imports -Recurse -Force
+
+  # 2. point COM at it (CLS_ContextMenu, src/shared/Globals.h)
+  $k = 'HKCU\SOFTWARE\Classes\CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}\InprocServer32'
+  reg add $k /ve /t REG_SZ /d "$PWD\src\bin\x64\shell.dll" /f
+  reg add $k /v ThreadingModel /t REG_SZ /d Apartment /f
+
+  .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
+
+  # 3. put the machine back
+  reg delete 'HKCU\SOFTWARE\Classes\CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' /f
+  Remove-Item src\bin\x64\shell.nss, src\bin\x64\imports -Recurse -Force
+  ```
+
+  Three things to know before trusting a run of it:
+
+  - **Check the override is in force rather than assuming.** `hostprobe`'s
+    `takeover:` line prints the path it loaded, and it reads the *merged* HKCR
+    view, so HKCU shadows HKLM. Pointing it at a nonexistent path is the cheap
+    proof: it then says `LoadLibrary failed: 126` instead of silently testing
+    the installed copy.
+  - **Two `shell.dll`s will be mapped**, and the harness says so. Other
+    registered Shell classes still resolve from HKLM; the one that matters is
+    the one on the `takeover:` line, because that is where `BootstrapOnce` ran
+    and therefore whose hook composed the menu.
+  - **Explorer is unaffected**, which is the point — it has `shell.dll` pinned
+    from before, so the user's live menus keep running the installed build and
+    nothing needs restarting.
 - `shell.exe -reliability` is now the fastest way to see every provider a
   machine's menus asked, merged across hosts and sorted slowest first. Faster
   than reading a `-report perf` when the question is "which extension".
@@ -757,10 +793,16 @@ facts there is cheap. Everything else it needs — origin, matched rule, timing
 .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
 ```
 
-At the time of writing: **32,592 checks / 0 failures** on x64 and x86, arm64
+At the time of writing: **32,623 checks / 0 failures** on x64 and x86, arm64
 builds and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)` -
 both formerly-deferred rules turned on with their phase, as section 06.3
-intended - 23 harness scenarios native and 27 through takeover, 0 failures.
+intended - **23 harness scenarios native and 31 through takeover**, 0 failures.
+
+The takeover count is 31 rather than 27 because of the four `render.*`
+scenarios (section 3.8). Both modes are stable now: the transient that made a
+single failure untrustworthy was diagnosed and fixed on 2026-08-25 (section 4),
+so **a harness failure is a finding again** rather than something to re-run
+until it goes away. A run takes about 24 s native and 32 s through takeover.
 
 `shell.exe -check`, `-report perf` and `-quarantine` are the three pieces of
 this branch a user drives directly:
