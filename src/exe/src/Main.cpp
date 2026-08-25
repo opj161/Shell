@@ -14,6 +14,7 @@
 #include <ConfigCheck.h>
 #include <PerfReport.h>
 #include <ProviderQuarantine.h>
+#include <Favorites.h>
 #include "Reliability.h"
 
 //#pragma comment(lib, "mincore.lib")
@@ -1771,6 +1772,144 @@ static int QuarantineCommand(const string &action, const string &argument)
 	return CONFIG_CHECK_OK;
 }
 
+/*
+	`shell.exe -favorites[:list|:pin|:unpin|:forget] [identity]`
+
+	The list of menu items this user reaches for, and the pins over it.
+	src/shared/Favorites.h has the format; src/shared/MenuIdentity.h has what an
+	identity is and why it is not a wID.
+
+	Same shape as -quarantine and for the same reasons: a per-user file under
+	%LocalAppData%, no elevation, nothing restarted, and every host re-reads it
+	within a couple of seconds, so the answer to "when does this take effect" is
+	"the next menu".
+
+	`list` prints the identity in exactly the form the pin commands take, which
+	is the lesson section 1b learned the hard way - the perf report printed a
+	hash while -quarantine:add wanted a CLSID, so the one extension worth acting
+	on was the one the user could not name to the command. An identity contains
+	spaces, so a shell will need it quoted; the listing says so once rather than
+	per line.
+*/
+static int FavoritesCommand(const string &action, const string &argument)
+{
+	namespace Fav = Nilesoft::Shell::Favorites;
+	namespace Id = Nilesoft::Shell::MenuIdentity;
+
+	auto path = Fav::default_path();
+	if(path.empty())
+	{
+		write_console_line(L"shell.exe -favorites: could not locate %LocalAppData%.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	auto entries = Fav::load(path);
+
+	auto show = [&]()
+	{
+		string line;
+		if(entries.empty())
+		{
+			line.append(L"Nilesoft Shell - nothing is recorded as a favorite yet.\r\n");
+			line.append_format(L"  list: %s\r\n", path.c_str());
+			line.append(L"  Set `settings { favorites = 3 }` in shell.nss and Shell starts\r\n"
+						L"  counting; or pin one now with\r\n"
+						L"  `shell.exe -favorites:pin \"item:tools/terminal\"`.");
+		}
+		else
+		{
+			line.append_format(L"Nilesoft Shell - %u favorite%s\r\n\r\n",
+							   static_cast<unsigned>(entries.size()),
+							   entries.size() == 1 ? L"" : L"s");
+			for(const auto &entry : entries)
+			{
+				line.append_format(L"  %-4s%6u  %s\r\n",
+								   entry.pinned ? L"pin" : L"use",
+								   static_cast<unsigned>(entry.uses),
+								   entry.identity.text.c_str());
+			}
+			line.append_format(L"\r\n  list: %s\r\n", path.c_str());
+			line.append(L"  An identity contains spaces, so quote it when you pass one back.\r\n"
+						L"  Promotion needs `settings { favorites = N }`; without it this is\r\n"
+						L"  only a record.");
+		}
+		write_console_line(line.c_str());
+	};
+
+	if(action.empty() || action.equals(L"list", true))
+	{
+		show();
+		return CONFIG_CHECK_OK;
+	}
+
+	auto pinning = action.equals(L"pin", true);
+	auto unpinning = action.equals(L"unpin", true);
+	auto forgetting = action.equals(L"forget", true);
+
+	if(!pinning && !unpinning && !forgetting)
+	{
+		write_console_line(
+			L"shell.exe -favorites: the actions are `list`, `pin`, `unpin` and `forget`.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	auto identity = Id::parse(argument.c_str());
+	if(!identity.valid())
+	{
+		write_console_line(
+			L"shell.exe -favorites: expected an identity, as `kind:signature`.\r\n"
+			L"  kind is verb, item or native; run `shell.exe -favorites:list` to see the\r\n"
+			L"  ones this machine has recorded. Quote it - identities contain spaces.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	size_t at = entries.size();
+	for(size_t i = 0; i < entries.size(); i++)
+	{
+		if(entries[i].identity.hash == identity.hash)
+		{
+			at = i;
+			break;
+		}
+	}
+
+	string line;
+	if(forgetting)
+	{
+		if(at >= entries.size())
+		{
+			// Asking to forget something that is not there is a success: the
+			// state the caller asked for is the state that holds. Same rule as
+			// -quarantine:remove.
+			line.append_format(L"Not recorded: %s", identity.text.c_str());
+			write_console_line(line.c_str());
+			return CONFIG_CHECK_OK;
+		}
+		entries.erase(entries.begin() + static_cast<ptrdiff_t>(at));
+	}
+	else if(!Fav::set_pinned(entries, identity, pinning))
+	{
+		write_console_line(L"shell.exe -favorites: the list is full.");
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	if(!Fav::save(path, entries))
+	{
+		string failed;
+		failed.append_format(L"shell.exe -favorites: could not write %s", path.c_str());
+		write_console_line(failed.c_str());
+		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	line.append_format(forgetting ? L"Forgot %s\r\n"
+					   : pinning  ? L"Pinned %s\r\n"
+								  : L"Unpinned %s\r\n",
+					   identity.text.c_str());
+	line.append(L"  Takes effect on the next menu each host builds.");
+	write_console_line(line.c_str());
+	return CONFIG_CHECK_OK;
+}
+
 bool Register(REGOP reg, HWND hwnd = nullptr)
 {
 	string path = IO::Path::Combine(IO::Path::Parent(IO::Path::Module(nullptr)), dll_name).move();
@@ -2150,6 +2289,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 		string quarantine_action;
 		string quarantine_argument;
 
+		// -favorites[:list|:pin|:unpin|:forget] [identity]. The per-user record
+		// of what this user reaches for. docs/refactor/05-capabilities.md
+		// section 6.
+		bool _favorites = false;
+		string favorites_action;
+		string favorites_argument;
+
 		// -reliability opens the window over the same data -report perf prints.
 		// docs/refactor/05-capabilities.md section 1.
 		bool _reliability = false;
@@ -2210,6 +2356,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 					if(!op->Value.empty())
 						quarantine_action = op->Value;
 				}
+				else if(op->has_name({ L"favorites", L"favourites" }))
+				{
+					// Both spellings, because the file is per-user and the
+					// user's spelling is not this codebase's business.
+					_favorites = true;
+					if(!op->Value.empty())
+						favorites_action = op->Value;
+				}
 				else if(op->has_name({ L"reliability", L"reliabilitycenter" }))
 				{
 					_reliability = true;
@@ -2222,6 +2376,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 			else if(op->has_name({ L"reliability", L"reliabilitycenter" }))
 			{
 				_reliability = true;
+			}
+			else if(_favorites && favorites_argument.empty())
+			{
+				// The identity. Argument rather than Name because CommandLine
+				// splits a token at its first colon and an identity is
+				// `kind:signature` - taking Name here would hand back only the
+				// kind.
+				favorites_argument = op->Argument;
 			}
 			else if(_quarantine && quarantine_argument.empty())
 			{
@@ -2276,6 +2438,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 		if(_quarantine)
 		{
 			auto code = QuarantineCommand(quarantine_action, quarantine_argument);
+			_log->close();
+			return code;
+		}
+
+		if(_favorites)
+		{
+			auto code = FavoritesCommand(favorites_action, favorites_argument);
 			_log->close();
 			return code;
 		}
@@ -2658,6 +2827,9 @@ BOOL CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, [[maybe_unused]] L
                 L"-quarantine\tExtensions Shell stops asking when it builds a menu.\r\n"
                 L"\t\t-quarantine:add {clsid} / :remove {clsid} / :list (the default).\r\n"
                 L"\t\tThey keep working everywhere else. Next menu, no restart.\r\n"
+                L"-favorites\tMenu items you reach for, and the pins over them.\r\n"
+                L"\t\t-favorites:pin \"item:tools/terminal\" / :unpin / :forget / :list.\r\n"
+                L"\t\tPromotion needs settings { favorites = N } in shell.nss.\r\n"
                 L"-reliability\tThe same information in a window, with the quarantine\r\n"
                 L"\t\tactions beside it. Needs no elevation.\r\n\r\n"
                 //L"-runas:N\t\tLaunch with elevated privileges.\r\n"
@@ -2666,6 +2838,7 @@ BOOL CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, [[maybe_unused]] L
                 L"Examples:\r\nshell.exe -register -treat\r\n"
                 L"shell.exe -check\r\n"
                 L"shell.exe -report perf\r\n"
+                L"shell.exe -favorites:list\r\n"
               //  L"shell.exe -runas:admin -cmd:'cmd.exe' -args:\"/K echo Hello world!\"\r\n"
                 ;
             ::SetDlgItemTextW(hwnd, IDC_CMDLINE_TEXT, usage);

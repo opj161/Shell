@@ -23,6 +23,13 @@ namespace Nilesoft
 			// behaviour every configuration has today.
 			// docs/refactor/05-capabilities.md section 5, Include/MenuColumns.h.
 			auto_expr columns;
+
+			// How many favourite items a menu may lift to a section at the
+			// top. Unset and 0 both mean off, so no configuration that exists
+			// today changes.
+			// docs/refactor/05-capabilities.md section 6, Include/MenuFavorites.h.
+			auto_expr favorites;
+
 			auto_expr priority;
 			struct
 			{

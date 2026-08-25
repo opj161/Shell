@@ -17,6 +17,9 @@ constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 #include "Include/NativeMenuLazy.h"
 #include "Include/NativeMenuTargets.h"
 #include "Include/MenuModel.h"
+#include "Include/MenuFavorites.h"
+#include "Include/FavoritesStore.h"
+#include "Include/MenuInspector.h"
 #include "Include/OneShotMarshal.h"
 #include "Include/PopupLifecycle.h"
 
@@ -130,6 +133,13 @@ namespace Nilesoft
 			// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand
 			IExplorerCommand *explorer_command = nullptr;
 			bool explorer_command_owned = false;
+
+			// The registration this packaged verb came from. GUID_NULL for
+			// everything else. It is the item's identity across sessions - the
+			// same identifier `-quarantine:add` takes - where a title is not,
+			// because a handler may title itself after the selection ("Compress
+			// to holiday.zip"). src/shared/MenuIdentity.h.
+			GUID explorer_clsid{};
 
 			~menuitem_t()
 			{
@@ -835,6 +845,26 @@ plutovg_move_to(pluto, start.x, start.y);
 			// Group-aware column breaks for a menu taller than the screen.
 			// Opt-in through settings.columns; see Include/MenuColumns.h.
 			void apply_smart_columns(HMENU hMenu, menu_t *menu);
+
+			// What this item is called across sessions, or an invalid identity
+			// for one that cannot be named. src/shared/MenuIdentity.h.
+			//
+			// `custom` says an NSS rule built it. It is a parameter rather than
+			// a read of `item->dynamic` because the inspector annotates an item
+			// before the composition loop sets that field, and a caller that
+			// knows which rule it is holding should not have to know the order
+			// the fields happen to be filled in.
+			MenuIdentity::Identity item_identity(const MenuItemInfo *item, bool custom) const;
+			MenuIdentity::Identity item_identity(const MenuItemInfo *item) const;
+
+			// Replace an item's tooltip with where it came from, while
+			// Shift+Alt is composing the menu. Include/MenuInspector.h.
+			void annotate_for_inspection(MenuItemInfo *mii, const NativeMenu *rule,
+										 const std::vector<NativeMenu *> *matched) const;
+
+			// Lift the items this user reaches for to a section at the top.
+			// Opt-in through settings.favorites; see Include/MenuFavorites.h.
+			void apply_favorites(std::vector<MenuItemInfo *> &items);
 			void build_system_menuitems(HMENU hMenu, menuitem_t *menu, bool is_root = false);
 			void build_main_system_menuitems(menuitem_t *menu, bool is_root = false);
 

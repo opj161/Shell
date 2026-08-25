@@ -50,6 +50,11 @@ namespace Nilesoft
 			// Show the host's own menu for this click only, changing nothing.
 			// docs/refactor/05-capabilities.md section 2.
 			BypassOnce,
+
+			// Compose Shell's menu as usual, but annotate every item with where
+			// it came from. docs/refactor/05-capabilities.md section 7,
+			// Include/MenuInspector.h.
+			Inspect,
 		};
 
 		/*
@@ -110,6 +115,21 @@ namespace Nilesoft
 
 			if(s.ctrl && s.alt)
 				return Gesture::BypassOnce;
+
+			// Shift+Alt is the one two-key combination left: every other pair
+			// above involves Ctrl.
+			//
+			// Spelled out in full - including the two keys that must *not* be
+			// down - rather than relying on where it sits in this chain. Every
+			// rule above is reached only through Ctrl, so each is protected
+			// from a contradictory snapshot (three flags set while `held` says
+			// two) by an earlier Ctrl rule catching it first. This one is last
+			// and has no such protection: written as `shift && alt` it also
+			// claims Win+Shift+Alt, which is nobody's gesture. The whole-table
+			// walk in test_takeover_gesture is what found that, and it now
+			// pins exactly one state per gesture.
+			if(s.shift && s.alt && !s.ctrl && !s.win)
+				return Gesture::Inspect;
 
 			return Gesture::None;
 		}

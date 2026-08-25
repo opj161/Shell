@@ -502,6 +502,11 @@ namespace Nilesoft
 				item->parent = root;
 				item->is_toplevel = true;
 				item->wid = ident.get_id();
+				// Recorded from the registration, not from the activation, for
+				// the same reason Diagnostics::provider_identity is above: it is
+				// knowable without asking the handler anything, and it is what
+				// this item is called next time. src/shared/MenuIdentity.h.
+				item->explorer_clsid = reg.clsid;
 				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd, selection);
 
 				auto cost = budget.spent_us() - spent_before;

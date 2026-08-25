@@ -140,6 +140,9 @@
     <ClCompile Include="test_selection_route.cpp" />
     <ClCompile Include="test_reliability_rows.cpp" />
     <ClCompile Include="test_provider_quarantine.cpp" />
+    <ClCompile Include="test_menu_identity.cpp" />
+    <ClCompile Include="test_favorites.cpp" />
+    <ClCompile Include="test_menu_inspector.cpp" />
     <ClCompile Include="test_loadstring.cpp" />
     <ClCompile Include="..\dll\src\Packages.cpp" />
     <ClCompile Include="..\dll\src\ShellExt.cpp" />

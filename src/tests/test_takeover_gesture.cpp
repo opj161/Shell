@@ -120,10 +120,30 @@ TEST(takeover_gesture, the_bypass_pair_is_none_of_the_pairs_already_taken)
 	CHECK(bypass != classify_gesture(keys(1, true)));               // Ctrl alone
 }
 
-TEST(takeover_gesture, a_pair_without_ctrl_is_not_a_gesture)
+TEST(takeover_gesture, shift_and_alt_inspect_the_menu)
 {
+	// docs/refactor/05-capabilities.md section 7, Include/MenuInspector.h. It
+	// is the one two-key combination that was left: every other pair below
+	// involves Ctrl.
+	CHECK(classify_gesture(keys(2, false, true, false, true)) == Gesture::Inspect);
+}
+
+TEST(takeover_gesture, the_inspect_pair_is_none_of_the_pairs_already_taken)
+{
+	auto inspect = classify_gesture(keys(2, false, true, false, true));
+
+	CHECK(inspect != classify_gesture(keys(2, true, true)));               // Ctrl+Shift
+	CHECK(inspect != classify_gesture(keys(2, true, false, true)));        // Ctrl+Win
+	CHECK(inspect != classify_gesture(keys(2, true, false, false, true))); // Ctrl+Alt
+	CHECK(inspect != classify_gesture(keys(1, true)));                     // Ctrl alone
+}
+
+TEST(takeover_gesture, the_remaining_pairs_are_not_gestures)
+{
+	// Shift+Alt used to be here and is now Inspect. The other two are still
+	// unclaimed, and a later gesture taking one of them has to come past this
+	// test and past the whole-table walk below.
 	CHECK(classify_gesture(keys(2, false, true, true)) == Gesture::None);        // Shift+Win
-	CHECK(classify_gesture(keys(2, false, true, false, true)) == Gesture::None); // Shift+Alt
 	CHECK(classify_gesture(keys(2, false, false, true, true)) == Gesture::None); // Win+Alt
 }
 
@@ -152,6 +172,7 @@ TEST(takeover_gesture, a_taskbar_left_click_is_never_a_gesture)
 TEST(takeover_gesture, no_click_can_mean_two_things_at_once)
 {
 	size_t bypass_states = 0;
+	size_t inspect_states = 0;
 	size_t reload_states = 0;
 
 	for(int held = -2; held <= 4; held++)
@@ -178,6 +199,15 @@ TEST(takeover_gesture, no_click_can_mean_two_things_at_once)
 				CHECK(first != Gesture::ReloadConfig);
 				CHECK(first != Gesture::DisableShell);
 				CHECK(first != Gesture::PreferModern);
+				CHECK(first != Gesture::Inspect);
+			}
+			else if(first == Gesture::Inspect)
+			{
+				inspect_states++;
+				CHECK(first != Gesture::ReloadConfig);
+				CHECK(first != Gesture::DisableShell);
+				CHECK(first != Gesture::PreferModern);
+				CHECK(first != Gesture::BypassOnce);
 			}
 			else if(first == Gesture::ReloadConfig)
 			{
@@ -189,5 +219,6 @@ TEST(takeover_gesture, no_click_can_mean_two_things_at_once)
 	// Exactly the states that should bypass: held == 2 with Ctrl+Alt, whether
 	// or not the classifier was also told about keys it ignores at that count.
 	CHECK_MSG(bypass_states == 1, "exactly one modifier combination bypasses");
+	CHECK_MSG(inspect_states == 1, "exactly one modifier combination inspects");
 	CHECK_MSG(reload_states > 0, "and the reload combinations still exist");
 }

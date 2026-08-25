@@ -1218,6 +1218,15 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				__leave;
 			}
 
+			// "Why is this here?" - compose the menu as usual and annotate
+			// every item with where it came from. Armed here, from the same
+			// single classification as everything else, and cleared for every
+			// other click so an inspected menu cannot leak into the next one.
+			// A plain thread-local bool because this is an SEH function.
+			// docs/refactor/05-capabilities.md section 7,
+			// Include/MenuInspector.h.
+			Inspector::arm(gesture == Gesture::Inspect);
+
 			// The host has refused takeover often enough in a row that trying
 			// again just costs the user latency on every click. Hand it the
 			// menu it would have got anyway, without the attempt.

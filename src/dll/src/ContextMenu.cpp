@@ -556,6 +556,13 @@ namespace Nilesoft
 							//mii->tip = item->tip;
 							_context.eval_tip(item->tip, mii->tip.text, mii->tip.type, mii->tip.time);
 
+							// After the configured tip, for the reason given at
+							// the other call site: while inspecting, the tip is
+							// the inspector. `item` here is the NSS rule that
+							// built this, so its provenance is the answer to
+							// "why is this here" in one line.
+							annotate_for_inspection(mii, item, nullptr);
+
 							if(item->is_menu())
 							{
 								mii->set_popup_menu();
@@ -717,6 +724,7 @@ namespace Nilesoft
 
 				mii->wID = item->wid;
 				mii->retain_explorer_command(item->explorer_command);
+				mii->explorer_clsid = item->explorer_clsid;
 
 				if(mii->wID == 0 || mii->wID == (uint32_t)-1)
 					mii->wID = ident.get_id();
@@ -925,6 +933,13 @@ namespace Nilesoft
 					continue;
 				ev_si(si, mii, item);
 			}
+
+			// Last, so it wins over any tip the matched rules just set: while
+			// inspecting, the tip is the inspector. item->native_items is
+			// every modify/moveto rule that had a hand in this item, collected
+			// when the rules were applied - so section 07's "matched rule
+			// locations" is a read here rather than a second pass.
+			annotate_for_inspection(mii, nullptr, &item->native_items);
 		}
 
 		bool ContextMenu::prepare_system_items(PositionList &list, menu_t *menu)
@@ -1280,6 +1295,12 @@ namespace Nilesoft
 					menu->draw.popups += item->is_popup();
 				}
 			}
+
+			// Before the separator trim below, and after everything that
+			// decides what is in the menu: promoting an item moves it, so the
+			// trim has to run over the order the user will actually see.
+			// docs/refactor/05-capabilities.md section 6.
+			apply_favorites(items);
 
 			// remove duplicate separators
 			while(!items.empty())
@@ -2695,6 +2716,27 @@ namespace Nilesoft
 			if(_context.eval_number(sets->tip.enabled, obj))
 				_tip.enabled = obj.to_bool();
 
+			// The inspector *is* the tip, so a configuration that switched tips
+			// off has not thereby asked for Shift+Alt to do nothing. Forced on
+			// for this menu only; the setting itself is untouched.
+			// docs/refactor/05-capabilities.md section 7.
+			if(Inspector::active())
+			{
+				_tip.enabled = true;
+
+				// A marker, so `shell.exe -report perf` says the gesture was
+				// seen. Without it the one question a user of this feature
+				// cannot answer is "did Shift+Alt register at all?" - the
+				// answer is otherwise a tooltip they may simply not have
+				// hovered. It also makes the gesture verifiable by machine,
+				// which a tooltip is not.
+				//
+				// An empty scope rather than a bare session_phase call, because
+				// that one is declared in DiagnosticsRing.h and this file only
+				// includes MenuPerf.h. Both spellings record the same phase.
+				{ Diagnostics::MenuPerfScope inspected(L"menu.inspected", 1); }
+			}
+
 			if(_tip.enabled)
 			{
 				eval_color_array(&sets->tip.normal, &_theme.tip.normal.back, &_theme.tip.normal.text);
@@ -3363,6 +3405,173 @@ namespace Nilesoft
 			third-party code synchronously, so no lock may be held across it and
 			the target is published in _native_uninit_notify first.
 		*/
+		/*
+			What this item is called across sessions.
+
+			Three kinds, because there are three ways an item reaches this menu
+			and they have nothing in common - src/shared/MenuIdentity.h has the
+			reasoning and the departure from docs/refactor/05-capabilities.md
+			section 6 for the custom case.
+
+			The order of the tests is the order of the evidence. A packaged verb
+			carries the CLSID of its registration, which is knowable without
+			asking the handler anything and does not change when the handler
+			retitles itself for a different selection ("Compress to
+			holiday.zip"). Everything else is signed by where it sits and what
+			it is called, and `dynamic` is what separates an item an NSS rule
+			built from one the host owns - the same test the composition site
+			uses to decide what goes into _model.
+
+			An item with no title cannot be named, which is correct: it has
+			nothing a user could recognise it by either.
+		*/
+		MenuIdentity::Identity ContextMenu::item_identity(const MenuItemInfo *item, bool custom) const
+		{
+			if(!item || item->is_separator())
+				return {};
+
+			if(!::IsEqualGUID(item->explorer_clsid, GUID_NULL))
+			{
+				return MenuIdentity::make(MenuIdentity::Kind::Verb,
+										  MenuIdentity::verb_signature(item->explorer_clsid));
+			}
+
+			if(item->title.normalize.empty())
+				return {};
+
+			auto signature = MenuIdentity::signature_of(item->path.c_str(),
+														item->title.normalize.c_str());
+
+			return MenuIdentity::make(custom ? MenuIdentity::Kind::Item
+											 : MenuIdentity::Kind::Native,
+									  signature);
+		}
+
+		MenuIdentity::Identity ContextMenu::item_identity(const MenuItemInfo *item) const
+		{
+			return item_identity(item, item && item->dynamic);
+		}
+
+		/*
+			Replace an item's tooltip with where it came from.
+
+			Only while Shift+Alt is composing the menu, which is what makes this
+			free for every other right-click: one thread-local bool, tested
+			first, and nothing else runs. docs/refactor/05-capabilities.md
+			section 7, Include/MenuInspector.h.
+
+			`rule` is the NSS rule that built a custom item; `matched` is every
+			modify/moveto rule that had a hand in a native one. Exactly one of
+			them is ever given, and which one is also what says whether this is
+			a configured item or the host's - passed rather than read off
+			`mii->dynamic`, which the composition loop has not set yet at the
+			point the custom branch calls this.
+		*/
+		void ContextMenu::annotate_for_inspection(MenuItemInfo *mii, const NativeMenu *rule,
+												  const std::vector<NativeMenu *> *matched) const
+		{
+			if(!Inspector::active() || !mii || mii->is_separator())
+				return;
+
+			Inspector::Facts facts;
+
+			if(rule)
+				facts.origin = L"your configuration";
+			else if(!::IsEqualGUID(mii->explorer_clsid, GUID_NULL))
+				facts.origin = L"a packaged extension";
+			else
+				facts.origin = L"Windows";
+
+			facts.identity = item_identity(mii, rule != nullptr).text;
+
+			auto add = [&](const NativeMenu *from)
+			{
+				if(!from || !_cache)
+					return;
+				auto where = Inspector::location(_cache->file_name(from->provenance),
+												 from->provenance);
+				if(!where.empty())
+					facts.rules.push_back(std::move(where));
+			};
+
+			add(rule);
+			if(matched)
+			{
+				for(auto si : *matched)
+					add(si);
+			}
+
+			mii->tip.text = Inspector::describe(facts).c_str();
+			mii->tip.type = 0;
+			mii->tip.time = 0;
+		}
+
+		/*
+			Lift the items this user reaches for to a section at the top.
+
+			Opt-in: `settings { favorites = 3 }` says how many. Unset and 0 both
+			mean off, and off is free - no file is read, nothing is stat'd and
+			no identity is built - which is what keeps every configuration that
+			does not use this feature paying nothing for it.
+
+			docs/refactor/05-capabilities.md section 6. The decision is in
+			Include/MenuFavorites.h, which is pure and tested; this is the two
+			halves it cannot do: naming the items, and marking the end of the
+			section.
+
+			The separator is `Separator::Bottom` on the last promoted item
+			rather than a new item. Menu::insert already turns that flag into a
+			real separator when it inserts the item (Include/MenuItem.h), so the
+			section gets its rule with no object created, no ownership question,
+			and nothing for the duplicate-separator trim below to disagree with.
+		*/
+		void ContextMenu::apply_favorites(std::vector<MenuItemInfo *> &items)
+		{
+			if(!_cache || items.empty())
+				return;
+
+			auto cap = _context.eval_number<int>(_cache->settings.favorites, 0);
+			if(cap < 1)
+				return;
+
+			auto ranks = FavoritesStore::instance().ranks();
+			if(ranks.empty())
+				return;
+
+			Diagnostics::MenuPerfScope perf(L"menu.favorites", items.size());
+
+			std::vector<FavoriteCandidate> candidates;
+			candidates.reserve(items.size());
+
+			for(auto item : items)
+			{
+				FavoriteCandidate candidate;
+				candidate.separator = item->is_separator();
+				if(!candidate.separator)
+					candidate.hash = item_identity(item).hash;
+				candidates.push_back(candidate);
+			}
+
+			auto plan = plan_favorites(candidates, ranks, static_cast<size_t>(cap));
+			if(plan.empty())
+			{
+				// Braced because __trace compiles away to nothing in a release
+				// build, and an unbraced `if` over it is C4390.
+				if(plan.refused)
+				{
+					__trace(L"favorites declined: %s", plan.refused);
+				}
+				return;
+			}
+
+			apply_favorite_plan(items, plan);
+
+			// The section needs an end. Bottom rather than Top on the item
+			// after it, because the item after it is somebody else's and may
+			// already carry a separator of its own.
+			items[plan.promoted.size() - 1]->separator |= (int)Separator::Bottom;
+		}
+
 		/*
 			Break a menu taller than the screen into columns instead of scrolling it.
 
@@ -4170,11 +4379,60 @@ namespace Nilesoft
 			return result;
 		}
 
+		/*
+			Count a use, once the chosen command has been dispatched.
+
+			Writing the file is three file operations, so it must not land
+			between the click and the command running - and it must not land on
+			the composition path at all (R1). A destructor is what gets it after
+			every one of InvokeCommand's exits, including the two that
+			`delete this` first, which is why it holds an identity by value and
+			no pointer to the menu it came from.
+
+			Only when `settings { favorites = N }` is set. Counting for every
+			user of every configuration in order to serve a feature almost none
+			of them has switched on would be a file write per right-click for
+			nothing; a pin placed by `shell.exe -favorites` works whether or not
+			anything is counting. docs/refactor/05-capabilities.md section 6.
+		*/
+		struct RecordFavoriteUse
+		{
+			MenuIdentity::Identity identity;
+
+			~RecordFavoriteUse()
+			{
+				if(identity.valid())
+					FavoritesStore::instance().record_use(identity);
+			}
+		};
+
 		int ContextMenu::InvokeCommand(int id)
 		{
 			Uninitialize();
 
 			invoke_item = nullptr;
+
+			RecordFavoriteUse record;
+			if(id != 0 && _cache && _context.eval_number<int>(_cache->settings.favorites, 0) > 0)
+			{
+				// _model answers for the items Shell owns; a native keeps the
+				// host's own wID and is not in it, so the fallback is a scan of
+				// what was actually composed. Both are cheap and this runs once
+				// per chosen command, not once per item.
+				auto chosen = _model.command(static_cast<uint32_t>(id));
+				if(!chosen)
+				{
+					for(auto item : _items)
+					{
+						if(item->is_item() && item->wID == static_cast<uint32_t>(id))
+						{
+							chosen = item;
+							break;
+						}
+					}
+				}
+				record.identity = item_identity(chosen);
+			}
 
 			if(id != 0)
 			{

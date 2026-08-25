@@ -1275,7 +1275,12 @@ namespace Nilesoft
 				// Handled by the caller, before any Shell work runs. It
 				// deliberately changes no configuration state - the whole point
 				// is that this one click leaves everything as it was.
+				// Both are handled by the caller, before any Shell work runs,
+				// and both deliberately change no configuration state - the
+				// point of each is that this one click leaves everything as it
+				// was.
 				case Gesture::BypassOnce:
+				case Gesture::Inspect:
 				case Gesture::None:
 					break;
 			}

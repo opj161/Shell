@@ -998,6 +998,7 @@ namespace Nilesoft
 				{ IDENT_PRIORITY, &sets->priority },
 				{ IDENT_SHOWDELAY, &sets->showdelay },
 				{ IDENT_COLUMNS, &sets->columns },
+				{ IDENT_FAVORITES, &sets->favorites },
 				{ IDENT_SCREENSHOT, &sets->screenshot.enabled,{
 					{ IDENT_ENABLED, &sets->screenshot.enabled },
 					{ IDENT_DIRECTORY, &sets->screenshot.directory }
