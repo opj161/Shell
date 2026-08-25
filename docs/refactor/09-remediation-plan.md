@@ -16,6 +16,14 @@ claim is none of those it says so.
 
 ## 0a. Implementation status (2026-08-25, after execution)
 
+**Committed 2026-08-26 as `95ffd86`** — one commit for the whole audited
+tree, for the reasons in [`12-closure-plan.md`](12-closure-plan.md) §W0.
+Every gate result quoted below was re-run against that tree immediately
+before the commit: 33,102 checks / 0 failures / 0 warnings on x64, and
+`check-invariants: OK (10 rules, 0 deferred)`. `git diff --check main...HEAD`
+is clean at `95ffd86`; the 30 hits reported earlier were an artefact of
+nothing being committed, not of trailing whitespace in the tree.
+
 This document was a plan. It has since been carried out; what follows is the
 record of what landed, so a reader is not left guessing which half they are
 looking at. Everything below §1 is preserved as written — the findings, the
