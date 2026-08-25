@@ -107,6 +107,51 @@ universal async NSS (A2§28).
 | 19 | Favorites/recent identity model; rule inspector | §05.6–05.7 | M | low-medium | productivity |
 | 20 | Icon-cache extension; per-session memoization; lazy selection | §04.7 | M | medium | measured follow-ons |
 
+### 3a. What happened to each of them (2026-08-25)
+
+Kept **here**, beside the list it describes, rather than only in the tracking
+documents. `08-handoff.md` §1 rule 6 exists because a tally maintained
+somewhere else drifts from the backlog it tracks while every individual update
+stays accurate — and that is exactly how item 8 came to be decided by nobody
+for several sessions. This table is the anchor to reconcile against.
+
+**Nineteen closed, one partial.** "Closed" means built, or measured and
+declined with the numbers written down; a decline with no recorded reason is
+not a result, it is something nobody did.
+
+| # | | Where it ended up |
+|---|---|---|
+| 1 | closed | Phase 0; every fix re-broken and watched to fail its own test |
+| 2 | closed | in memory (steps 1–2, 4). Persistence **declined**: `catalog.first_wait` never fires — §02.1 step 3 |
+| 3 | closed | the `GetState(TRUE)` retry deleted; `E_PENDING` resolves provisionally |
+| 4 | closed | §01.5, asserted against a real borrowed shell menu rather than a fake |
+| 5 | closed | §01.3a — the harness answered the flag questions and two came back the opposite way round |
+| 6 | closed | persisted shadow (§03.1b), verified across a real Explorer restart |
+| 7 | closed | the *object* **declined** — C2712 in an SEH hook body. The consolidation happened in plain-data form, §01.6a |
+| 8 | closed | the interface and the per-entry health check **declined** (§01.9c); the `intercept` line built |
+| 9 | **partial** | policy compile landed; **conditional attach deferred**, with reasons in §01.9a that still hold |
+| 10 | closed | stage 1 **withdrawn** by the §07 audit — it met its acceptance by not showing the menu. Stage 2's cached request landed, §02.5a |
+| 11 | closed | Recycle Bin query removed, flicker gated and measured at 7.0 ms/menu, `SPIF_SENDCHANGE` dropped |
+| 12 | closed | 47.8 ns per phase, ~0.6 µs per menu, §02.6 |
+| 13 | closed | one gesture classifier, so no click can mean two things — §01.7a |
+| 14 | closed | provider names, quarantine, identity and the window — §05.1a–§05.1d |
+| 15 | closed | `MSAAMENUINFO` **declined**, already satisfied (§05.3); mnemonics, type-ahead and smart columns built |
+| 16 | closed | §03.3a — and §03.3b, which is where it started working more than once per process |
+| 17 | closed | all seven seam steps. Naming `Win32MenuPresenter` remains as design work over a now-visible surface (§08.3.9) |
+| 18 | closed | 85.5 ms → 20.2 ms on a real Explorer, §04.6a |
+| 19 | closed | favorites §05.6a and the inspector §05.7a, over parser provenance |
+| 20 | closed | all three parts **declined** by measurement, §04.7 |
+
+The two governing rules of §1 fared differently and it is worth saying so.
+**R1/R1a held** and drove the largest wins — the unbounded third-party call
+before first paint turned out to be the whole game (§02.2a-i), and the biggest
+single defect on the branch was Shell's own work misattributed to it (§02.3a,
+645 ms → 30 ms). **R2 was answered rather than implemented**: the one
+unsupported boundary is explicit, but as a *reported fact* (`intercept
+win32u import`) instead of an interface, because the two mechanisms are not
+interchangeable and a vtable would have asserted a substitutability the PE
+format denies (§01.9c).
+
 ## 4. Target architecture (end state)
 
 ```text
