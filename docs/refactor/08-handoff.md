@@ -72,7 +72,7 @@ later still — by two defects that only a deployed build could show:
 
 ## 2. What has landed on this branch
 
-Eighty commits, `a3431df`..HEAD. The table lists the ones that changed a
+Eighty-two commits, `a3431df`..HEAD. The table lists the ones that changed a
 decision or fixed something; pure documentation commits are omitted.
 
 | Commit | What |
