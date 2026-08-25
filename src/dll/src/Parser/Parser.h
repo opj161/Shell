@@ -36,6 +36,10 @@ namespace Nilesoft
 
 		private:
 
+			// The file and line the lexer is on, as a rule records it.
+			// Include/RuleProvenance.h.
+			RuleProvenance here() const;
+
 			bool peek_char(wchar_t c, bool singleLineComment);
 			uint32_t peek_ident(const std::initializer_list<uint32_t> &ids, uint32_t *value = nullptr);
 

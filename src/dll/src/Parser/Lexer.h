@@ -1,5 +1,7 @@
 #pragma once
 
+#include "..\Include\RuleProvenance.h"
+
 namespace Nilesoft
 {
 	namespace Shell
@@ -176,6 +178,17 @@ namespace Nilesoft
 			wchar_t peek = 0;
 			TokenError error = TokenError::None;
 			Lexer *parent{};
+
+			// Which entry of Parser::LoadedFiles() this lexer is reading, so a
+			// rule can record where it was written without a per-rule string.
+			// Include/RuleProvenance.h.
+			//
+			// It lives here rather than in a stack parallel to Parser::_imports
+			// because `l` already *is* that stack's top and pop_import restores
+			// it - a second stack would have to be unwound on the failure path
+			// inside load_import too, where a lexer is pushed and no file is
+			// ever recorded for it.
+			size_t file_index = RuleProvenance::NoFile;
 
 			Lexer() 
 			{

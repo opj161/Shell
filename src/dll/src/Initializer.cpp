@@ -457,6 +457,13 @@ namespace Nilesoft
 				if(!parser->Load())
 					return false;
 
+				// Carry the file list into the generation before the parser is
+				// destroyed. Every rule's provenance is an index into it, and
+				// the two have to travel together - a rule read from generation
+				// N resolving its file against generation N+1's list would name
+				// a real file that is the wrong one. Include/RuleProvenance.h.
+				new_cache->files = parser->LoadedFiles();
+
 				for(auto &id : new_cache->muid)
 				{
 					auto uid = &new_cache->muid[id.first];

@@ -101,7 +101,19 @@ namespace Nilesoft
 				return;
 			}
 
+			l->file_index = m_loaded.size();
 			m_loaded.emplace_back(Path::Full(m_path).c_str());
+		}
+
+		// Where the rule now being parsed was written. The lexer knows which
+		// file it is reading and how far into it; this is the pair, recorded on
+		// every NativeMenu the parser builds so the inspector can point at it.
+		// Include/RuleProvenance.h.
+		RuleProvenance Parser::here() const
+		{
+			if(!l)
+				return {};
+			return RuleProvenance::at(l->file_index, l->line);
 		}
 
 		Parser::~Parser() { }
@@ -475,6 +487,10 @@ namespace Nilesoft
 				}
 
 				std::unique_ptr<NativeMenu> sub(new NativeMenu(menu));
+				// Taken before parse_menu_item, which consumes the rule and
+				// leaves the lexer on whatever follows it - for a submenu, that
+				// is the closing brace of its body, several lines down.
+				sub->provenance = here();
 				if(parse_menu_item(sub.get(), type))
 				{
 					menu->items.push_back(sub.release());
@@ -557,6 +573,7 @@ namespace Nilesoft
 		{
 			auto cache = context.Cache;
 			std::unique_ptr<NativeMenu> item(new NativeMenu(true));
+			item->provenance = here();
 			if(eat().parse_modify_properties(item.get(), action))
 				cache->statics.push_back(item.release());
 		}
@@ -1227,6 +1244,7 @@ namespace Nilesoft
 
 				// `path` is already canonicalised by Path::Full above, and the
 				// duplicate-import scan means this runs once per file.
+				lex->file_index = m_loaded.size();
 				m_loaded.emplace_back(path.c_str());
 
 				l = lex;
@@ -1307,6 +1325,7 @@ namespace Nilesoft
 					case CONFIG_SEPARATOR:
 					{
 						std::unique_ptr<NativeMenu> item(new NativeMenu(&cache->dynamic));
+						item->provenance = here();
 						if(parse_menu_item(item.get(), id))
 						{
 							cache->dynamic.items.push_back(item.release());

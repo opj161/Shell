@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RuleProvenance.h"
+
 namespace Nilesoft
 {
 	namespace Shell
@@ -260,6 +262,12 @@ namespace Nilesoft
 		public:
 			int32_t		MenuId = 0;
 			int32_t		id = 0;
+
+			// The file and line this rule was written on, for the inspector.
+			// Unknown for a rule the parser did not build - see
+			// Include/RuleProvenance.h.
+			RuleProvenance provenance;
+
 			NativeMenuType	type = NativeMenuType::None;
 			NativeMenu *owner{};
 			Scope		variables;

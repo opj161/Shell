@@ -237,6 +237,16 @@ namespace Nilesoft
 
 			std::vector<NativeMenu*>	statics;
 			NativeMenu					dynamic;
+
+			// Every file this generation was parsed from, root first, in load
+			// order - Parser::LoadedFiles() copied out before the parser goes
+			// away. `RuleProvenance::file` indexes it.
+			//
+			// Held per generation rather than process-wide because that is what
+			// makes the index meaningful: an open menu holds its own generation
+			// until it closes, so a rule pointer and this vector always come
+			// from the same parse. See Include/RuleProvenance.h.
+			std::vector<std::wstring>	files;
 			FontCache					fonts;
 			PackagesCache				Packages;
 			std::vector<ImageCache>		images;
@@ -256,6 +266,17 @@ namespace Nilesoft
 			~CACHE()
 			{
 				clear();
+			}
+
+			// The path a rule's provenance names, or nullptr. Never an empty
+			// string for a missing entry: a caller printing "" beside a line
+			// number would produce ":41", which reads as a file called nothing
+			// rather than as an answer nobody has.
+			const wchar_t *file_name(const RuleProvenance &at) const
+			{
+				if(!at.known() || at.file >= files.size())
+					return nullptr;
+				return files[at.file].c_str();
 			}
 
 			const MUID* find_muid(uint32_t hash) const
@@ -282,6 +303,7 @@ namespace Nilesoft
 				images.clear();
 				bitmaps.clear();
 				muid.clear();
+				files.clear();
 				
 				variables.global.clear(true);
 				variables.runtime.clear(true);
