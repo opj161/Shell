@@ -70,8 +70,8 @@ then independently reproduced/extended where noted:
 | `.\build.ps1 -Platform x86` | **32,837 checks / 0 failures**, 0 warnings |
 | `.\build.ps1 -Platform arm64` | builds and packages, 0 warnings (tests skipped — host is x64) |
 | `check-invariants.ps1` after the multi-platform build | **OK (10 rules, 0 deferred)** |
-| `hostprobe.exe --verify src\tests\hostprobe\fixtures` | **23 scenarios, 0 failures** (8 skipped — need `--takeover`) |
-| per-user COM override + `hostprobe.exe --takeover --verify src\tests\hostprobe\fixtures` | **31 scenarios, 0 failures**, with the `takeover:` line naming this HEAD's `src\bin\x64\shell.dll` |
+| `hostprobe.exe --verify src\tests\hostprobe\fixtures` | **23 scenarios, 0 failures** (9 skipped — need `--takeover`) |
+| per-user COM override + `hostprobe.exe --takeover --verify src\tests\hostprobe\fixtures` | **32 scenarios, 0 failures**, with the `takeover:` line naming this HEAD's `src\bin\x64\shell.dll` |
 | `shell.exe -report perf` against the live `explorer.exe` | 70 menus, 16 held — see §2.1 |
 | `-check`, `-quarantine:list`, `-favorites:list` | all behave as documented, including the `app.dir` 9-vs-10-files nuance of [§03.1b](03-config-safety.md) |
 | `validate-msi-lifecycle.ps1` over x64/x86/ARM64 | **all three OK**; emitted Component, Registry, CustomAction, RemoveFile and sequence invariants hold |
@@ -85,9 +85,14 @@ not be a reproducible statement.
 **Harness invocation warning found by the independent pass.** `--verify` takes a
 mandatory directory argument. Running the abbreviated commands previously shown
 in this table produces **`0 scenario(s), 0 failure(s)`** and exits 0. The claimed
-23/31 counts therefore did not come from the commands as recorded. The rerun
-above used the full invocation and verified that the loaded DLL was this HEAD.
-R0 makes that class of false green impossible.
+23/31 counts therefore did not come from the commands as recorded — and were
+also the wrong numbers: the table above is corrected to the measured **23/32**
+(9 skipped natively, not 8). The rerun used the full invocation and verified
+that the loaded DLL was this HEAD. R0 makes that class of false green
+impossible, and W6.2 makes the counts themselves enforced rather than merely
+recorded: they now live in `src/tests/hostprobe/Scenarios.h` as
+`kNativeScenarios` and `kTakeoverScenarios`, and an unfiltered run that does
+not hit them exits 120.
 
 **So the ordinary build and behavioral suites are green, but the QA surface is
 not itself green yet.** Everything below is a gap between what the documents
@@ -377,8 +382,10 @@ shell-namespace scenarios are required, use the per-user COM override recipe in
 [§08.3.7](08-handoff.md); `--shell` alone cannot redirect those activations.
 
 **Acceptance:** both malformed invocations used in the independent pass fail;
-the canonical commands run exactly 23/31 scenarios; a deliberately mismatched
-fixture still identifies its scenario and fails.
+the canonical commands run exactly 23/32 scenarios — 23 native with 9 skipped,
+32 through takeover — and the harness asserts that itself rather than leaving
+it to a reader (W6.2); a deliberately mismatched fixture still identifies its
+scenario and fails.
 
 ---
 
@@ -1019,7 +1026,7 @@ nobody.*
    numbers were taken against 22–25 providers; this machine now has 37 in a file
    menu, and the difference is the whole of finding B.
 6. **Fix the harness recipes and add cardinality to the gate.** Every command
-   must include the fixture directory, and the expected 23/31 counts are part of
+   must include the fixture directory, and the expected 23/32 counts are part of
    acceptance. Record that `--shell` cannot redirect shell-namespace COM
    scenarios without the per-user override. R0 fixes the executable.
 7. **Correct the invariant-script descriptions.** [§06.3](06-phases-and-tests.md)

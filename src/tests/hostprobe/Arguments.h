@@ -56,6 +56,12 @@ namespace hostprobe
 	// it is a fault in the command, not a finding about Windows or Shell.
 	inline constexpr int kNothingRanExitCode = 121;
 
+	// An unfiltered run that executed the wrong number of scenarios. Also not a
+	// finding about Shell: it means the table changed and the gate's own
+	// cardinality was not updated with it, which `ran == 0` could never catch.
+	// See kNativeScenarios / kTakeoverScenarios in Scenarios.h.
+	inline constexpr int kUnexpectedCardinalityExitCode = 120;
+
 	inline bool argument_is_option(const std::wstring &arg)
 	{
 		// Two dashes, then at least one more character. A bare "--" and a plain

@@ -182,6 +182,26 @@ namespace hostprobe
 		bool render_submenu_placed{};
 	};
 
+	// The canonical cardinality of an unfiltered run, in one place so that
+	// main.cpp, the plans and the handoffs all cite the same number instead of
+	// each carrying a copy.
+	//
+	// kTakeoverScenarios is the whole table. kNativeScenarios is what runs
+	// without --takeover against the registered copy; the difference is the
+	// Requires::Takeover set, which a native run skips and reports as skipped.
+	//
+	// This exists because `ran == 0` was the only cardinality check the harness
+	// had. Deleting a scenario, or mis-tagging one Requires::Takeover, still
+	// exited 0 - and four places in docs/refactor/09-remediation-plan.md
+	// recorded "23/31" against a harness that had been 23/32 since the
+	// ShellItem scenarios landed. A count that lives only in prose drifts away
+	// from the thing it counts, and the drift is invisible precisely because
+	// the run still passes.
+	inline constexpr int kTakeoverScenarios = 32;
+	inline constexpr int kNativeScenarios = 23;
+	inline constexpr int kSkippedWithoutTakeover =
+		kTakeoverScenarios - kNativeScenarios;
+
 	const std::vector<Scenario> &scenarios();
 	Result run_scenario(const Scenario &scenario);
 	std::wstring flag_names(UINT flags);

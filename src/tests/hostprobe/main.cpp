@@ -385,6 +385,19 @@ int __cdecl wmain(int argc, wchar_t **argv)
 		return 125;
 	}
 
+	// The table itself, before anything runs. Independent of any filter and of
+	// which mode this is, so a scenario deleted or accidentally not registered
+	// is reported once, plainly, rather than as a smaller-but-still-passing
+	// run.
+	if(static_cast<int>(scenarios().size()) != kTakeoverScenarios)
+	{
+		::wprintf(L"FAIL the scenario table holds %d scenario(s), "
+				  L"kTakeoverScenarios says %d - update Scenarios.h and the "
+				  L"documents that cite it\n",
+				  static_cast<int>(scenarios().size()), kTakeoverScenarios);
+		return kUnexpectedCardinalityExitCode;
+	}
+
 	int failures = 0;
 	int ran = 0;
 	int skipped = 0;
@@ -540,6 +553,31 @@ int __cdecl wmain(int argc, wchar_t **argv)
 		else
 			::wprintf(L"FAIL no scenarios ran\n");
 		return kNothingRanExitCode;
+	}
+
+	// An unfiltered run has exactly one right answer, and it is not "more than
+	// zero". A filter is a request for a subset, so it is exempt - and a filter
+	// that selected nothing is already the case above.
+	//
+	// The skipped count is asserted too, not just `ran`. Without it, one
+	// scenario losing its Requires::Takeover tag would move a scenario from
+	// skipped to ran in a native run and the totals would still add up to 32.
+	if(filter.empty())
+	{
+		const bool through_shell = takeover && the_registered_shell;
+		const int expected_ran =
+			through_shell ? kTakeoverScenarios : kNativeScenarios;
+		const int expected_skipped =
+			through_shell ? 0 : kSkippedWithoutTakeover;
+
+		if(ran != expected_ran || skipped != expected_skipped)
+		{
+			::wprintf(L"FAIL expected %d scenario(s) and %d skipped in %s mode, "
+					  L"got %d and %d\n",
+					  expected_ran, expected_skipped,
+					  through_shell ? L"takeover" : L"native", ran, skipped);
+			return kUnexpectedCardinalityExitCode;
+		}
 	}
 
 	return failures > 125 ? 125 : failures;
