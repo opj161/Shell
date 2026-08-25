@@ -169,11 +169,12 @@ Ordered by user value, with what is known about each. Everything above §3.6 has
 now landed, and so has everything §3.6 listed as remaining except one item.
 
 **If you read nothing else: §3.6 is the tally, and §3.9 is what to do next.**
-**The twenty-item backlog is closed.** Item 19 — favorites and the rule
-inspector — landed on 2026-08-25, so the tally is nineteen closed and one
-partial (item 9's conditional attach, deferred with reasons that still hold).
-What is left is a short list of named, deliberate exceptions rather than a
-backlog; §3.9 has it.
+**The twenty-item backlog is closed** — all twenty as outcomes, 15 of 20 as
+literal implementations (§00.3b). What is left is a short list of named,
+deliberate exceptions rather than a backlog; §3.9 has it. Item 9's conditional
+attach stays declined with the reasons that still hold, though the installation
+itself was hardened in §09 R6.7: the CoCreateInstance patch is no longer
+committed unless every live thread was enlisted in the transaction.
 
 ### 3.1 A real *file* context menu in a third-party host — smaller than it looks
 
@@ -313,15 +314,29 @@ master plan's own twenty-item backlog rather than against its own memory. That
 found one item it had lost entirely and one prerequisite it had assigned to the
 wrong piece of work. Both corrections are below, in place.
 
-The tally against `00-master-plan.md` §3, after the third 2026-08-25 session:
-**nineteen items closed** — built, or measured and declined with the numbers
-written down — and **one partial**.
+The tally against `00-master-plan.md` §3, after §09: **all twenty closed** —
+built, or measured and declined with the numbers written down.
 
 | | Items |
 |---|---|
-| closed | 1–8, 10–20 |
-| partial | 9 (conditional attach deferred, §01.9a) |
+| closed | 1–20 |
+| partial | — |
 | open | — |
+
+**Two tallies, and they count different things.** The one above is the outcome
+tally, which is the useful project view and cannot answer a second, equally fair
+question: *how literally was the original architecture built?* An item resolved
+differently is a valid outcome and is not an implementation of what was written
+down. `00-master-plan.md` §3b is the strict view — **15 implemented, 5 resolved
+differently, 0 partial** — and both are kept deliberately. A single number is
+how item 8 came to be decided by nobody for several sessions: an item that reads
+"closed" everywhere stops being looked at.
+
+Item 5 is the reason this matters. It read *closed* in every document for three
+sessions while half of its own replay table had never been built, because the
+trace harness proved what **Windows** does with `MNS_NOTIFYBYPOS` and nothing
+asserted what **Shell** does — and the two are indistinguishable in a status
+table. §01.3-0 records that, and §09 R2 built the missing half.
 
 **Item 19 closed 2026-08-25**: parser provenance (`e6164ad`), then favorites and
 the inspector (`7ab9f42`). Its gate had been stated wrongly for several sessions
@@ -380,20 +395,39 @@ live, published per host and printed as an `intercept` line by
 
 **Seam step 7 of §04.4 — landed, and item 17 with it.** The painting and the
 layer compositing are now `src/dll/src/MenuPresenter.cpp`: 1,606 lines out of
-`ContextMenu.cpp`, which goes from 7,542 to 5,852. Both halves were extracted
-by line range and verified byte-identical against the pre-move blob rather than
-reviewed by eye, which is what made step 5 safe and is §04.4's rule for every
-seam.
+`ContextMenu.cpp`, which goes from 7,542 to 5,852 — **measured at `f465242`**.
+Both halves were extracted by line range and verified byte-identical against
+the pre-move blob rather than reviewed by eye, which is what made step 5 safe
+and is §04.4's rule for every seam.
 
-**What remains of step 7 is the naming, and it is deliberately not done.** The
-functions are still `ContextMenu::` members. A `Win32MenuPresenter` class needs
-an interface onto `ContextMenu`'s private state — `_theme`, `_items`,
-`_hTheme`, `symbol`, `composition`, the DC and font caches — and that interface
-cannot be designed honestly until the dependency is visible. Splitting the
-translation unit is what makes it visible: **whatever `MenuPresenter.cpp`
-reaches for is the presenter's surface**, and it is now a list somebody can
-read off one file instead of inferring from seven thousand lines. That is the
-next commit on this seam, and it is design work rather than moving.
+A line count is a measurement and needs the commit it was taken at, or the next
+reader reads ordinary drift as an error. At `450985f` the same files were
+**6,110** and **1,652**; after §09 they are **6,182** and **1,795**. Nothing
+regressed: later commits added to both, and §09's presenter work adds the
+boundary rather than moving more code out.
+
+**The naming landed 2026-08-25 (§09 R4), and the prediction held.** Step 7
+stopped at the file split on purpose: a `Win32MenuPresenter` class needs an
+interface onto `ContextMenu`'s private state, and "that interface cannot be
+designed honestly until the dependency is visible". Splitting the translation
+unit is what made it visible, and the list turned out to be short enough to
+read in one sitting — fifteen members, one of which (`_theme`, 157 uses)
+dominates the rest put together.
+
+`Include/Win32MenuPresenter.h` is that list as a `PresenterContext` of
+references, and the eight paint functions are its members. Two details worth
+carrying forward:
+
+- **Anonymous struct members cannot cross a boundary.** `composition`, `font`,
+  `symbol`, `current` and `hwnd` were declared as unnamed types, which can be
+  members and cannot be parameters — so naming them (`ContextMenu::Composition`
+  and friends) was the actual first step, not the class. That is what had made
+  the boundary look harder than it was.
+- **The bodies are still byte-identical**, checked the same way step 7 checked
+  its own: normalise away the inserted alias block and the class rename and the
+  diff has *zero* removed lines. The gate was the four `render.*` scenarios
+  through the per-user CLSID override — 32 scenarios, 0 failures, with all four
+  reading the same 239x820 popup of 33 items and the submenu placed.
 
 Two things a translation-unit split cannot do by declaring, both recorded
 because the next split will hit them too:
@@ -679,9 +713,10 @@ nobody has looked at.
 
 #### Needs a machine state this one is not in
 
-- **§03.5's two untested acceptance criteria**: a shadow whose manifest fails
-  verification being refused, and a fresh machine with a corrupt stock config
-  reaching the clean never-loaded refusal.
+- **§03.5's remaining end-to-end route**: a fresh process falling through
+  `Initializer::init` to the never-loaded refusal on a machine with a corrupt
+  stock config. The *refusal rule itself* is unit-tested four ways and is not
+  open - see §03.5, corrected 2026-08-25.
 - **The MSI upgrade matrix.** `AGENTS.md` has the one row that *is* verifiable
   here and how to run it.
 
@@ -883,13 +918,26 @@ found either. **Deploy it, drive it, and read the menu back.**
 .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
 ```
 
-At the time of writing: **32,837 checks / 0 failures** on x64 and x86, arm64
-builds and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)` -
-both formerly-deferred rules turned on with their phase, as section 06.3
-intended - **23 harness scenarios native and 31 through takeover**, 0 failures.
+**The scenario counts are part of the gate, not commentary.** A run that
+reports fewer than it should has not passed; it has been asked a smaller
+question. Before 2026-08-25 that was easy to miss, because `hostprobe.exe
+--verify` with the directory left off became a substring *filter* named
+"--verify", matched no scenario, and printed `0 scenario(s), 0 failure(s)` with
+exit code 0 - which is how two handoffs came to record counts beside commands
+that could not have produced them. The parser now refuses a missing operand and
+an empty run (section 09 R0), so the abbreviated form fails loudly. Quote the
+fixture directory in the command and check the count in the summary.
 
-The takeover count is 31 rather than 27 because of the four `render.*`
-scenarios (section 3.8). Both modes are stable now: the transient that made a
+At the time of writing (after section 09): **33,102 checks / 0 failures** on
+x64 and x86, arm64 builds and packages, 0 warnings, `check-invariants: OK
+(10 rules, 0 deferred)` - both formerly-deferred rules turned on with their
+phase, as section 06.3 intended - **23 harness scenarios native and 32 through
+takeover**, 0 failures.
+
+The takeover count is 32 rather than 27 because of the four `render.*`
+scenarios (section 3.8) and `takeover.a_by_position_host_is_told_which_position`
+(section 09 R2). Native is 23 with 9 skipped, and the skipped count is the
+takeover-only set - a native run that reports 0 skipped is not a native run. Both modes are stable now: the transient that made a
 single failure untrustworthy was diagnosed and fixed on 2026-08-25 (section 4),
 so **a harness failure is a finding again** rather than something to re-run
 until it goes away. A run takes about 24 s native and 32 s through takeover.

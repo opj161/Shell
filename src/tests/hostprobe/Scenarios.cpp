@@ -171,6 +171,19 @@ namespace hostprobe
 			return s;
 		}
 
+		// Steers by what the item says instead of by its identifier.
+		//
+		// The only way to reach a mirrored native item in a by-position menu:
+		// Shell tracks those under identifiers of its own, so the host's wID names
+		// nothing in the menu the driver is looking at. See Target::titled.
+		Probe::Script select_titled(const wchar_t *title)
+		{
+			Probe::Script s;
+			s.root = Target::titled(title);
+			s.keys = { Key::vk(VK_RETURN) };
+			return s;
+		}
+
 		Probe::Script cancel_whatever()
 		{
 			Probe::Script s;
@@ -575,6 +588,19 @@ namespace hostprobe
 				return failed;
 			}
 			menu = shell_menu.menu();
+
+			// The style goes on the menu the *host* owns, which is this one -
+			// Shell composes its own and must never carry it. Applied after the
+			// handlers have filled the menu so the appended probe items sit at
+			// the end and cannot move anything the scan already found.
+			if(s.notify_by_pos && !shell_menu.apply_notify_by_position())
+			{
+				Result failed;
+				failed.name = s.name;
+				failed.setup_failed = true;
+				failed.setup_detail = L"could not apply MNS_NOTIFYBYPOS to the host menu";
+				return failed;
+			}
 		}
 		else
 			menu = build(s.shape, s.notify_by_pos);
@@ -590,6 +616,8 @@ namespace hostprobe
 			script = unmatched_character_after_navigating(); break;
 		case ScriptKind::SelectDrivableCommand:
 			script = select_drivable(shell_menu.drivable_command()); break;
+		case ScriptKind::SelectByPositionTarget:
+			script = select_titled(ShellMenu::TARGET_TITLE); break;
 		case ScriptKind::CancelWhatever:  script = cancel_whatever(); break;
 		case ScriptKind::ReadComposedMenu:
 			script = read_composed_menu(
@@ -634,7 +662,27 @@ namespace hostprobe
 			result.command_id = LOWORD(command.wparam);
 		Event by_pos;
 		if(probe.trace().first(WM_MENUCOMMAND, &by_pos))
+		{
+			// "wParam - The zero-based index of the item selected. lParam - A
+			// handle to the menu for the item selected."
+			// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand
 			result.command_position = static_cast<UINT>(by_pos.wparam);
+			result.command_menu = reinterpret_cast<HMENU>(by_pos.lparam);
+		}
+
+		// What the host built, for the by-position expectation to compare
+		// against. Meaningless for the shapes this file builds itself, which
+		// assert against recorded traces instead.
+		if(s.shape == MenuShape::ShellItem)
+		{
+			result.expected_position =
+				s.script == ScriptKind::SelectByPositionTarget
+					? shell_menu.target_position()
+					: shell_menu.drivable_position();
+			result.host_root_menu = shell_menu.menu();
+			result.expected_title = shell_menu.title_at(result.expected_position);
+			result.replayed_title = shell_menu.title_at(result.command_position);
+		}
 
 		// The rendering verdicts, while the snapshot the driver took is still
 		// the current one. Every judge_* leaves its own detail behind on
@@ -1002,6 +1050,38 @@ namespace hostprobe
 				s.expectation = Expect::NoCommandMessage;
 				s.why = L"synthetic identifiers must never reach a host, and a "
 						L"RETURNCMD host is notified by the return value alone";
+				v.push_back(s);
+			}
+			{
+				/*
+					docs/refactor/09-remediation-plan.md R2, and the half of
+					section 3's replay table that was never built.
+
+					question.notifybypos_reports_a_position already records what
+					*Windows* does with MNS_NOTIFYBYPOS. Nothing asserted what
+					*Shell* does, and the answer was: nothing at all. Such a host
+					has no reason to give its items identifiers, so `unhandled`
+					came back 0, which reads as a cancellation, and the user's
+					click did nothing with no message and no log line.
+
+					The host menu here carries a duplicate of the identifier the
+					script steers to, plus two items with no identifier. Both are
+					ordinary in a menu addressed by position and both are what a
+					tracking table keyed on the host's own wID gets wrong - see
+					ShellMenu::apply_notify_by_position.
+				*/
+				Scenario s;
+				s.name = L"takeover.a_by_position_host_is_told_which_position";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.notify_by_pos = true;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::SelectByPositionTarget;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::MenuCommandNamesTheHostPosition;
+				s.why = L"\"Menu owner receives a WM_MENUCOMMAND message instead "
+						L"of a WM_COMMAND message\", carrying \"the zero-based "
+						L"index of the item selected\"";
 				v.push_back(s);
 			}
 

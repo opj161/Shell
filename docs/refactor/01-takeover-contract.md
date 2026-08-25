@@ -88,6 +88,29 @@ Rationale, from the TrackPopupMenuEx page
   ("does not send notification messages", unenumerated) — which is precisely why
   the original rule needed a probe to discover its own consequences (QA-02).
 
+### 3-0. Why half of this was tallied closed for three sessions (2026-08-25)
+
+The by-position row of the table above — `PostMessage(owner, WM_MENUCOMMAND,
+position, borrowed_HMENU)` — was never built, and item 5 read **closed** in
+every document until docs/refactor/09-remediation-plan.md went looking.
+
+What made it invisible is worth more than the fix. The trace harness has a
+scenario named `question.notifybypos_reports_a_position`, it passes, and its
+fixture records `WM_MENUCOMMAND position=1 menu=menu#1`. That scenario proves
+what **Windows** does with `MNS_NOTIFYBYPOS`. Nothing asserted what **Shell**
+does with it, and the two read identically in a status table.
+
+This is the same shape as two decisions already recorded here: §7a's
+non-interference proof and §9c's backend health check, both of which were
+scheduled to test something they could not reach. *Harness coverage of a
+contract is not implementation of it* — and a scenario that exercises the
+baseline rather than the takeover is the easiest way for the difference to go
+unnoticed, because it is green either way.
+
+The replay now exists (§09 R2), and the assertion is
+`takeover.a_by_position_host_is_told_which_position`, which runs Shell's own
+hook and is red without it.
+
 ### 3a. What the harness measured — the flags do the opposite of the guess
 
 The reasoning above reached the right rule from the wrong premise. The trace

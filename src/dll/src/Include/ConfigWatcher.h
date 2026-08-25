@@ -141,6 +141,27 @@ namespace Nilesoft
 			}
 
 			/*
+				The wait the watch thread blocks in, as a seam.
+
+				WAIT_FAILED cannot be provoked from outside: closing a handle
+				another thread is already blocked on does not reliably return
+				the wait, so a test written that way measures a race rather than
+				the invariant. What the invariant *is* - that every exit from
+				the watch loop leaves watching() false - is worth pinning
+				precisely because nothing user-visible reads it yet, so a
+				regression would be silent until something did.
+
+				Set before start(); the thread reads it once per wait and never
+				writes it.
+			*/
+			using WaitForObjects = DWORD (WINAPI *)(DWORD, const HANDLE *, BOOL, DWORD);
+
+			void set_wait_for_testing(WaitForObjects wait) noexcept
+			{
+				_wait = wait ? wait : &::WaitForMultipleObjects;
+			}
+
+			/*
 				Watch the directories covering `files`, calling `on_changed`
 				when one of those files is written.
 
@@ -310,12 +331,35 @@ namespace Nilesoft
 				return stamps;
 			}
 
+			/*
+				The watch thread. `_running` is what `watching()` answers, and
+				it belongs to the thread rather than to the call that started
+				it: every way out of watch_loop() below - a failed
+				WaitForMultipleObjects, an out-of-range index, a failed
+				FindNextChangeNotification, or a re-point that found nothing
+				watchable - means this thread has gone and the configuration is
+				no longer being watched.
+
+				Four of those five exits used to leave `_running` true, so
+				watching() went on answering yes for a thread that did not
+				exist. Only tests read it today, which is the argument for
+				fixing it before something else does - the same shape as the
+				re-entrant start() in docs/refactor/03-config-safety.md 3b,
+				where a state flag outlived the thread it described and the
+				failure was invisible for exactly that reason.
+			*/
 			void run()
+			{
+				watch_loop();
+				_running.store(false, std::memory_order_release);
+			}
+
+			void watch_loop()
 			{
 				for(;;)
 				{
-					auto index = ::WaitForMultipleObjects(static_cast<DWORD>(_handles.size()),
-														  _handles.data(), FALSE, INFINITE);
+					auto index = _wait(static_cast<DWORD>(_handles.size()),
+									   _handles.data(), FALSE, INFINITE);
 
 					// Index 0 is the stop event; a failed wait is not something
 					// to spin on.
@@ -338,8 +382,8 @@ namespace Nilesoft
 						if(woken > 0 && !::FindNextChangeNotification(_handles[woken]))
 							return;
 
-						index = ::WaitForMultipleObjects(static_cast<DWORD>(_handles.size()),
-														 _handles.data(), FALSE, DEBOUNCE_MS);
+						index = _wait(static_cast<DWORD>(_handles.size()),
+									  _handles.data(), FALSE, DEBOUNCE_MS);
 
 						if(index == WAIT_OBJECT_0 || index == WAIT_FAILED)
 							return;
@@ -375,11 +419,10 @@ namespace Nilesoft
 						// Nothing watchable in the new set. Stopping is the
 						// honest outcome and the keyboard reload combos remain,
 						// which is what "best-effort" has meant here all along.
+						// run() clears _running for every exit from here, so
+						// this path no longer does it itself.
 						if(!rearm(files))
-						{
-							_running.store(false, std::memory_order_release);
 							return;
-						}
 					}
 
 					// Published after the callback and after the re-point, so a
@@ -441,6 +484,7 @@ namespace Nilesoft
 			std::vector<uint64_t> _stamps;
 			Callback _callback{};
 			std::atomic<bool> _running{};
+			WaitForObjects _wait = &::WaitForMultipleObjects;
 			std::atomic<uint64_t> _reloads{};
 
 			// A re-point asked for by the reload callback, which runs on the

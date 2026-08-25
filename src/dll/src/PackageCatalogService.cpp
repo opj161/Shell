@@ -57,19 +57,47 @@ namespace Nilesoft
 			}
 		}
 
-		std::vector<ExplorerCommandRegistration> scan_package_catalog()
+		/*
+			One walk, two answers.
+
+			The packaged-verb registrations and the package identities come out
+			of the same enumeration, and always did: this loop already asked
+			GetPackagePathByFullName for every package before reading its
+			manifest, and then threw the path away. PackageIndex went on to
+			enumerate the same registry again, on the menu thread, to answer
+			package.exists() - which the *stock* configuration asks on every
+			single menu (src/bin/imports/terminal.nss line 8).
+
+			Publishing both from here is what makes that read instead of a scan.
+			docs/refactor/09-remediation-plan.md R3.
+
+			A package with no verbs still belongs in `packages`: the NSS
+			functions ask about every installed package, not only the ones that
+			contribute menu items.
+		*/
+		CatalogScan scan_package_catalog()
 		{
-			std::vector<ExplorerCommandRegistration> out;
+			CatalogScan out;
 			RegistryPackageSource source;
 			std::vector<std::wstring> names;
 			if(!source.enumerate_full_names(names))
 				return out;
+
+			out.packages.reserve(names.size());
 
 			for(const auto &full : names)
 			{
 				// Documented two-call GetPackagePathByFullName, already wrapped:
 				// https://learn.microsoft.com/en-us/windows/win32/api/appmodel/nf-appmodel-getpackagepathbyfullname
 				auto root = GetInstalledPackagePath(full);
+
+				PackageEntry entry;
+				if(parse_package_full_name(full, entry.identity))
+				{
+					entry.install_path = root;
+					out.packages.push_back(std::move(entry));
+				}
+
 				if(root.empty())
 					continue;
 				auto manifest = root;
@@ -84,7 +112,7 @@ namespace Nilesoft
 				for(const auto &reg : local)
 				{
 					for(const auto &type : reg.types)
-						explorer_command_xml::merge(out, reg.clsid, type);
+						explorer_command_xml::merge(out.commands, reg.clsid, type);
 				}
 			}
 			return out;
@@ -250,7 +278,8 @@ namespace Nilesoft
 
 					auto scanned = scan_package_catalog();
 
-					if(_store.publish(std::move(scanned), ::GetTickCount64(), token))
+					if(_store.publish(std::move(scanned.commands), std::move(scanned.packages),
+									  ::GetTickCount64(), token))
 						break;
 				}
 

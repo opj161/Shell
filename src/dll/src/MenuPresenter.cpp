@@ -71,8 +71,13 @@ namespace Nilesoft
 		}
 
 		//
-		void ContextMenu::draw_string(HDC hdc, HFONT hFont, const Rect *rc, const Color &color, const wchar_t *text, int length, DWORD format, bool disable_BufferedPaint)
+		void Win32MenuPresenter::draw_string(HDC hdc, HFONT hFont, const Rect *rc, const Color &color, const wchar_t *text, int length, DWORD format, bool disable_BufferedPaint)
 		{
+			// The presenter's surface, for this function. Named here rather
+			// than reached for through `this`, so what one paint routine
+			// depends on is a list a reviewer can read.
+			auto &_hTheme = _ctx.hTheme;
+
 			if(color.a == 0)
 				return;
 
@@ -94,7 +99,7 @@ namespace Nilesoft
 			}
 		}
 
-		void ContextMenu::draw_rect(DC *dc, const POINT &pt, const SIZE &size, const Color &color, const Color &border, int radius)
+		void Win32MenuPresenter::draw_rect(DC *dc, const POINT &pt, const SIZE &size, const Color &color, const Color &border, int radius)
 		{
 			PlutoVG pluto(size.cx, size.cy);
 
@@ -141,8 +146,25 @@ namespace Nilesoft
 		};
 
 
-		LRESULT ContextMenu::OnDrawItem(DRAWITEMSTRUCT *di)
+		LRESULT Win32MenuPresenter::OnDrawItem(DRAWITEMSTRUCT *di)
 		{
+			// The presenter's surface, for this function. Named here rather
+			// than reached for through `this`, so what one paint routine
+			// depends on is a list a reviewer can read.
+			auto &_theme = _ctx.theme;
+			auto &symbol = _ctx.symbol;
+			auto &composition = _ctx.composition;
+			auto &font = _ctx.font;
+			auto &dpi = _ctx.dpi;
+			auto &current = _ctx.current;
+			auto &_hbackground = _ctx.hbackground;
+			auto &msg = _ctx.msg;
+			auto &_tip = _ctx.tip;
+			auto &_items = _ctx.items;
+			auto &_hTheme = _ctx.hTheme;
+			auto &ident = _ctx.ident;
+			auto &_menus = _ctx.menus;
+
 			LRESULT lret = TRUE;
 			//current.selectitem = nullptr;
 			if(di->itemID == 0x5ffffffe)
@@ -150,7 +172,7 @@ namespace Nilesoft
 
 
 
-			
+
 			auto hMenu = reinterpret_cast<HMENU>(di->hwndItem);
 			auto rc = reinterpret_cast<const Rect *>(&di->rcItem);
 
@@ -169,7 +191,7 @@ namespace Nilesoft
 			DC dc = di->hDC;
 
 			dc.set_back_mode();
-			
+
 			if(state.selected)
 			{
 				if(state.disabled)
@@ -194,7 +216,7 @@ namespace Nilesoft
 				auto rect = *rc;
 				rect.left += _theme.separator.margin.left;
 				rect.right -= _theme.separator.margin.right;
-				//rect.top += _theme.separator.margin.top;		
+				//rect.top += _theme.separator.margin.top;
 				rect.top += _theme.separator.margin.top;
 				rect.bottom = rect.top + _theme.separator.size;
 				//draw_rect(&dc, rc->point(), rc->size(), _theme.background.color);
@@ -221,7 +243,7 @@ namespace Nilesoft
 					di->hDC = dcmem;
 
 					lret = msg.invoke();
-					
+
 					di->hDC = old_hdc;
 
 					std::vector<COLORREF> pixels(rc->width() * rc->height());
@@ -278,7 +300,7 @@ namespace Nilesoft
 					dc.exclude_clip_rect(*rc);
 					return true;
 				}
-				
+
 				dc.fill_rect(di->rcItem, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
 			}
 
@@ -306,7 +328,7 @@ namespace Nilesoft
 			const long image_size = _theme.image.size;
 
 			auto rcblock = *rc;
-			
+
 			rcblock.top += _theme.back.margin.top;
 			rcblock.bottom -= _theme.back.margin.bottom;
 
@@ -335,7 +357,7 @@ namespace Nilesoft
 				if(mii->cch == 0)
 				{
 				}
-				else 
+				else
 				{
 					rcimg.left = rcblock.left + _theme.back.padding.left;
 					rcimg.right = rcimg.left + image_size;
@@ -367,7 +389,7 @@ namespace Nilesoft
 					if(state.disabled)
 						border_color = _theme.back.border.nor_dis;
 				}
-				
+
 				//dc.draw_fill_rounded_rect(rcblock, _theme.back.radius+2, 0,0);
 				//draw_rect(&dc, rcblock.point(), { width, height }, 0xff000000, {}, _theme.back.radius);
 				//draw_rect(&dc, rcblock.point(), { width, height }, _theme.background.color, {}, _theme.back.radius);
@@ -395,7 +417,7 @@ namespace Nilesoft
 				{
 					auto sy = mii->is_popup() ? &symbol.chevron : mii->is_radiocheck() ? &symbol.bullet : &symbol.checked;
 					auto hbitmap = state.selected ? sy->select : sy->normal;
-					
+
 					if(state.disabled)
 						hbitmap = state.selected ? sy->select_disabled : sy->normal_disabled;
 
@@ -418,7 +440,7 @@ namespace Nilesoft
 				if(state.selected && mii->image_select.isvalid())
 					image = &mii->image_select;
 
- 
+
 				auto color_luma = [](const Color &color)
 				{
 					return (int(color.r()) * 299 + int(color.g()) * 587 + int(color.b()) * 114) / 1000;
@@ -973,7 +995,7 @@ namespace Nilesoft
 							Rect rcim = { rcimg.left + ((image_size - image->size.cx) / 2),
 								(rcblock.top + (rcblock.bottom - image->size.cy)) / 2,
 								image->size.cx, image->size.cy };
-							
+
 							//if(image->bitsPixel < 32)
 							//	dc.bitblt({ rcim.left,rcim.top,size.cx,size.cy }, memDC, 0, 0);
 							//else
@@ -1067,7 +1089,7 @@ namespace Nilesoft
 						{
 							if(size.cx > image_size) size.cx = image_size;
 							if(size.cy > image_size) size.cy = image_size;
-							
+
 							color_[0] = g->color[0];
 							color_[1] = g->color[1];
 
@@ -1175,7 +1197,7 @@ namespace Nilesoft
 					}
 				}
 			}
-			
+
 			// exlude menu item rectangle to prevent drawing by windows after us
 			dc.exclude_clip_rect(*rc);
 
@@ -1186,14 +1208,24 @@ namespace Nilesoft
 			return TRUE;
 		}
 
-		LRESULT ContextMenu::OnMeasureItem(MEASUREITEMSTRUCT *mi)
+		LRESULT Win32MenuPresenter::OnMeasureItem(MEASUREITEMSTRUCT *mi)
 		{
+			// The presenter's surface, for this function. Named here rather
+			// than reached for through `this`, so what one paint routine
+			// depends on is a list a reviewer can read.
+			auto &_theme = _ctx.theme;
+			auto &dpi = _ctx.dpi;
+			auto &current = _ctx.current;
+			auto &msg = _ctx.msg;
+			auto &_items = _ctx.items;
+			auto &ident = _ctx.ident;
+
 			LRESULT lret = 0;
 			auto menu = current.menu;
 
 			mi->itemHeight = 0;
 			mi->itemWidth = 0;
-			
+
 			if(mi->itemID == 0x5ffffffe)
 			{
 				mi->itemWidth = 260;
@@ -1213,7 +1245,7 @@ namespace Nilesoft
 					{
 						if(!ident.equals(mi->itemID))
 							lret = msg.invoke();
-						else 
+						else
 						{
 							auto v = (uint32_t)_theme.view2;
 							if(v < _theme.image.size)
@@ -1225,7 +1257,7 @@ namespace Nilesoft
 							mi->itemHeight += mii->is_spacer() ? dpi(10u) : v;
 						}
 					}
-					else 
+					else
 					{
 						mi->itemHeight += mii->size.cy + _theme.back.height();
 						if(mi->itemHeight % 2)
@@ -1254,8 +1286,14 @@ namespace Nilesoft
 			return lret;
 		}
 
-		void ContextMenu::screenshot()
+		void Win32MenuPresenter::screenshot()
 		{
+			// The presenter's surface, for this function. Named here rather
+			// than reached for through `this`, so what one paint routine
+			// depends on is a list a reviewer can read.
+			auto &_level = _ctx.level;
+			auto &_screenshot = _ctx.screenshot;
+
 			if(!_level.empty()) try
 			{
 				auto wnd = _level.front();
@@ -1301,13 +1339,13 @@ namespace Nilesoft
 					pt1.x = std::max<long>(rc.right, pt1.x);
 					pt1.y = std::max<long>(rc.bottom, pt1.y);
 				});
-				
+
 				pt0.x = std::max<long>(0, pt0.x);
 				pt0.y = std::max<long>(0, pt0.y);
 
 				pt1.x = std::min<long>(sz.cx, pt1.x);
 				pt1.y = std::min<long>(sz.cy, pt1.y);
-				
+
 				sz = { (pt1.x - pt0.x) + 100, (pt1.y - pt0.y) + 100 };
 
 				bits = nullptr;
@@ -1318,9 +1356,9 @@ namespace Nilesoft
 					dc0.select_bitmap(hbitmap0.get());
 					dc0.draw_image({ }, sz, dc_dst, pt0, sz);
 				}
-				
+
 				auto w = sz.cx, h = sz.cy;
-				
+
 				auto p = bits;
 				if(bits)
 				{
@@ -1352,10 +1390,10 @@ namespace Nilesoft
 
 					if(location.empty())
 						location = IO::Path::GetKnownFolder(FOLDERID_Screenshots).move();
-					
+
 					if(location.empty())
 						location = Initializer::instance->application.Dirctory;
-					
+
 					location = Path::Combine(location, L"screenshot_" + tf + L".png");
 
 					plutovg_stbi_write_png(location, w, h, flip.get());
@@ -1365,8 +1403,13 @@ namespace Nilesoft
 			}
 		}
 
-		bool ContextMenu::draw_layer(WND *wnd, SIZE size, int margin)
+		bool Win32MenuPresenter::draw_layer(WND *wnd, SIZE size, int margin)
 		{
+			// The presenter's surface, for this function. Named here rather
+			// than reached for through `this`, so what one paint routine
+			// depends on is a list a reviewer can read.
+			auto &_theme = _ctx.theme;
+
 			//Gradients - box, linear and radial
 			if(!wnd || !wnd->ctx)
 				return false;
@@ -1493,7 +1536,7 @@ namespace Nilesoft
 
 					if(y1 > 0) y1 += fyy * 2;
 					if(y2 > 0) y2 += fyy * 2;
-					
+
 					render = x1 != 0.0 || y1 != 0.0 || x2 != 0.0 || y2 != 0.0;
 					if(render)
 						gradient.create_linear(x1, y1, x2, y2);
@@ -1515,7 +1558,7 @@ namespace Nilesoft
 				{
 					for(auto &s : _theme.gradient.stpos)
 						gradient.add_stop(s.offset, s.color.to_RGB(), s.color.a);
-					
+
 					pluto.rect(back_rect.left, back_rect.top, w, h, radius).fill(gradient);
 				}
 			}
@@ -1524,8 +1567,13 @@ namespace Nilesoft
 			return wnd->layer.hbitmap;
 		}
 
-		void ContextMenu::UpdateLayered(WND *wnd, bool update_blurry)
+		void Win32MenuPresenter::UpdateLayered(WND *wnd, bool update_blurry)
 		{
+			// The presenter's surface, for this function. Named here rather
+			// than reached for through `this`, so what one paint routine
+			// depends on is a list a reviewer can read.
+			auto &_theme = _ctx.theme;
+
 			if(!wnd) return;
 
 			int margin = 50;
@@ -1567,8 +1615,15 @@ namespace Nilesoft
 			}
 		}
 
-		bool ContextMenu::CreateLayer(WND *wnd)
+		bool Win32MenuPresenter::CreateLayer(WND *wnd)
 		{
+			// The presenter's surface, for this function. Named here rather
+			// than reached for through `this`, so what one paint routine
+			// depends on is a list a reviewer can read.
+			auto &hwnd = _ctx.hwnd;
+			auto &_theme = _ctx.theme;
+			auto &composition = _ctx.composition;
+
 			if(!wnd || !wnd->ctx) return false;
 
 			DWM dwm;
@@ -1616,13 +1671,13 @@ namespace Nilesoft
 
 					uint32_t tintColor = _theme.background.tintcolor;
 
-					if(_theme.background.effect == 2) // blur effect 
+					if(_theme.background.effect == 2) // blur effect
 					{
 						accent.state = accent.BlurBehind;
 						if(_theme.border.radius > 0)
 							accent.flags = accent.AllowSetWindowRgn;
 					}
-					else if(_theme.background.effect >= 3) // acrylic effect 
+					else if(_theme.background.effect >= 3) // acrylic effect
 					{
 						// Windows 10 build 17134
 						accent.state = accent.AcrylicBlurBehind;
@@ -1647,6 +1702,94 @@ namespace Nilesoft
 			layer->create(wnd->x - margin, wnd->y - margin, size.cx, size.cy, hwnd.focus, WS_EX_LAYERED);
 			UpdateLayered(wnd, false);
 			return wnd->show_layers();
+		}
+		/*
+			The bridge, and the only place ContextMenu's members and the
+			presenter's surface meet.
+
+			One struct literal, in declaration order. A member that is not in it
+			is not reachable from a paint routine, which is the whole point of
+			naming the boundary: before this, "the presenter's dependencies"
+			meant whatever MenuPresenter.cpp happened to touch, and the only way
+			to find out was to read 1,600 lines.
+		*/
+		PresenterContext ContextMenu::presenter_context()
+		{
+			return PresenterContext
+			{
+				_theme, composition, font, symbol, current, ident, hwnd,
+				dpi, msg, _tip,
+				_hTheme, _hbackground,
+				_level, _items, _menus,
+				_screenshot,
+			};
+		}
+
+		/*
+			ContextMenu's own paint entry points, now one line each.
+
+			Kept rather than replaced so every existing call site - the window
+			procedure, the subclass, the layer code in ContextMenu.cpp - is
+			untouched by this commit. "Move code, don't improve it in the same
+			commit" (docs/refactor/04-code-health.md section 4) applies to the
+			callers as much as to the bodies.
+
+			The presenter is constructed per call and holds one reference, so
+			this is a pointer copy rather than an allocation; it deliberately has
+			no lifetime of its own, because a presenter that outlived a menu
+			would be a presenter holding references into a destroyed object.
+		*/
+		void ContextMenu::draw_string(HDC hdc, HFONT hFont, const Rect *rc, const Color &color,
+									  const wchar_t *text, int length, DWORD format,
+									  bool disable_BufferedPaint)
+		{
+			auto ctx = presenter_context();
+			Win32MenuPresenter(ctx).draw_string(hdc, hFont, rc, color, text, length,
+												format, disable_BufferedPaint);
+		}
+
+		// Static on both sides: it draws with what it is given and reads nothing
+		// from the menu.
+		void ContextMenu::draw_rect(DC *dc, const POINT &pt, const SIZE &size,
+									const Color &color, const Color &border, int radius)
+		{
+			Win32MenuPresenter::draw_rect(dc, pt, size, color, border, radius);
+		}
+
+		LRESULT ContextMenu::OnDrawItem(DRAWITEMSTRUCT *di)
+		{
+			auto ctx = presenter_context();
+			return Win32MenuPresenter(ctx).OnDrawItem(di);
+		}
+
+		LRESULT ContextMenu::OnMeasureItem(MEASUREITEMSTRUCT *mi)
+		{
+			auto ctx = presenter_context();
+			return Win32MenuPresenter(ctx).OnMeasureItem(mi);
+		}
+
+		void ContextMenu::screenshot()
+		{
+			auto ctx = presenter_context();
+			Win32MenuPresenter(ctx).screenshot();
+		}
+
+		bool ContextMenu::draw_layer(WND *wnd, SIZE size, int margin)
+		{
+			auto ctx = presenter_context();
+			return Win32MenuPresenter(ctx).draw_layer(wnd, size, margin);
+		}
+
+		void ContextMenu::UpdateLayered(WND *wnd, bool update_blurry)
+		{
+			auto ctx = presenter_context();
+			Win32MenuPresenter(ctx).UpdateLayered(wnd, update_blurry);
+		}
+
+		bool ContextMenu::CreateLayer(WND *wnd)
+		{
+			auto ctx = presenter_context();
+			return Win32MenuPresenter(ctx).CreateLayer(wnd);
 		}
 	}
 }

@@ -37,6 +37,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -75,9 +76,30 @@ namespace hostprobe
 		bool is_popup{};
 		bool valid{};
 
-		static Target command(UINT id) { return { id, false, true }; }
-		static Target popup(UINT position) { return { position, true, true }; }
+		/*
+			Or name it by what it says.
+
+			An identifier is the natural handle for everything else here, but it
+			stops working the moment Shell composes a menu whose identifiers are
+			its own. That is not hypothetical: a borrowed root carrying
+			MNS_NOTIFYBYPOS makes Shell track every mirrored native item under a
+			tracking identifier of its own, precisely because the host's wID is
+			not an identity in such a menu - see Include/HostContract.h. The
+			driver then steers by an identifier that exists nowhere in the menu
+			it is looking at, and reports that the item does not exist.
+
+			Titles survive mirroring. Matched as a substring, case-sensitively,
+			after mnemonic markers and any accelerator are removed, so
+			"&Probe Zero\tCtrl+P" is found by "Probe Zero".
+		*/
+		std::wstring title;
+
+		static Target command(UINT id) { return { id, false, true, {} }; }
+		static Target popup(UINT position) { return { position, true, true, {} }; }
+		static Target titled(std::wstring text) { return { 0, false, true, std::move(text) }; }
 		static Target none() { return {}; }
+
+		bool by_title() const { return !title.empty(); }
 	};
 
 	// What the probe answers when Windows asks it something. A scenario sets
@@ -444,6 +466,11 @@ namespace hostprobe
 
 		void arm_target(const Target &target)
 		{
+			{
+				std::lock_guard<std::mutex> lock(_target_title_mutex);
+				_target_title = target.title;
+			}
+			_target_by_title.store(target.by_title());
 			_target_item.store(target.item);
 			_target_is_popup.store(target.is_popup);
 			_target_reached.store(false);
@@ -451,11 +478,93 @@ namespace hostprobe
 
 			// Armed last so the handler cannot match a stale destination, and
 			// checked here so a highlight that arrived before arming is not
-			// missed either.
-			if(_select_count.load() != 0
+			// missed either. A title target cannot be re-checked this way - the
+			// menu that held the earlier highlight was not recorded - so it
+			// relies on the walk, which visits every item anyway.
+			if(!target.by_title()
+			   && _select_count.load() != 0
 			   && _selected_item.load() == target.item
 			   && _selected_is_popup.load() == target.is_popup)
 				_target_reached.store(true);
+		}
+
+		/*
+			What an item says, with the parts that are presentation removed.
+
+			The documented two-call pattern: ask with dwTypeData null to learn
+			cch, then read into cch + 1. A fixed buffer truncates silently, which
+			is the defect src/dll/src/Include/MenuText.h was written to remove.
+			https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuiteminfow
+
+			Owner-drawn items included: Shell keeps MIIM_STRING on its own items
+			deliberately - a screen reader reads the title from there alongside
+			MFT_OWNERDRAW - and check-invariants enforces it.
+		*/
+		static std::wstring item_title(HMENU menu, UINT id_low_word)
+		{
+			if(!menu)
+				return {};
+
+			/*
+				Found by scanning positions and comparing the *low word* of each
+				identifier, not by GetMenuItemInfo(..., fByPosition = FALSE).
+
+				WM_MENUSELECT carries the identifier in the low-order word of
+				wParam, and a menu identifier is a UINT: everything above 16 bits
+				is gone by the time it arrives. Both kinds of identifier Shell
+				hands out are above that line - its own start at 0x0FFFFFFF and
+				the by-position tracking range at 0x60000000 - so a by-command
+				lookup with what WM_MENUSELECT reported fails with
+				ERROR_MENU_ITEM_NOT_FOUND every time. Measured here on 2026-08-25
+				against a composed menu whose items were 0x60000000 upward and
+				whose notifications were 0, 1, 2 ...
+				https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menuselect
+
+				This costs one walk of one menu per highlight, in a test driver.
+				Shell itself is unaffected: it tracks with TPM_RETURNCMD, which
+				returns the whole identifier.
+			*/
+			auto count = ::GetMenuItemCount(menu);
+			int found = -1;
+			for(int i = 0; i < count && found < 0; i++)
+			{
+				MENUITEMINFOW probe{};
+				probe.cbSize = sizeof(probe);
+				probe.fMask = MIIM_ID;
+				if(::GetMenuItemInfoW(menu, static_cast<UINT>(i), TRUE, &probe)
+				   && LOWORD(probe.wID) == LOWORD(id_low_word))
+					found = i;
+			}
+			if(found < 0)
+				return {};
+
+			MENUITEMINFOW mii{};
+			mii.cbSize = sizeof(mii);
+			mii.fMask = MIIM_STRING;
+			mii.dwTypeData = nullptr;
+			if(!::GetMenuItemInfoW(menu, static_cast<UINT>(found), TRUE, &mii) || mii.cch == 0)
+				return {};
+
+			std::wstring text(static_cast<size_t>(mii.cch) + 1, L'\0');
+			mii.dwTypeData = text.data();
+			mii.cch = mii.cch + 1;
+			if(!::GetMenuItemInfoW(menu, static_cast<UINT>(found), TRUE, &mii))
+				return {};
+			text.resize(mii.cch);
+
+			// Drop the accelerator column and the mnemonic markers, so the
+			// caller names an item by what a person reading it would say.
+			auto tab = text.find(L'\t');
+			if(tab != std::wstring::npos)
+				text.erase(tab);
+			std::wstring out;
+			out.reserve(text.size());
+			for(auto c : text)
+			{
+				if(c != L'&')
+					out.push_back(c);
+			}
+			return out;
 		}
 
 		// Waits until this thread actually owns a visible popup window.
@@ -713,13 +822,31 @@ namespace hostprobe
 				_selected_is_popup.store(popup);
 				_select_count.fetch_add(1);
 
+				// The menu holding the highlighted item, which is what a title
+				// lookup needs and is not otherwise recoverable: for a nested
+				// highlight it is the submenu, not the tracked root.
+				auto owning = reinterpret_cast<HMENU>(lp);
+
 				// Latched here rather than sampled by the driver, so a
 				// destination the highlight only passed through is still an
 				// arrival. See navigate_to.
-				if(_target_armed.load()
-				   && item == _target_item.load()
-				   && popup == _target_is_popup.load())
-					_target_reached.store(true);
+				if(_target_armed.load())
+				{
+					if(_target_by_title.load())
+					{
+						std::wstring text;
+						{
+							std::lock_guard<std::mutex> lock(_target_title_mutex);
+							text = _target_title;
+						}
+						if(!text.empty() && !popup
+						   && item_title(owning, item).find(text) != std::wstring::npos)
+							_target_reached.store(true);
+					}
+					else if(item == _target_item.load()
+							&& popup == _target_is_popup.load())
+						_target_reached.store(true);
+				}
 			}
 
 			if(msg == WM_MENUCHAR && _policy.handle_menuchar)
@@ -890,6 +1017,9 @@ namespace hostprobe
 		std::atomic<bool> _target_armed{ false };
 		std::atomic<UINT> _target_item{ 0 };
 		std::atomic<bool> _target_is_popup{ false };
+		std::atomic<bool> _target_by_title{ false };
+		mutable std::mutex _target_title_mutex;
+		std::wstring _target_title;
 		std::atomic<bool> _target_reached{ false };
 		bool _navigation_failed{};
 

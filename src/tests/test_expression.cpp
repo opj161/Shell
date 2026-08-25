@@ -352,4 +352,3 @@ TEST(expression, an_objects_truth_is_to_bool_not_a_cast)
 	bool assigned = zero;
 	CHECK(!assigned);
 }
-

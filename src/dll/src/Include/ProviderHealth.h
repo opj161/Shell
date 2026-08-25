@@ -55,6 +55,7 @@
 */
 
 #include <windows.h>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -246,6 +247,67 @@ namespace Nilesoft
 				return ProviderVerdict::Try;
 			}
 
+			/*
+				What is remembered about a provider, without deciding anything
+				and without moving anything.
+
+				consider() above answers "try it or not" and mutates as it goes -
+				it advances since_probe, resets it when a re-probe is granted,
+				and counts a deferral. That is correct for a caller that asks
+				once per provider in the order it intends to call them, and wrong
+				for one that wants to *plan* first: a planning pass that asked
+				consider() for every registration would advance every slow
+				provider's re-probe counter once per menu whether or not it ever
+				got called, and count deferrals for providers it later decided to
+				call after all.
+
+				So planning reads, and the decisions that change state are named:
+				note_slow_deferral, note_reprobe_started, note_budget_deferral.
+				Include/ProviderSchedule.h.
+			*/
+			bool classify(uint32_t clsid_hash, SelectionShape shape,
+						  ProviderTiming *out) const
+			{
+				return lookup(clsid_hash, shape, out);
+			}
+
+			// This provider is judged slow and it is not its turn: charge the
+			// deferral and move it one menu closer to a re-probe.
+			void note_slow_deferral(uint32_t clsid_hash, SelectionShape shape)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(auto *timing = find(clsid_hash, shape))
+				{
+					if(timing->since_probe < UINT16_MAX)
+						timing->since_probe++;
+					if(timing->deferrals < UINT16_MAX)
+						timing->deferrals++;
+				}
+			}
+
+			// A re-probe was granted. Reset the counter here rather than in
+			// record(), so a probe that is started and then refused by the live
+			// budget does not leave the provider due forever.
+			void note_reprobe_started(uint32_t clsid_hash, SelectionShape shape)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(auto *timing = find(clsid_hash, shape))
+					timing->since_probe = 0;
+			}
+
+			// The menu ran out before this one was reached. Not a judgement
+			// about the provider, so it does not touch since_probe: a provider
+			// the menu could not afford has not had its turn.
+			void note_budget_deferral(uint32_t clsid_hash, SelectionShape shape)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(auto *timing = find(clsid_hash, shape))
+				{
+					if(timing->deferrals < UINT16_MAX)
+						timing->deferrals++;
+				}
+			}
+
 			void record(uint32_t clsid_hash, SelectionShape shape,
 						uint32_t microseconds, bool succeeded)
 			{
@@ -272,6 +334,26 @@ namespace Nilesoft
 
 				if(!succeeded && timing->failures < UINT16_MAX)
 					timing->failures++;
+			}
+
+			/*
+				Advances once per menu, and is the whole of exploration fairness.
+
+				A provider with fewer than MIN_SAMPLES_TO_JUDGE samples cannot be
+				predicted, so it cannot be ordered by cost - it has to be tried.
+				If trying always began at the head of registration order, an
+				expensive cold provider near the front could consume the menu's
+				allowance every time and an unknown tail would never be sampled
+				at all: never sampled means never judged, and never judged means
+				never schedulable. Rotating the starting point removes that fixed
+				point without needing any per-provider state.
+
+				Process-wide and monotonic; wrapping is harmless, since only
+				`% count` is used. Include/ProviderSchedule.h.
+			*/
+			uint64_t next_exploration_cursor() noexcept
+			{
+				return _exploration_cursor.fetch_add(1, std::memory_order_relaxed);
 			}
 
 			bool lookup(uint32_t clsid_hash, SelectionShape shape, ProviderTiming *out) const
@@ -320,6 +402,7 @@ namespace Nilesoft
 
 			mutable std::mutex _mutex;
 			std::vector<ProviderTiming> _timings;
+			std::atomic<uint64_t> _exploration_cursor{ 0 };
 		};
 
 		// FNV-1a over the raw GUID bytes. An identity for a timing table and a

@@ -152,12 +152,12 @@ TEST(diagnostics_ring, a_provider_that_does_not_fit_is_counted_too)
 TEST(diagnostics_ring, provider_results_survive_the_round_trip)
 {
 	MenuSessionRecord r;
-	r.add_provider(0xABCD, 186000, ProviderResult::Deferred);
+	r.add_provider(0xABCD, 186000, ProviderResult::DeferredSlow);
 
 	CHECK_EQ(r.provider_count, 1);
 	CHECK_EQ(r.providers[0].clsid_hash, 0xABCDu);
 	CHECK_EQ(r.providers[0].microseconds, 186000u);
-	CHECK(r.providers[0].result == ProviderResult::Deferred);
+	CHECK(r.providers[0].result == ProviderResult::DeferredSlow);
 }
 
 TEST(diagnostics_ring, reset_leaves_nothing_of_the_previous_session)
@@ -332,4 +332,33 @@ TEST(diagnostics_ring, the_hosts_own_tracking_flags_are_kept_verbatim)
 	session_end();
 	DiagnosticsRing::instance().snapshot(out, 1);
 	CHECK_EQ(out[0].host_flags, 0u);
+}
+
+// One word for two facts was a report nobody could act on: "this extension is
+// slow, quarantine it" and "your menu ran out of budget before reaching it,
+// which is not this extension's fault" were both `deferred`.
+// docs/refactor/09-remediation-plan.md finding D.
+TEST(diagnostics_ring, the_two_deferrals_are_different_answers)
+{
+	MenuSessionRecord r;
+	r.add_provider(0xAAAA, 0, ProviderResult::DeferredSlow);
+	r.add_provider(0xBBBB, 0, ProviderResult::DeferredBudget);
+
+	CHECK_EQ(r.provider_count, 2);
+	CHECK(r.providers[0].result != r.providers[1].result);
+	CHECK(r.providers[0].result == ProviderResult::DeferredSlow);
+	CHECK(r.providers[1].result == ProviderResult::DeferredBudget);
+}
+
+// Numbers are the wire format, so they are pinned rather than assumed. A new
+// value has to be appended: inserting one beside DeferredSlow would renumber
+// Quarantined under a reader that still called 4 by its old name.
+TEST(diagnostics_ring, the_provider_result_values_are_the_wire_format)
+{
+	CHECK_EQ((int)ProviderResult::Ok, 0);
+	CHECK_EQ((int)ProviderResult::Pending, 1);
+	CHECK_EQ((int)ProviderResult::Failed, 2);
+	CHECK_EQ((int)ProviderResult::DeferredSlow, 3);
+	CHECK_EQ((int)ProviderResult::Quarantined, 4);
+	CHECK_EQ((int)ProviderResult::DeferredBudget, 5);
 }

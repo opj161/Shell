@@ -24,9 +24,18 @@
 	job rather than PR CI.
 
 	Exit code is the number of failed expectations, so --verify is usable as a
-	gate once a baseline is committed.
+	gate once a baseline is committed. Codes above that range mean the run never
+	got as far as an expectation: 121 nothing ran, 122 malformed command line,
+	123 --shell without --takeover, 124 Shell would not load, 125 no window.
+
+	--record, --verify and --shell each require their operand, and a run that
+	selects no scenario fails. Both rules exist because the abbreviated form
+	`hostprobe.exe --verify` used to become a substring *filter* named
+	"--verify", match nothing, and print "0 scenario(s), 0 failure(s)" with exit
+	code 0. See Arguments.h.
 */
 
+#include "Arguments.h"
 #include "Scenarios.h"
 #include "Takeover.h"
 
@@ -230,6 +239,31 @@ namespace
 										  : L"which the host's menu does not contain");
 			return 1;
 
+		case Expect::MenuCommandNamesTheHostPosition:
+			// Three things at once, because any one of them alone is passable
+			// by an implementation that has not done the work: exactly one
+			// WM_MENUCOMMAND (not zero, which is what a by-position host got
+			// before this existed), no WM_COMMAND at all (the message such a
+			// host is not listening for), and the position and menu naming
+			// where the item actually lives in the host's own menu.
+			if(r.menu_commands == 1 && r.command_ids == 0
+			   && r.expected_position != 0xFFFFFFFF
+			   && r.command_position == r.expected_position
+			   && r.command_menu == r.host_root_menu
+			   && !r.expected_title.empty()
+			   && r.replayed_title == r.expected_title)
+				return 0;
+			::wprintf(L"    FAIL expected one WM_MENUCOMMAND at position %u "
+					  L"(\"%s\") in menu %p and no WM_COMMAND; got %zu "
+					  L"WM_MENUCOMMAND (position %u, \"%s\", menu %p) and %zu "
+					  L"WM_COMMAND\n",
+					  r.expected_position, r.expected_title.c_str(),
+					  (void *)r.host_root_menu,
+					  r.menu_commands, r.command_position,
+					  r.replayed_title.c_str(), (void *)r.command_menu,
+					  r.command_ids);
+			return 1;
+
 		case Expect::EveryComposedItemIsReadable:
 			if(!rendering_was_readable(r)) return 1;
 			if(r.render_readable) return 0;
@@ -277,28 +311,41 @@ namespace
 	}
 }
 
+namespace
+{
+	void print_usage()
+	{
+		::wprintf(L"usage:\n"
+				  L"  hostprobe.exe                        run every scenario, print traces\n"
+				  L"  hostprobe.exe <substring>            run the scenarios whose name matches\n"
+				  L"  hostprobe.exe --record <dir>         write each trace to <dir>\\<name>.trace\n"
+				  L"  hostprobe.exe --verify <dir>         diff each trace against that fixture\n"
+				  L"  hostprobe.exe --takeover             run them through Shell's hook instead\n"
+				  L"  hostprobe.exe --shell <dll>          which Shell to load for --takeover\n"
+				  L"\n"
+				  L"the two gate commands, both of which need the fixture directory:\n"
+				  L"  hostprobe.exe --verify src\\tests\\hostprobe\\fixtures\n"
+				  L"  hostprobe.exe --takeover --verify src\\tests\\hostprobe\\fixtures\n");
+	}
+}
+
 int __cdecl wmain(int argc, wchar_t **argv)
 {
-	std::wstring filter;
-	std::wstring record_dir;
-	std::wstring verify_dir;
-	std::wstring shell_dll;
-	bool takeover = false;
-
-	for(int i = 1; i < argc; i++)
+	auto args = parse_arguments(argc, argv);
+	if(args.failed)
 	{
-		std::wstring arg = argv[i];
-		if(arg == L"--record" && i + 1 < argc)
-			record_dir = argv[++i];
-		else if(arg == L"--verify" && i + 1 < argc)
-			verify_dir = argv[++i];
-		else if(arg == L"--shell" && i + 1 < argc)
-			shell_dll = argv[++i];
-		else if(arg == L"--takeover")
-			takeover = true;
-		else
-			filter = arg;
+		// Said with the word every other failure uses, so a run whose output is
+		// filtered for "FAIL" cannot miss it.
+		::wprintf(L"FAIL %s\n\n", args.error.c_str());
+		print_usage();
+		return args.exit_code;
 	}
+
+	const std::wstring &filter = args.filter;
+	const std::wstring &record_dir = args.record_dir;
+	const std::wstring &verify_dir = args.verify_dir;
+	const std::wstring &shell_dll = args.shell_dll;
+	const bool takeover = args.takeover;
 
 	// Before the window exists, so nothing this process owns has been shown to
 	// a hook that is about to be installed. Shell pins itself once its hooks
@@ -329,11 +376,6 @@ int __cdecl wmain(int argc, wchar_t **argv)
 					  L"              Deploy the build you want to test.\n",
 					  load.registered.empty() ? L"none" : load.registered.c_str());
 		}
-	}
-	else if(!shell_dll.empty())
-	{
-		::wprintf(L"--shell has no meaning without --takeover\n");
-		return 123;
 	}
 
 	auto &probe = Probe::instance();
@@ -469,11 +511,36 @@ int __cdecl wmain(int argc, wchar_t **argv)
 					  L"against whichever COM activated)\n");
 	}
 
+	// What the run was measured against, in the summary rather than only in the
+	// command that started it: a pasted tail of this output is what gets
+	// recorded in a handoff, and "23 scenarios, 0 failures" says nothing about
+	// which fixtures - or whether any were consulted at all.
+	if(!verify_dir.empty())
+		::wprintf(L"\nverified against %s\n", verify_dir.c_str());
+	if(!record_dir.empty())
+		::wprintf(L"\nrecorded into %s\n", record_dir.c_str());
+
 	if(skipped)
 		::wprintf(L"\n%d scenario(s), %d failure(s), %d skipped "
 				  L"(need --takeover against the registered copy)\n",
 				  ran, failures, skipped);
 	else
 		::wprintf(L"\n%d scenario(s), %d failure(s)\n", ran, failures);
+
+	// A run that exercised nothing is a fault in the command, not a pass. This
+	// is the second half of what let `--verify` with no operand report success:
+	// the filter matched no scenario name, and zero of zero failed.
+	if(ran == 0)
+	{
+		if(!filter.empty())
+			::wprintf(L"FAIL no scenario name contains \"%s\" - nothing ran\n",
+					  filter.c_str());
+		else if(skipped)
+			::wprintf(L"FAIL every selected scenario was skipped - nothing ran\n");
+		else
+			::wprintf(L"FAIL no scenarios ran\n");
+		return kNothingRanExitCode;
+	}
+
 	return failures > 125 ? 125 : failures;
 }

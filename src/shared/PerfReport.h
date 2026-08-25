@@ -33,6 +33,8 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
+#include <string_view>
 
 #include "PerfExport.h"
 
@@ -245,6 +247,46 @@ namespace Nilesoft
 				}
 
 				return summary;
+			}
+
+			/*
+				Drop the mnemonic markers a handler puts in its title.
+
+				`IExplorerCommand::GetTitle` answers with the string meant for a
+				menu item, so it carries them: this machine's Acrobat handler
+				returns "E&dit with Adobe Acrobat", and there are also
+				"Convert to Ado&be PDF" and "&Move to OneDrive".
+
+				Here rather than in one of the two callers, because it was in
+				one of them. The Reliability window stripped them - a LISTBOX is
+				not a menu and gives `&` no meaning, so a raw title renders as a
+				typo - and `-report perf` printed them raw, so one machine had
+				two names for one extension and neither report could be searched
+				for the other's spelling.
+				docs/refactor/09-remediation-plan.md finding J.
+
+				The Win32 rule, applied rather than invented: a doubled `&&` is
+				a literal ampersand, a single one marks the character after it.
+			*/
+			inline std::wstring without_mnemonics(std::wstring_view title)
+			{
+				std::wstring out;
+				out.reserve(title.size());
+
+				for(size_t i = 0; i < title.size(); i++)
+				{
+					if(title[i] != L'&')
+					{
+						out += title[i];
+						continue;
+					}
+					if(i + 1 < title.size() && title[i + 1] == L'&')
+					{
+						out += L'&';
+						i++;
+					}
+				}
+				return out;
 			}
 
 			// Microseconds as milliseconds with one decimal, without pulling

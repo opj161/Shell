@@ -1390,14 +1390,57 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					// of the chosen item rather than TRUE.
 					auto selected = result;
 					auto failed = selected == 0 && track_error != ERROR_SUCCESS;
+
+					HostSelection sel;
+					sel.selected = selected;
+					sel.tracking_failed = failed;
+
+					/*
+						Read out of ctx while it still exists, because
+						InvokeCommand destroys it.
+
+						By-position replay applies only to a host that did not
+						ask for TPM_RETURNCMD: one that did is expecting an
+						identifier back from the call, and giving it a tracking
+						value that means nothing outside this process would be
+						worse than the nothing it gets today. The trace harness
+						recorded what untouched Windows does in that combination
+						- returns 1, sends no WM_MENUCOMMAND, selection lost
+						(question.notifybypos_with_returncmd.trace) - so there is
+						no behaviour there to preserve either.
+					*/
+					sel.by_position = ctx->host_notifies_by_position()
+									  && (uFlags & TPM_RETURNCMD) == 0;
+					if(sel.by_position)
+					{
+						HMENU containing = nullptr;
+						sel.position_known = ctx->native_origin(selected, &sel.position,
+																&containing);
+						sel.containing_menu = containing;
+					}
+
 					result = ctx->InvokeCommand(result);
+					sel.unhandled = result;
 
 					// ctx is gone - InvokeCommand deletes it - so everything the
 					// host contract needs was already read out of it above.
-					auto completion = complete_host_contract(uFlags, selected, result, failed);
+					auto completion = complete_host_contract(uFlags, sel);
 					result = completion.result;
 
-					if(completion.notify == HostNotification::Command)
+					if(completion.notify == HostNotification::MenuCommand)
+					{
+						// "wParam - The zero-based index of the item selected.
+						//  lParam - A handle to the menu for the item selected."
+						// Posted for the same reason WM_COMMAND is below: the
+						// traces show Windows posting both after WM_EXITMENULOOP,
+						// so sending would put the notification in front of the
+						// host's own tracking call returning.
+						// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand
+						::PostMessageW(hWnd, WM_MENUCOMMAND,
+									   static_cast<WPARAM>(completion.notify_position),
+									   reinterpret_cast<LPARAM>(completion.notify_menu));
+					}
+					else if(completion.notify == HostNotification::Command)
 					{
 						// Posted, not sent: Windows posts this after the tracking
 						// call returns, and a host that receives it before its own
@@ -1832,6 +1875,24 @@ void BootstrapOnce()
 							rt.co_create_instance_hook.forget();
 							__trace(L"CoCreateInstance detour did not commit");
 						}
+					}
+					else
+					{
+						// begin() refuses when the process could not be brought
+						// into a known state - a snapshot that failed, a live
+						// thread that could not be opened, a thread Detours
+						// would not record. Committing anyway would leave those
+						// threads able to "execute an illegal combination of old
+						// and new code", which is worse than not having the fast
+						// path. Nothing was init'd, so there is nothing to
+						// forget; Shell's other interception route is untouched
+						// and refresh_interception_status() below reports which
+						// one is carrying this process.
+						__trace(L"CoCreateInstance detour not installed: threads "
+								L"could not be enlisted (reason %d, error %u, thread %u)",
+								static_cast<int>(transaction.enlistment().result),
+								static_cast<unsigned>(transaction.enlistment().error),
+								static_cast<unsigned>(transaction.enlistment().thread_id));
 					}
 
 					if(!rt.ntuser_popup_hook.installed())

@@ -726,6 +726,38 @@ namespace Nilesoft
 				mii->retain_explorer_command(item->explorer_command);
 				mii->explorer_clsid = item->explorer_clsid;
 
+				/*
+					A mirrored native item in a by-position menu is tracked by an
+					identifier of Shell's own, and that identifier is remembered
+					against the position it came from.
+
+					This has to happen before the fallback below, and it has to
+					happen even when the host's wID is non-zero. Both halves are
+					the defect:
+
+					  - wID 0 is the common case in a menu addressed by position,
+					    and the fallback replaces it with an identifier from the
+					    *Shell* range - so InvokeCommand then believes a host item
+					    is one of Shell's, and runs nothing while telling the host
+					    nothing.
+					  - duplicate identifiers across items are legal in such a
+					    menu, and every lookup that matches on wID stops at the
+					    first one, so the wrong position would be reported.
+
+					A range of its own keeps ident.equals() answering false, so
+					the item stays the host's; _native_origins is what turns the
+					identifier back into {position, menu} once the user has
+					chosen. docs/refactor/09-remediation-plan.md R2.
+				*/
+				if(_host_by_position && item->native_source.known)
+				{
+					if(auto tracking = ident.get_native())
+					{
+						mii->wID = tracking;
+						_native_origins[tracking] = item->native_source;
+					}
+				}
+
 				if(mii->wID == 0 || mii->wID == (uint32_t)-1)
 					mii->wID = ident.get_id();
 
@@ -1409,7 +1441,7 @@ namespace Nilesoft
 
 							if(menu->draw.popups)
 								item->size.cx += _theme.image.gap + symbol.chevron.size.cx;
-							
+
 							item->size.cx += rc.right;
 							item->size.cy = rc.bottom;
 
@@ -1418,7 +1450,7 @@ namespace Nilesoft
 						}
 
 						menu->popup_height += item->size.cy +
-							_theme.back.padding.top + _theme.back.padding.bottom + 
+							_theme.back.padding.top + _theme.back.padding.bottom +
 							_theme.back.margin.top + _theme.back.margin.bottom;
 
 						_items.push_back(item);
@@ -1517,7 +1549,7 @@ namespace Nilesoft
 			::DestroyMenu(hMenu);
 			
 			__trace(L"ContextMenu.UninitMenuPopup");
-			
+
 			current.hMenu = nullptr;
 			if(menu)
 				menu->wnd = nullptr;
@@ -3728,6 +3760,17 @@ namespace Nilesoft
 					item->is_toplevel = is_root;
 					item->native_ownerdraw = (mii.fType & MFT_OWNERDRAW) == MFT_OWNERDRAW;
 
+					// Where this came from in the host's own menu. `i` is the
+					// position WM_MENUCOMMAND's wParam is built from and `hMenu`
+					// is what its lParam names - "A handle to the menu for the
+					// item selected", which for a nested item is this level
+					// rather than the root. Recorded for every mirrored item
+					// whether or not this host replays by position, because it
+					// costs two stores and the alternative is a second walk.
+					item->native_source.menu = hMenu;
+					item->native_source.position = static_cast<UINT>(i);
+					item->native_source.known = true;
+
 					if(is_root)
 						;
 					else
@@ -3865,6 +3908,35 @@ namespace Nilesoft
 		{
 			if(!hMenu || !menu)
 				return;
+
+			/*
+				How this host expects to be told what was chosen, read once, on
+				the root, before anything is composed.
+
+				MNS_NOTIFYBYPOS "is a menu header style and has no effect when
+				applied to individual sub menus", so the root's answer is the
+				whole answer and asking each level would be both wasted calls and
+				a wrong result for any level whose style happened to differ.
+				https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+
+				The return value is checked rather than the style read straight
+				out of the structure: MENUINFO is a caller-allocated struct and a
+				failed GetMenuInfo leaves dwStyle exactly as it was, so an
+				unchecked read of an uninitialised field would decide the whole
+				replay contract on stack garbage. On failure the ordinary
+				identifier contract stands, which is what every host got before
+				this existed.
+			*/
+			if(is_root)
+			{
+				MENUINFO mi{ sizeof(MENUINFO) };
+				mi.fMask = MIM_STYLE;
+				if(MENU::get(hMenu, &mi))
+					_host_by_position = (mi.dwStyle & MNS_NOTIFYBYPOS) != 0;
+				else
+					__trace(L"GetMenuInfo(MIM_STYLE) failed on the borrowed root: %u",
+							static_cast<unsigned>(::GetLastError()));
+			}
 
 			menu->native_popup.handle = hMenu;
 			menu->native_popup.parent_position = 0;
@@ -4436,7 +4508,7 @@ namespace Nilesoft
 
 			if(id != 0)
 			{
-				if(ident.equals(id)) 
+				if(ident.equals(id))
 				{
 					// Was a forward scan of _items_command that stopped at the
 					// first match; MenuModel::command keeps both halves of

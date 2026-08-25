@@ -396,11 +396,16 @@ namespace Nilesoft
 			return ok;
 		}
 
+		bool package_full_name_matches(const std::wstring &full_name, const wchar_t *query)
+		{
+			return icontains(full_name, query);
+		}
+
 		long long PackageIndex::match_locked(const std::vector<Entry> &list, const wchar_t *query)
 		{
 			for(size_t i = 0; i < list.size(); i++)
 			{
-				if(icontains(list[i].identity.full_name, query))
+				if(package_full_name_matches(list[i].identity.full_name, query))
 					return static_cast<long long>(i);
 			}
 			return -1;

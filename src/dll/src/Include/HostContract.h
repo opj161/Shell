@@ -88,6 +88,33 @@ namespace Nilesoft
 		{
 			None,
 			Command,		// WM_COMMAND, MAKEWPARAM(id, 0), lParam 0
+
+			/*
+				WM_MENUCOMMAND, wParam = position, lParam = the containing menu.
+
+				For a host that set MNS_NOTIFYBYPOS on the menu it handed Shell.
+				That style changes which message the owner is told with, and it
+				is a property of the menu's *header*:
+
+					"MNS_NOTIFYBYPOS ... Menu owner receives a WM_MENUCOMMAND
+					 message instead of a WM_COMMAND message when the user makes
+					 a selection. MNS_NOTIFYBYPOS is a menu header style and has
+					 no effect when applied to individual sub menus."
+					 https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+
+					"wParam - The zero-based index of the item selected.
+					 lParam - A handle to the menu for the item selected."
+					 https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand
+
+				Such a host has no reason to give its items meaningful
+				identifiers, so before this existed the completion answered
+				`None` for most of them - wID 0 reads as "nothing was chosen" -
+				and the user's click did nothing at all. That is the half of
+				docs/refactor/01-takeover-contract.md section 3's replay table
+				that was never built; the harness proved what *Windows* does with
+				the style and nothing asserted what *Shell* does.
+			*/
+			MenuCommand,
 		};
 
 		// The identifier range ContextMenu hands out for items of its own
@@ -115,7 +142,48 @@ namespace Nilesoft
 		{
 			int result{};				// the hook's return value
 			HostNotification notify{ HostNotification::None };
-			uint32_t notify_id{};
+			uint32_t notify_id{};		// Command
+
+			// MenuCommand. `notify_menu` is the menu that *owns* the item, not
+			// the root - a nested selection names its own submenu.
+			uint32_t notify_position{};
+			void *notify_menu{};
+		};
+
+		/*
+			Everything the completion needs to know about how the menu ended,
+			gathered while the ContextMenu is still alive.
+
+			A struct rather than six positional parameters, because two of the
+			six are only meaningful together and the function has to stay pure
+			arithmetic - that is what makes test_host_contract.cpp possible
+			without a menu, a window or a host.
+		*/
+		struct HostSelection
+		{
+			// The identifier the tracked menu returned; 0 if the user cancelled.
+			int selected{};
+
+			// What ContextMenu::InvokeCommand made of it: 0 when Shell
+			// recognised the item and ran it, otherwise the identifier that
+			// belongs to the host.
+			int unhandled{};
+
+			// The call did not show a menu at all, as opposed to showing one the
+			// user dismissed.
+			bool tracking_failed{};
+
+			// The borrowed root carried MNS_NOTIFYBYPOS and the host did not ask
+			// for TPM_RETURNCMD, so this menu is replayed by position.
+			bool by_position{};
+
+			// Where `unhandled` came from in the host's own menu. Resolved by
+			// ContextMenu before it is destroyed; `position_known` is false when
+			// the identifier was not a mirrored native item - a Shell item the
+			// user picked, or one Shell could not place.
+			bool position_known{};
+			uint32_t position{};
+			void *containing_menu{};
 		};
 
 		/*
@@ -151,10 +219,13 @@ namespace Nilesoft
 			            ERROR_INVALID_MENU_HANDLE
 			            (question.a_failed_track_sets_a_last_error.trace).
 		*/
-		inline HostCompletion complete_host_contract(uint32_t flags_in, int selected,
-													 int unhandled, bool tracking_failed = false)
+		inline HostCompletion complete_host_contract(uint32_t flags_in, const HostSelection &sel)
 		{
 			HostCompletion completion;
+
+			const int selected = sel.selected;
+			const int unhandled = sel.unhandled;
+			const bool tracking_failed = sel.tracking_failed;
 
 			if(tracking_failed)
 			{
@@ -193,9 +264,42 @@ namespace Nilesoft
 			if(flags_in & TPM_NONOTIFY)
 				return completion;
 
+			if(sel.by_position)
+			{
+				// The item's own identifier is not what this host is owed, and
+				// for most of its items there is not a useful one to owe: a menu
+				// addressed by position commonly leaves wID at 0 and may repeat
+				// an identifier across items. Only the position it came from,
+				// and the menu that holds it, mean anything here.
+				//
+				// If Shell could not place it, say nothing rather than fall back
+				// to WM_COMMAND. A by-position host is not listening for that
+				// message, and the identifier it carried would be an internal
+				// tracking value that exists only inside Shell.
+				if(!sel.position_known)
+					return completion;
+
+				completion.notify = HostNotification::MenuCommand;
+				completion.notify_position = sel.position;
+				completion.notify_menu = sel.containing_menu;
+				return completion;
+			}
+
 			completion.notify = HostNotification::Command;
 			completion.notify_id = static_cast<uint32_t>(unhandled);
 			return completion;
+		}
+
+		// The four-argument form the hook and the older tests use. Kept so this
+		// header's original callers are unaffected by the by-position work.
+		inline HostCompletion complete_host_contract(uint32_t flags_in, int selected,
+													 int unhandled, bool tracking_failed = false)
+		{
+			HostSelection sel;
+			sel.selected = selected;
+			sel.unhandled = unhandled;
+			sel.tracking_failed = tracking_failed;
+			return complete_host_contract(flags_in, sel);
 		}
 	}
 }

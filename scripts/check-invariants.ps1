@@ -105,10 +105,16 @@ $rules = @(
        Regex = 'fMask\s*&=\s*~\s*\(?\s*MIIM_STRING'
        Why   = 'measured: an owner-drawn item is read by a screen reader only because MIIM_STRING carries its title alongside MFT_OWNERDRAW - dropping it silently makes the menu unreadable' },
 
-    @{ Name  = "Shell's composed menu must not carry MNS_NOTIFYBYPOS (docs/refactor/01 section 3a)"
+    # Reading the borrowed root's style is required (docs/refactor/09 R2): a host
+    # that set MNS_NOTIFYBYPOS is owed WM_MENUCOMMAND, and Shell cannot know it is
+    # owed without asking. What must never happen is Shell *applying* the style to
+    # the menu it composed and tracks itself. So the ban moved from the token to
+    # the operation: SetMenuInfo carrying it, or the style being OR-ed into a
+    # dwStyle that is about to be set.
+    @{ Name  = "Shell's composed menu must not be given MNS_NOTIFYBYPOS (docs/refactor/01 section 3a)"
        Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
-       Regex = 'MNS_NOTIFYBYPOS'
-       Why   = 'measured: with TPM_RETURNCMD a by-position menu returns 1 and sends no WM_MENUCOMMAND, so the selection is lost - see src\tests\hostprobe\fixtures\question.notifybypos_with_returncmd.trace' },
+       Regex = 'SetMenuInfo\s*\([^;]*MNS_NOTIFYBYPOS|dwStyle\s*(\|)?=\s*[^;]*MNS_NOTIFYBYPOS'
+       Why   = 'measured: with TPM_RETURNCMD a by-position menu returns 1 and sends no WM_MENUCOMMAND, so the selection is lost - see src\tests\hostprobe\fixtures\question.notifybypos_with_returncmd.trace. Reading the style off the host''s own menu with GetMenuInfo(MIM_STYLE) is required and is not this.' },
 
     @{ Name  = 'SystemParametersInfo on the menu path must not broadcast (docs/refactor/02 section 4a)'
        Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')

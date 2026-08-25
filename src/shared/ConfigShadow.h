@@ -52,6 +52,7 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -220,11 +221,19 @@ namespace Nilesoft
 				return false;
 
 			Digest value = FnvOffsetBasis;
-			unsigned char buffer[64 * 1024];
+
+			// Heap for the same reason as LegacyConfigTransfer::hash_and_copy:
+			// a 65,576-byte frame (MSVC /analyze C6262, default threshold
+			// 16 KiB) on a thread whose stack belongs to an arbitrary host
+			// process. https://learn.microsoft.com/en-us/cpp/code-quality/c6262?view=msvc-170
+			constexpr DWORD ChunkBytes = 64 * 1024;
+			auto storage = std::make_unique<unsigned char[]>(ChunkBytes);
+			auto buffer = storage.get();
+
 			for(;;)
 			{
 				DWORD read = 0;
-				if(!::ReadFile(file, buffer, sizeof(buffer), &read, nullptr))
+				if(!::ReadFile(file, buffer, ChunkBytes, &read, nullptr))
 					return false;
 				if(read == 0)
 					break;

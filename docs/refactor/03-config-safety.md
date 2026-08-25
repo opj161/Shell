@@ -364,8 +364,17 @@ the watcher against real files, not the parse under injection.
 - [x] `shell.exe -check` on a good file exits 0 and on a bad one prints file, line,
       column and message, and exits non-zero. Verified end to end against real
       files; see the caveat in §1b about which shells wait for the exit code.
-- [ ] A shadow whose manifest fails verification is refused, and the process falls
-      back to the never-loaded refusal rather than parsing it.
+- [x] A shadow whose manifest fails verification is refused, and the process falls
+      back to the never-loaded refusal rather than parsing it. **The refusal
+      itself is unit-tested four ways** (`test_config_shadow.cpp`:
+      `a_shadow_whose_content_changed_is_refused`,
+      `a_shadow_missing_a_file_is_refused`,
+      `a_shadow_with_no_manifest_is_refused`,
+      `a_manifest_this_build_does_not_understand_is_refused`). What is still
+      open is only the *end-to-end* route - a fresh process falling all the way
+      through `Initializer::init` to the refusal - which needs a machine state
+      this one is not in. Corrected 2026-08-25; it had been filed wholesale
+      under "untested", which understated it.
 - [x] Fix config → new generation active without Explorer restart (watcher).
       Landed; see §3a. The manual Shift+Ctrl+right-click reload stays, because
       the watcher is best-effort and a configuration on a network share may

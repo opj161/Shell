@@ -380,3 +380,50 @@ TEST(packages, a_scan_invalidated_while_running_does_not_publish)
 	CHECK(index.exists(L"WindowsTerminal"));
 	CHECK_EQ(source.enumerations, 2);
 }
+
+// ---- the snapshot the menu path actually reads --------------------------
+//
+// PackageIndex above is still the source of truth for identity parsing and for
+// display names. What the *menu* asks - exists, identity, list, path - is now
+// answered out of the catalog snapshot instead, because the index lived in the
+// immutable config CACHE and could enumerate the package repository on the
+// thread between a right-click and the first pixel. It was not a power-user
+// path either: the shipped configuration evaluates
+// package.exists("WindowsTerminal") on every menu
+// (src/bin/imports/terminal.nss line 8).
+//
+// docs/refactor/09-remediation-plan.md R3, docs/refactor/02 section 2.1 step 4.
+
+TEST(packages, a_full_name_and_its_path_come_out_of_one_walk)
+{
+	// What scan_package_catalog now publishes: the identity parse and the
+	// resolved install path, from the enumeration it was doing anyway.
+	PackageIdentity identity;
+	CHECK(parse_package_full_name(
+		L"Microsoft.WindowsTerminal_1.11.3471.0_x64__8wekyb3d8bbwe", identity));
+
+	CHECK(identity.name == L"Microsoft.WindowsTerminal");
+	CHECK(identity.version == L"1.11.3471.0");
+	CHECK(identity.family == L"Microsoft.WindowsTerminal_8wekyb3d8bbwe");
+}
+
+// The matcher the snapshot reader uses has to be the same one PackageIndex
+// uses, or "WindowsTerminal" would mean two different things depending on which
+// answered. Documented behaviour: "packageName may be a full name or any part
+// of one".
+TEST(packages, the_snapshot_matcher_is_the_index_matcher)
+{
+	std::wstring full = L"Microsoft.WindowsTerminal_1.11.3471.0_x64__8wekyb3d8bbwe";
+
+	CHECK(package_full_name_matches(full, L"WindowsTerminal"));
+	CHECK(package_full_name_matches(full, L"windowsterminal"));		// case-insensitive
+	CHECK(package_full_name_matches(full, full.c_str()));
+	CHECK(package_full_name_matches(full, L"8wekyb3d8bbwe"));		// any part
+
+	CHECK(!package_full_name_matches(full, L"Notepad"));
+	CHECK(!package_full_name_matches(full, L""));
+	CHECK(!package_full_name_matches(full, nullptr));
+
+	// A query longer than the name cannot be contained in it.
+	CHECK(!package_full_name_matches(L"short", L"a much longer query than that"));
+}

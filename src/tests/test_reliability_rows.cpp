@@ -181,3 +181,58 @@ TEST(reliability_rows, an_unasked_row_is_not_reported_as_ok)
 	auto text = format_row(row);
 	CHECK(text.find(L"not asked yet") != std::wstring::npos);
 }
+
+// A budget deferral is not a verdict about this extension. The menu ran out of
+// its allowance before reaching it; quarantining it would punish it for its
+// neighbours. Before the two deferrals were told apart, this row read as
+// "0.0 ms  ok" - measured, fast and fine - having never been called at all.
+// docs/refactor/09-remediation-plan.md finding D.
+TEST(reliability_rows, a_row_the_menu_never_reached_says_so)
+{
+	ProviderRow row;
+	row.name = L"Edit in Notepad";
+	row.samples = 0;
+	row.budget_deferrals = 3;
+
+	auto text = format_row(row);
+	CHECK(text.find(L"menu ran out of budget") != std::wstring::npos);
+	CHECK(text.find(L"not asked yet") == std::wstring::npos);
+}
+
+TEST(reliability_rows, a_row_shell_judged_slow_says_that_instead)
+{
+	ProviderRow row;
+	row.name = L"Create with Designer";
+	row.samples = 0;
+	row.slow_deferrals = 5;
+
+	auto text = format_row(row);
+	CHECK(text.find(L"deferred as slow") != std::wstring::npos);
+	CHECK(text.find(L"menu ran out of budget") == std::wstring::npos);
+}
+
+// One real measurement outranks any number of deferrals: the row has a timing
+// to show, so it shows it.
+TEST(reliability_rows, a_measured_row_is_not_relabelled_by_a_later_deferral)
+{
+	ProviderRow row;
+	row.name = L"Rename with PowerRename";
+	row.samples = 2;
+	row.worst_us = 1600;
+	row.budget_deferrals = 4;
+
+	auto text = format_row(row);
+	CHECK(text.find(L"ok") != std::wstring::npos);
+	CHECK(text.find(L"menu ran out of budget") == std::wstring::npos);
+}
+
+TEST(reliability_rows, quarantine_still_outranks_everything)
+{
+	ProviderRow row;
+	row.name = L"Something";
+	row.quarantined = true;
+	row.slow_deferrals = 9;
+	row.budget_deferrals = 9;
+
+	CHECK(format_row(row).find(L"quarantined") != std::wstring::npos);
+}

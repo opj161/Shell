@@ -52,3 +52,9 @@ src/packages/
 .bin/*
 backup_installed_shell/
 deploy_fix.ps1
+
+# MSVC /analyze stamp files
+*.lastcodeanalysissucceeded
+
+# Agent session transcripts written at the repository root
+/2???-??-??-*.txt

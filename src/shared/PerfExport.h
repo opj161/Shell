@@ -119,7 +119,20 @@ namespace Nilesoft
 			//    pointed at Shell when it last published.
 			// 7: PERF_EXPORT_PROVIDERS 8 -> 32. Eight could not describe a
 			//    27-handler menu, which is exactly the slow one.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 7;
+			// 8: ProviderResult 3 narrowed from "deferred" to "deferred(slow)"
+			//    and a new value 5 means "deferred(budget)". The two ask the
+			//    user for opposite remedies, so one word for both was a report
+			//    that could not be acted on. The layout is unchanged; the
+			//    *meaning* of a field is, which is exactly what a version is
+			//    for. docs/refactor/09-remediation-plan.md R1.2.
+			//
+			//    The reader refuses a version it does not recognise (see
+			//    perf_export_header_understood below), so until Explorer restarts
+			//    with the new DLL a rebuilt shell.exe reads nothing from it.
+			//    That is the existing contract rather than a new cost, and it is
+			//    the reason the number is bumped instead of the old word being
+			//    quietly redefined.
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 8;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -729,16 +742,62 @@ namespace Nilesoft
 				}
 			}
 
+			/*
+				Diagnostics::ProviderResult, as the word a report prints.
+
+				The numbers are the wire format, so they are listed here rather
+				than derived: 3 and 5 are two different deferrals and must not be
+				printed with one word. "this extension is slow" asks the user to
+				quarantine it; "your menu ran out of budget before reaching it"
+				asks for a larger budget or fewer handlers, and quarantining the
+				provider would punish it for something it did not do.
+				docs/refactor/09-remediation-plan.md finding D.
+			*/
+			/*
+				Whether a block this reader has mapped is one it understands.
+
+				Exact match on all three, deliberately. The version is not a
+				floor: version 8 narrowed the *meaning* of an existing field
+				rather than changing the layout - result 3 went from "deferred"
+				to "deferred(slow)" - so a reader that accepted anything "at
+				least as new as" its own would print one word for two facts the
+				writer meant to distinguish. Refusing is the honest outcome, and
+				its cost is stated where the version is defined: until Explorer
+				restarts with the new DLL, a rebuilt shell.exe reads nothing
+				from it.
+			*/
+			inline bool perf_export_header_understood(const PerfExportHeader &header)
+			{
+				return header.magic == PERF_EXPORT_MAGIC
+					&& header.version == PERF_EXPORT_VERSION
+					&& header.record_size == sizeof(PerfExportRecord);
+			}
+
 			inline const wchar_t *perf_export_result_name(uint32_t result)
 			{
 				switch(result)
 				{
 					case 1: return L"pending";
 					case 2: return L"failed";
-					case 3: return L"deferred";
+					case 3: return L"deferred(slow)";
 					case 4: return L"quarantined";
+					case 5: return L"deferred(budget)";
 					default: return L"ok";
 				}
+			}
+
+			// Was this provider left out because the *menu* ran out, rather than
+			// because anything is wrong with the provider? The Reliability
+			// Center needs the distinction to avoid offering quarantine as the
+			// remedy for a budget breach.
+			inline bool perf_export_result_is_budget_deferral(uint32_t result)
+			{
+				return result == 5;
+			}
+
+			inline bool perf_export_result_is_slow_deferral(uint32_t result)
+			{
+				return result == 3;
 			}
 
 			/*
@@ -867,11 +926,22 @@ namespace Nilesoft
 					// has not yet closed - which cannot happen while it holds
 					// the handle - or another module in this process that got
 					// there first. Either way, mapping it and re-stamping the
-					// header is correct; the size is whatever the first creator
-					// asked for, so it is checked rather than assumed
-					// (CreateFileMappingW: "the function returns a handle to
-					// the existing object (with its current size, not the
-					// specified size)").
+					// header is correct.
+					//
+					// The size is whatever the first creator asked for, not what
+					// was asked for here: CreateFileMappingW "returns a handle
+					// to the existing object (with its current size, not the
+					// specified size)". Nothing below re-reads that size, and it
+					// does not have to - the explicit sizeof() in the MapViewOfFile
+					// call is the check. "All bytes must be within the maximum
+					// size specified by CreateFileMapping", so a section that a
+					// squatter created smaller cannot be mapped at this size and
+					// open() fails, leaving the export absent rather than writing
+					// past the end of somebody else's memory. Passing 0 here -
+					// "the mapping extends from the specified offset to the end
+					// of the file mapping" - would map the short section
+					// successfully and is the one change this line must not take.
+					// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile
 					auto view = ::MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0,
 												sizeof(PerfExportBlock));
 					if(!view)
@@ -1115,9 +1185,7 @@ namespace Nilesoft
 				auto &block = *static_cast<const PerfExportBlock *>(view);
 				auto status = PerfExportStatus::Busy;
 
-				if(block.header.magic != PERF_EXPORT_MAGIC
-				   || block.header.version != PERF_EXPORT_VERSION
-				   || block.header.record_size != sizeof(PerfExportRecord))
+				if(!perf_export_header_understood(block.header))
 				{
 					status = PerfExportStatus::Unsupported;
 				}

@@ -864,3 +864,66 @@ TEST(perf_export, the_reader_copies_the_directory_out_of_the_block)
 		CHECK(0 == ::memcmp(clsid, &SampleClsid, sizeof(GUID)));
 	CHECK(source.clsid_for(0x11112222u) == nullptr);
 }
+
+// ---- the wire meaning of a provider result ------------------------------
+//
+// The layout did not change for version 8; the *meaning* of a field did. Value
+// 3 narrowed from "deferred" to "deferred(slow)" and 5 was added for
+// "deferred(budget)". A reader that printed one word for both would tell a user
+// to quarantine an extension whose only fault was its neighbours', so the
+// number is bumped rather than the old word quietly redefined.
+// docs/refactor/09-remediation-plan.md R1.2.
+
+TEST(perf_export, the_version_is_the_one_this_meaning_belongs_to)
+{
+	CHECK_EQ(PERF_EXPORT_VERSION, 8u);
+}
+
+TEST(perf_export, the_two_deferrals_print_as_different_words)
+{
+	std::wstring slow = perf_export_result_name(3);
+	std::wstring budget = perf_export_result_name(5);
+
+	CHECK(slow != budget);
+	CHECK(slow.find(L"slow") != std::wstring::npos);
+	CHECK(budget.find(L"budget") != std::wstring::npos);
+}
+
+TEST(perf_export, every_result_value_has_its_own_word)
+{
+	CHECK(std::wstring(perf_export_result_name(0)) == L"ok");
+	CHECK(std::wstring(perf_export_result_name(1)) == L"pending");
+	CHECK(std::wstring(perf_export_result_name(2)) == L"failed");
+	CHECK(std::wstring(perf_export_result_name(4)) == L"quarantined");
+
+	// Anything the writer did not mean is "ok" rather than a crash, which is
+	// what a reader one version behind must do with a value it has not met.
+	CHECK(std::wstring(perf_export_result_name(99)) == L"ok");
+}
+
+TEST(perf_export, the_two_deferrals_are_told_apart_by_predicate_as_well_as_by_word)
+{
+	CHECK(perf_export_result_is_slow_deferral(3));
+	CHECK(!perf_export_result_is_budget_deferral(3));
+	CHECK(perf_export_result_is_budget_deferral(5));
+	CHECK(!perf_export_result_is_slow_deferral(5));
+
+	// Neither predicate may claim an ordinary outcome: a measured provider must
+	// keep contributing its timing to the Reliability row.
+	for(uint32_t v : { 0u, 1u, 2u, 4u })
+	{
+		CHECK(!perf_export_result_is_slow_deferral(v));
+		CHECK(!perf_export_result_is_budget_deferral(v));
+	}
+}
+
+// A block written by the previous DLL is refused rather than misread, which is
+// the whole point of the bump: value 3 means something narrower now.
+TEST(perf_export, a_block_from_the_previous_version_is_refused)
+{
+	auto block = make_block();
+	CHECK(perf_export_header_understood(block.header));
+
+	block.header.version = 7;
+	CHECK(!perf_export_header_understood(block.header));
+}

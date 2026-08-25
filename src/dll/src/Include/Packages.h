@@ -57,6 +57,16 @@ namespace Nilesoft
 			bool empty() const noexcept { return full_name.empty(); }
 		};
 
+		/*
+			Does this full name answer to `query`?
+
+			Case-insensitive substring, which is the documented NSS behaviour:
+			"`packageName` may be a full name or any part of one". Exposed so the
+			snapshot reader in Cache.h and PackageIndex cannot drift into two
+			different ideas of what "WindowsTerminal" matches.
+		*/
+		bool package_full_name_matches(const std::wstring &full_name, const wchar_t *query);
+
 		// Parses Name_Version_Architecture_ResourceId_PublisherId. ResourceId is
 		// empty for almost every package, which is exactly the field the previous
 		// splitter dropped. Returns false for anything that is not a full name.
@@ -100,6 +110,22 @@ namespace Nilesoft
 
 		/*
 			Identity index with per-package lazy path and display-name resolution.
+
+			**No production caller since 2026-08-25.** The menu path reads the
+			catalog snapshot instead (Include/Cache.h, PackagesCache), which is
+			the point of docs/refactor/09-remediation-plan.md R3: the same walk
+			that finds packaged verbs now publishes package identities and
+			install paths, so nothing has to enumerate the repository again on
+			the thread between a right-click and the first pixel.
+
+			Kept rather than deleted in that change, on this repository's own
+			rule that a move and a deletion do not belong in one commit
+			(docs/refactor/04-code-health.md section 4). It is still the tested
+			implementation of identity matching and of display-name resolution -
+			`test_packages.cpp` drives it against an injected source - and
+			`RegistryPackageSource` beneath it is very much live. Removing the
+			index itself is a decision for whoever next audits dead code, and
+			needs the display-name path to have a home first.
 
 			The index itself is one registry subkey enumeration. Everything more
 			expensive than that is done for a single matched package, outside the

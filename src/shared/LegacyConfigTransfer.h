@@ -4,6 +4,7 @@
 #include <bcrypt.h>
 
 #include <array>
+#include <memory>
 #include <string>
 
 namespace Nilesoft::LegacyConfigTransfer
@@ -78,11 +79,28 @@ namespace Nilesoft::LegacyConfigTransfer
 		if(!hash.valid())
 			return false;
 
-		unsigned char buffer[64 * 1024];
+		/*
+			Heap, not stack.
+
+			This was `unsigned char buffer[64 * 1024]`, which MSVC /analyze
+			reports as a 65,588-byte frame - C6262, whose user-mode default
+			threshold is 16 KiB and which warns that "a large stack may cause
+			stack overflow" - and this code runs inside a DLL injected into
+			whatever host raised a menu, on a thread whose stack size was chosen
+			by somebody else entirely.
+			https://learn.microsoft.com/en-us/cpp/code-quality/c6262?view=msvc-170
+
+			The chunk size is unchanged: 64 KiB is a sensible ReadFile unit and
+			the warning is about where it lives, not how big it is.
+		*/
+		constexpr DWORD ChunkBytes = 64 * 1024;
+		auto storage = std::make_unique<unsigned char[]>(ChunkBytes);
+		auto buffer = storage.get();
+
 		for(;;)
 		{
 			DWORD read = 0;
-			if(!::ReadFile(source, buffer, sizeof(buffer), &read, nullptr))
+			if(!::ReadFile(source, buffer, ChunkBytes, &read, nullptr))
 				return false;
 			if(read == 0)
 				break;

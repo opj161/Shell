@@ -21,6 +21,14 @@ Takeover stays. Shell is a context-menu takeover engine, not an additive extensi
 > asynchronously prepared immutable snapshots. Nothing optional or unbounded runs
 > synchronously before the first menu pixel.**
 
+**Amended 2026-08-25.** The second sentence is not what the branch delivers, and
+saying it anyway is how a later reader comes to "restore" a decision that was
+made on evidence. What holds is §4's governing statement: Shell-controlled
+engine work before first paint is bounded and measured, package enumeration,
+manifest I/O and `GetState(TRUE)` are forbidden, and third-party UI-thread
+callbacks are reported and policy-limited - but one in-flight call is not
+preemptible. §4a names the two exceptions.
+
 Two governing rules, quoted because every plan decision derives from them:
 
 - **R1 — Bounded first paint.** Before the menu appears, Shell may do only bounded
@@ -40,6 +48,17 @@ Two governing rules, quoted because every plan decision derives from them:
   budget exists anywhere on that path. Every such call must run under a deadline
   (§02.2a); a provider that misses it is omitted from *this* menu and its answer
   cached for the next one.
+
+  **What R1a became, 2026-08-25.** "Every such call under a deadline" was not
+  achievable and is not implemented: the same page that makes these calls
+  expensive - "These methods are called on the UI thread" - is the environment
+  handlers are written against, and moving them off it is a divergence with no
+  way to test its blast radius here (§02.2a-i). The deadline is therefore a
+  *whole-menu* allowance rather than a per-call one, and since §09 R1 it is spent
+  cheapest-known-first, so an overrun is charged to the provider that caused it
+  instead of to the ones registered behind it. The honest bound is **at most one
+  in-flight overrun per menu**, and it is reported (`explorer.commands.over_budget`)
+  rather than assumed away.
 - **R2 — One unsupported boundary, made explicit.** Takeover requires exactly one
   private compatibility surface (popup interception). Everything else moves behind
   documented APIs or named, health-checked adapters (Audit 1 §6).
@@ -115,9 +134,18 @@ somewhere else drifts from the backlog it tracks while every individual update
 stays accurate — and that is exactly how item 8 came to be decided by nobody
 for several sessions. This table is the anchor to reconcile against.
 
-**Nineteen closed, one partial.** "Closed" means built, or measured and
-declined with the numbers written down; a decline with no recorded reason is
-not a result, it is something nobody did.
+**Twenty closed, none partial** (2026-08-25, after §09). "Closed" means built,
+or measured and declined with the numbers written down; a decline with no
+recorded reason is not a result, it is something nobody did.
+
+**Two tallies, and they count different things.** The one above is the outcome
+tally: did this item reach a decision, and is the decision recorded? It is the
+useful project view and it cannot answer a second, equally fair question — *how
+literally was the original architecture built?* An item resolved differently is
+a valid outcome and is not an implementation of what was written down. The
+strict view is §3b, and both are kept because a single number was how item 8
+came to be decided by nobody: an item that reads "closed" in every document
+stops being looked at.
 
 | # | | Where it ended up |
 |---|---|---|
@@ -125,11 +153,11 @@ not a result, it is something nobody did.
 | 2 | closed | in memory (steps 1–2, 4). Persistence **declined**: `catalog.first_wait` never fires — §02.1 step 3 |
 | 3 | closed | the `GetState(TRUE)` retry deleted; `E_PENDING` resolves provisionally |
 | 4 | closed | §01.5, asserted against a real borrowed shell menu rather than a fake |
-| 5 | closed | §01.3a — the harness answered the flag questions and two came back the opposite way round |
+| 5 | closed | §01.3a — the harness answered the flag questions and two came back the opposite way round. Reopened 2026-08-25 and closed properly: by-position replay had never been built (§09 R2) |
 | 6 | closed | persisted shadow (§03.1b), verified across a real Explorer restart |
 | 7 | closed | the *object* **declined** — C2712 in an SEH hook body. The consolidation happened in plain-data form, §01.6a |
 | 8 | closed | the interface and the per-entry health check **declined** (§01.9c); the `intercept` line built |
-| 9 | **partial** | policy compile landed; **conditional attach deferred**, with reasons in §01.9a that still hold |
+| 9 | closed | policy compile landed; **conditional attach declined**, with reasons in §01.9a that still hold. Installation itself was hardened in §09 R6.7: the patch is not committed unless every live thread was enlisted |
 | 10 | closed | stage 1 **withdrawn** by the §07 audit — it met its acceptance by not showing the menu. Stage 2's cached request landed, §02.5a |
 | 11 | closed | Recycle Bin query removed, flicker gated and measured at 7.0 ms/menu, `SPIF_SENDCHANGE` dropped |
 | 12 | closed | 47.8 ns per phase, ~0.6 µs per menu, §02.6 |
@@ -137,16 +165,50 @@ not a result, it is something nobody did.
 | 14 | closed | provider names, quarantine, identity and the window — §05.1a–§05.1d |
 | 15 | closed | `MSAAMENUINFO` **declined**, already satisfied (§05.3); mnemonics, type-ahead and smart columns built |
 | 16 | closed | §03.3a — and §03.3b, which is where it started working more than once per process |
-| 17 | closed | all seven seam steps. Naming `Win32MenuPresenter` remains as design work over a now-visible surface (§08.3.9) |
+| 17 | closed | all seven seam steps, and `Win32MenuPresenter` over the surface they exposed (§09 R4) |
 | 18 | closed | 85.5 ms → 20.2 ms on a real Explorer, §04.6a |
 | 19 | closed | favorites §05.6a and the inspector §05.7a, over parser provenance |
 | 20 | closed | all three parts **declined** by measurement, §04.7 |
 
+### 3b. The strict implementation view (2026-08-25)
+
+Not a competing verdict — the same twenty items asked a narrower question: was
+*this* built, as written? A redesign is a legitimate outcome and it is counted
+as one here rather than as an implementation.
+
+| # | Strict state | Remainder |
+|---|---|---|
+| 1 | implemented | — |
+| 2 | implemented | async catalog landed; package identity/path queries now read the same snapshot (§09 R3). Persistence declined |
+| 3 | implemented | failure/pending telemetry corrected in §09 R1.2 |
+| 4 | implemented | — |
+| 5 | implemented | return/notification normalization, then by-position replay (§09 R2) |
+| 6 | implemented | two fresh-machine routes remain as environment validation, §09 R8 |
+| 7 | resolved differently | `TakeoverSession` as a class declined under C2712; plain-data consolidation landed |
+| 8 | resolved differently | backend interface and per-entry health check declined; the live mechanism is reported |
+| 9 | resolved differently | conditional attach declined; enlistment safety implemented instead |
+| 10 | resolved differently | zero-wait withdrawn; cached UIA request plus a bounded COM-modal wait |
+| 11 | implemented | Recycle Bin removal and flicker measurement; two transient SPI mutations retained and now enumerated in §4 |
+| 12 | implemented | — |
+| 13 | implemented | — |
+| 14 | implemented | admission policy and outcome vocabulary refined in §09 R1 |
+| 15 | implemented / measured alternative | `MSAAMENUINFO` declined against the real MSAA surface |
+| 16 | implemented | repeated re-point fixed; dead-watcher state fixed in §09 R6.1 |
+| 17 | implemented | model, selection seam, presenter split, and the named presenter boundary |
+| 18 | implemented | — |
+| 19 | implemented | live `where=` evaluation deliberately declined |
+| 20 | resolved differently | all three declined against recorded measurements |
+
+**Strict count: 15 implemented, 5 resolved differently, 0 partial, 0 untouched.**
+
 The two governing rules of §1 fared differently and it is worth saying so.
-**R1/R1a held** and drove the largest wins — the unbounded third-party call
-before first paint turned out to be the whole game (§02.2a-i), and the biggest
-single defect on the branch was Shell's own work misattributed to it (§02.3a,
-645 ms → 30 ms). **R2 was answered rather than implemented**: the one
+**R1 held; R1a was weakened deliberately and is now stated as what it is.** R1
+drove the largest wins — the unbounded third-party call before first paint
+turned out to be the whole game (§02.2a-i), and the biggest single defect on the
+branch was Shell's own work misattributed to it (§02.3a, 645 ms → 30 ms). R1a's
+literal form — every third-party call under a deadline — is not implemented and
+was never going to be, for the reason recorded beside it in §1; what exists is a
+whole-menu allowance, spent cheapest-first, with the breach reported. §4a. **R2 was answered rather than implemented**: the one
 unsupported boundary is explicit, but as a *reported fact* (`intercept
 win32u import`) instead of an interface, because the two mechanisms are not
 interchangeable and a vtable would have asserted a substitutability the PE
@@ -171,15 +233,87 @@ PackageCatalogService   ConfigSnapshotService (LKG, watcher)
 ProviderHealth          WindowsCapabilities    TaskbarAdapter(zero-wait)
 ```
 
-Invariants enforced by review checklist + trace harness (§06):
+Invariants enforced by review checklist + trace harness (§06), and by
+`scripts/check-invariants.ps1` where the shape is lexical.
 
-1. zero manifest/package reads on the menu thread (R1);
-2. zero UIA waits on taskbar UI thread;
-3. zero `GetState(TRUE)` during composition;
+**Rewritten 2026-08-25** against what the implementation actually provides.
+Three of the seven described a guarantee the code does not make, and a stated
+invariant that is not true is worse than a weaker one that is: it is what a
+later session "restores" by undoing a decision that was made on evidence.
+Each now says what is guaranteed, and names what is not.
+docs/refactor/09-remediation-plan.md R5.
+
+1. **No manifest I/O, and no package enumeration, on the menu thread.** Manifest
+   reads moved to `PackageCatalogService`'s worker (§02.1). Package identity,
+   list and install-path queries - `package.exists`, `appx.id`, `appx.family`,
+   `appx.version`, `package.path` - are reads of that same published snapshot
+   (§09 R3), so a stock configuration's `package.exists("WindowsTerminal")`
+   enumerates nothing. **The exception is `appx.name`/`package.name`**, which
+   resolves a localized display name on demand and can call
+   `SHLoadIndirectString` (loading the package's `Resources.pri`) and walk
+   MrtCache. No shipped configuration uses it. A cold first query may wait once,
+   bounded, through `snapshot_for_menu()`, and that wait is counted
+   (`catalog.first_wait`).
+2. **No *unbounded* UIA wait on the taskbar UI thread.** The zero-wait design was
+   withdrawn (§07 A2) because it met its acceptance criterion by not showing the
+   menu at all. What is guaranteed instead: the wait is capped at 250 ms
+   (`Main.cpp` `BUDGET_MS`), it is entered through `CoWaitForMultipleHandles` so
+   the single-threaded apartment keeps pumping, the UIA work itself runs on a
+   separate MTA thread that owns no windows, and every outcome is counted
+   (`TaskbarHitStats`).
+3. zero `GetState(TRUE)` during composition (enforced: `check-invariants` rule
+   10). A failed `GetState(FALSE)` omits the item and is reported `failed`;
+   `E_PENDING` shows the item provisionally enabled and is reported `pending`
+   (§09 R1.2).
 4. borrowed HMENU receive paired INIT/UNINIT exactly once;
-5. synthetic command IDs never reach a host that did not opt in (`RETURNCMD`);
-6. foreign TreatAs state never modified; every failure has a fail-open path;
-7. no transient global setting mutation around popups.
+5. synthetic command IDs never reach a host. A host that passed `TPM_RETURNCMD`
+   is answered by the return value; one that did not is sent `WM_COMMAND` with
+   its own identifier, or - when it set `MNS_NOTIFYBYPOS` on the menu it handed
+   over - `WM_MENUCOMMAND` with the position the item occupies in *its* menu
+   (§09 R2). Shell's own composed menu never carries `MNS_NOTIFYBYPOS`
+   (enforced: `check-invariants` rule 8).
+6. foreign TreatAs state never modified; every failure has a fail-open path.
+   Inline detour installation is part of this: the CoCreateInstance patch is not
+   committed unless every live thread in the process was enlisted in the
+   transaction (§09 R6.7).
+7. **No setting mutation may update the user profile or broadcast
+   `WM_SETTINGCHANGE`** - `fWinIni` must be 0, enforced by `check-invariants`
+   rule 9. Transient, opt-in, restored-on-close mutations are permitted, and are
+   enumerated here rather than left implicit: `SPI_SETMENUSHOWDELAY` when the
+   configuration sets `showdelay`, and `SPI_SETSELECTIONFADE` around dismissal.
+   Deleting the second is two lines; its benefit is a dismissal artifact no
+   screenshot can show, which is the same class as the flicker wait (§02.4a) and
+   needs a person at the machine rather than a reviewer.
+
+### 4a. What is *not* bounded, and why it is said here
+
+§00.1 used to say that nothing optional or unbounded runs before the first
+pixel, and R1a that **every** third-party call runs under a deadline. Neither is
+true, and both were load-bearing enough that they need correcting rather than
+softening.
+
+The governing statement is:
+
+> Shell-controlled engine work before first paint is locally bounded and
+> measured. Package enumeration, manifest I/O and `GetState(TRUE)` are
+> forbidden. Third-party UI-thread callbacks and arbitrary user NSS expressions
+> are reported and policy-limited where compatible, but **one in-flight call is
+> not preemptible**.
+
+Two named exceptions follow from it, and both are validation targets rather than
+oversights:
+
+- `IExplorerCommand`'s methods "are called on the UI thread"
+  (<https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand>),
+  which is the environment handlers are written against. Shell budgets against
+  that cost and orders its calls cheapest-first (§09 R1), so an overrun is
+  charged to the provider that caused it rather than to the ones behind it - but
+  a call already running cannot be interrupted.
+- A third-party host that supplies selection paths but no retained
+  `IShellItemArray` still causes one `SHParseDisplayName` per selected item
+  before the provider budget begins. The Explorer path was fixed (645 ms →
+  30 ms, §02.3a); the host case is instrumented (`selection.rebuild_array`,
+  annotated with the count) and awaits the measurement in §09 R8.
 
 ## 5. Document index
 

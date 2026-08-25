@@ -100,6 +100,10 @@
 	<ClInclude Include="..\dll\src\Expression\SelectionPathResolver.h" />
 	<ClInclude Include="..\shared\LegacyConfigTransfer.h" />
 	<ClInclude Include="..\shared\ConfigShadow.h" />
+    <ClInclude Include="hostprobe\Arguments.h" />
+    <ClInclude Include="..\shared\DetourEnlistment.h" />
+    <ClInclude Include="..\dll\src\Include\ProviderSchedule.h" />
+    <ClInclude Include="..\dll\src\Include\ExplorerCommandState.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
@@ -164,6 +168,10 @@
     <ClCompile Include="test_menu_columns.cpp" />
     <ClCompile Include="test_perf_export.cpp" />
     <ClCompile Include="test_native_menu_targets.cpp" />
+    <ClCompile Include="test_hostprobe_args.cpp" />
+    <ClCompile Include="test_detour_enlistment.cpp" />
+    <ClCompile Include="test_provider_schedule.cpp" />
+    <ClCompile Include="test_explorer_command_state.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression
        tests exercise the real evaluator instead of a copy of it. The closure is
@@ -187,9 +195,10 @@
     <ClCompile Include="..\dll\src\Parser\Parser.cpp" />
     <ClCompile Include="..\dll\src\Parser\Properties.cpp" />
     <ClCompile Include="..\dll\src\Parser\Verification.cpp" />
+    <ClCompile Include="..\dll\src\PackageCatalogService.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Update="..\dll\src\Expression\*.cpp;..\dll\src\Parser\*.cpp;..\dll\src\Selections.cpp;..\dll\src\MenuPerf.cpp;..\dll\src\DiagnosticsRing.cpp">
+    <ClCompile Update="..\dll\src\Expression\*.cpp;..\dll\src\Parser\*.cpp;..\dll\src\Selections.cpp;..\dll\src\MenuPerf.cpp;..\dll\src\DiagnosticsRing.cpp;..\dll\src\PackageCatalogService.cpp">
       <!-- IDD_INPUTBOX and friends in shared\Resource.h sit behind _WINDLL, and
            FuncExpression.cpp's input() implementation needs them. -->
       <PreprocessorDefinitions>_WINDOWS;_WINDLL;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>

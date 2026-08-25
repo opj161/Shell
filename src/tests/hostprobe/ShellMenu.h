@@ -115,7 +115,110 @@ namespace hostprobe
 			if(!_drivable)
 				return fail(L"no enabled command item in the menu", S_OK);
 
+			_drivable_position = find_position(_menu, _drivable);
+
 			return true;
+		}
+
+		/*
+			Make this the kind of menu that is addressed by position.
+
+			A menu *header* style, so it is set once on the root and applies to
+			the whole tree: "MNS_NOTIFYBYPOS is a menu header style and has no
+			effect when applied to individual sub menus."
+			https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+
+			Also appends one item carrying the *same identifier* as the drivable
+			one. That is legal in a menu nobody addresses by identifier, and it
+			is the case a tracking table keyed on the host's own wID gets wrong:
+			the later item overwrites the earlier, the navigation still stops at
+			the first, and the position replayed is the wrong one. Without it a
+			scenario built on a menu of unique identifiers passes against an
+			implementation that never separated tracking identity from host
+			identity at all.
+		*/
+		bool apply_notify_by_position()
+		{
+			if(!_menu)
+				return false;
+
+			::AppendMenuW(_menu, MF_SEPARATOR, 0, nullptr);
+
+			// One item repeating the identifier of a real one. Legal in a menu
+			// nobody addresses by identifier, and the case a tracking table keyed
+			// on the host's own wID gets wrong: the later entry overwrites the
+			// earlier, the driver still stops at the first, and the position
+			// replayed is the wrong one.
+			::AppendMenuW(_menu, MF_STRING, _drivable, L"Probe Duplicate Identifier");
+
+			// And two with no identifier at all, which is the ordinary shape of
+			// an item in such a menu. Composition used to hand these one of
+			// *Shell's* identifiers, which made a host item look like one of
+			// Shell's own - so the click ran nothing and told the host nothing.
+			// The last is the destination, because it is the case this whole
+			// workstream exists for.
+			::AppendMenuW(_menu, MF_STRING, 0, L"Probe Zero Identifier A");
+			::AppendMenuW(_menu, MF_STRING, 0, TARGET_TITLE);
+			::AppendMenuW(_menu, MF_STRING, 0, L"Probe Zero Identifier C");
+			::AppendMenuW(_menu, MF_STRING, 0, L"Probe Zero Identifier D");
+
+			MENUINFO mi{};
+			mi.cbSize = sizeof(mi);
+			mi.fMask = MIM_STYLE;
+			mi.dwStyle = MNS_NOTIFYBYPOS;
+			if(!::SetMenuInfo(_menu, &mi))
+				return false;
+
+			// Deliberately not the last item. Shell composes a menu of its own
+			// with a different length - it drops some of the host's items and
+			// appends packaged verbs of its own - so "last in the host's menu"
+			// and "last in Shell's" tend to be the same *index* by accident, and
+			// a scenario that steered to it would pass against an implementation
+			// replaying its own position rather than the host's.
+			auto count = ::GetMenuItemCount(_menu);
+			if(count < 3)
+				return false;
+			_target_position = static_cast<UINT>(count - 3);
+
+			// The appends above do not move the drivable item - it was found by
+			// forward scan and they go on the end - but re-reading is one call
+			// and removes the assumption.
+			_drivable_position = find_position(_menu, _drivable);
+			return _drivable_position != NOT_FOUND;
+		}
+
+		static constexpr UINT NOT_FOUND = 0xFFFFFFFF;
+
+		// A title no configuration rule matches and no handler produces, so a
+		// driver steering to it cannot land on something else. No mnemonic in
+		// it: the driver strips '&' before comparing, but a title without one
+		// cannot disagree with itself about what it says.
+		static constexpr const wchar_t *TARGET_TITLE = L"Probe Zero Identifier B";
+
+		// Where the item the by-position script chooses sits in the *host's* own
+		// menu, which is what WM_MENUCOMMAND's wParam has to carry.
+		UINT target_position() const { return _target_position; }
+
+		// Where an identifier-driven script's destination sits.
+		UINT drivable_position() const { return _drivable_position; }
+
+		// What the host's own menu says at `position`, so a replayed position
+		// can be checked against the item it claims to name rather than only
+		// against a number. Empty when there is nothing there.
+		std::wstring title_at(UINT position) const
+		{
+			if(!_menu || position >= static_cast<UINT>(::GetMenuItemCount(_menu)))
+				return {};
+
+			wchar_t buffer[256]{};
+			MENUITEMINFOW mii{};
+			mii.cbSize = sizeof(mii);
+			mii.fMask = MIIM_STRING;
+			mii.dwTypeData = buffer;
+			mii.cch = ARRAYSIZE(buffer) - 1;
+			if(!::GetMenuItemInfoW(_menu, position, TRUE, &mii))
+				return {};
+			return buffer;
 		}
 
 		void destroy()
@@ -136,6 +239,8 @@ namespace hostprobe
 				_file.clear();
 			}
 			_drivable = 0;
+			_drivable_position = NOT_FOUND;
+			_target_position = NOT_FOUND;
 		}
 
 	private:
@@ -167,6 +272,27 @@ namespace hostprobe
 			return true;
 		}
 
+		// First position holding this identifier. First, deliberately: the
+		// navigation stops at the first match too, so the two agree even when
+		// the menu repeats an identifier.
+		static UINT find_position(HMENU menu, UINT id)
+		{
+			auto count = ::GetMenuItemCount(menu);
+			for(int i = 0; i < count; i++)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_ID | MIIM_SUBMENU | MIIM_FTYPE;
+				if(!::GetMenuItemInfoW(menu, static_cast<UINT>(i), TRUE, &mii))
+					continue;
+				if(mii.hSubMenu || (mii.fType & MFT_SEPARATOR))
+					continue;
+				if(mii.wID == id)
+					return static_cast<UINT>(i);
+			}
+			return NOT_FOUND;
+		}
+
 		// First item that a keyboard script can actually land on and commit.
 		static UINT find_drivable(HMENU menu)
 		{
@@ -194,6 +320,8 @@ namespace hostprobe
 		HMENU _menu{};
 		IContextMenu *_cm{};
 		UINT _drivable{};
+		UINT _drivable_position{ NOT_FOUND };
+		UINT _target_position{ NOT_FOUND };
 		std::wstring _file;
 		std::wstring _why;
 	};

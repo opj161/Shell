@@ -2,6 +2,8 @@
 #include "Include/ExplorerCommandCatalog.h"
 #include "Include/PackageCatalogService.h"
 #include "Include/ProviderHealth.h"
+#include "Include/ProviderSchedule.h"
+#include "Include/ExplorerCommandState.h"
 #include "Include/ProviderQuarantineStore.h"
 #include "Include/IconResource.h"
 #include "Include/Diagnostics/DiagnosticsRing.h"
@@ -154,9 +156,17 @@ namespace Nilesoft
 				Failed,		// the call itself did not succeed
 			};
 
+			// `state_pending`, when given, is set for a handler that answered
+			// E_PENDING: the item is still shown, provisionally enabled, but the
+			// report says so. ProviderResult::Pending existed and was emitted
+			// nowhere. docs/refactor/09-remediation-plan.md finding P.
 			FillResult fill_menuitem_from_explorer_command(menuitem_t *item,
-				IExplorerCommand *cmd, IShellItemArray *selection)
+				IExplorerCommand *cmd, IShellItemArray *selection,
+				bool *state_pending = nullptr)
 			{
+				if(state_pending)
+					*state_pending = false;
+
 				if(!item || !cmd)
 					return FillResult::Failed;
 
@@ -176,14 +186,31 @@ namespace Nilesoft
 				// answer cheaply, not that the verb is unavailable, and hiding a
 				// working command is worse than offering one that turns out to be a
 				// no-op. docs/refactor/02-first-paint-latency.md section 2.
-				auto hr_state = cmd->GetState(selection, FALSE, &state);
-				if(hr_state == E_PENDING)
+				//
+				// Every other failure omits the item, which the same section has
+				// always said and this function did not do: it fell through to
+				// GetTitle carrying the ECS_ENABLED initialiser above, so a
+				// handler whose state call failed outright still got an enabled
+				// item and was recorded as having succeeded. The rule is in
+				// Include/ExplorerCommandState.h so it can be tested without a
+				// handler. docs/refactor/09-remediation-plan.md finding P.
+				auto classified = classify_command_state(cmd->GetState(selection, FALSE, &state),
+														 state);
+				state = classified.state;
+
+				switch(classified.verdict)
 				{
-					state = ECS_ENABLED;
-					hr_state = S_OK;
+					case CommandStateVerdict::Hidden:
+						return FillResult::Hidden;
+					case CommandStateVerdict::Failed:
+						return FillResult::Failed;
+					case CommandStateVerdict::Pending:
+						if(state_pending)
+							*state_pending = true;
+						break;
+					case CommandStateVerdict::Show:
+						break;
 				}
-				if(SUCCEEDED(hr_state) && (state & ECS_HIDDEN))
-					return FillResult::Hidden;
 
 				LPWSTR title = nullptr;
 				auto hr_title = cmd->GetTitle(selection, &title);
@@ -442,6 +469,40 @@ namespace Nilesoft
 			// for the menu on 2026-08-25. Include/ProviderHealth.h.
 			auto shape = selection_shape(Selected.Count());
 
+			/*
+				Three passes, and the separation is the point.
+
+				One pass in registration order is what produced the failure this
+				replaces: the budget is spent as the walk goes, so four providers
+				costing 0.3-1.6 ms lost their place in a menu because they sat
+				*after* one costing 13.9 ms. Measured on 2026-08-25 against the
+				deployed build - see the record in Include/ProviderSchedule.h.
+
+				  1. Plan. Read what is remembered; activate nothing; mutate no
+				     re-probe counter. A provider that never gets called must not
+				     have been moved one menu closer to a re-probe by the act of
+				     considering it.
+				  2. Resolve, cheapest known first, with one exploration
+				     guaranteed and slow re-probes last. The live budget is still
+				     checked before every call: a prediction is a prediction.
+				  3. Publish in registration order. Resolution order is not
+				     presentation order, and duplicate resolution runs in
+				     registration order too, so a cheaper later provider cannot
+				     take the first-registration-wins identity from an earlier
+				     one. The menu the user sees is unchanged.
+			*/
+			struct PlannedProvider
+			{
+				const ExplorerCommandRegistration *reg{};
+				std::unique_ptr<menuitem_t> item;
+				GUID canonical{};
+			};
+
+			std::vector<ProviderCandidate> candidates;
+			std::vector<PlannedProvider> planned;
+			candidates.reserve(regs.size());
+			planned.reserve(regs.size());
+
 			for(const auto &reg : regs)
 			{
 				if(!explorer_command_matches_any(reg, kinds))
@@ -450,6 +511,22 @@ namespace Nilesoft
 				ExplorerCommandIdentity by_clsid;
 				by_clsid.clsid = reg.clsid;
 				if(explorer_command_already_represented(by_clsid, accepted))
+					continue;
+
+				// The same CLSID registered twice is one handler, and asking it
+				// twice costs the menu twice for one item. Previously this fell
+				// out of `accepted` growing inside the single loop; with the
+				// walk split in two it has to be said.
+				bool already_planned = false;
+				for(const auto &p : planned)
+				{
+					if(p.reg && ::IsEqualGUID(p.reg->clsid, reg.clsid))
+					{
+						already_planned = true;
+						break;
+					}
+				}
+				if(already_planned)
 					continue;
 
 				auto hash = provider_hash(reg.clsid);
@@ -476,24 +553,84 @@ namespace Nilesoft
 					continue;
 				}
 
-				auto verdict = health.consider(hash, shape, budget.remaining_us());
-				if(verdict != ProviderVerdict::Try)
+				ProviderCandidate candidate;
+				candidate.ordinal = static_cast<uint32_t>(planned.size());
+				candidate.hash = hash;
+
+				ProviderTiming timing;
+				if(health.classify(hash, shape, &timing))
 				{
-					// Omitted from this menu, not forgotten: the next menu asks
-					// again if the budget allows, and every twentieth asks even
-					// a provider that has never once been quick. The record is
-					// what makes this reportable rather than mysterious.
-					Diagnostics::session_provider(hash, 0, Diagnostics::ProviderResult::Deferred);
+					candidate.has_timing = true;
+					candidate.samples = timing.samples;
+					candidate.best_us = timing.best_us;
+					candidate.last_us = timing.last_us;
+
+					// Judged on its *best* ever time and never before it has
+					// answered twice, both because the first menu in a process
+					// is cold and makes every handler look pathological. See
+					// MIN_SAMPLES_TO_JUDGE in Include/ProviderHealth.h.
+					if(timing.samples >= MIN_SAMPLES_TO_JUDGE
+					   && timing.best_us > SLOW_PROVIDER_US)
+					{
+						candidate.slow = true;
+						candidate.reprobe_due =
+							static_cast<uint32_t>(timing.since_probe) + 1 >= REPROBE_AFTER;
+					}
+				}
+
+				candidates.push_back(candidate);
+
+				PlannedProvider entry;
+				entry.reg = &reg;
+				planned.push_back(std::move(entry));
+			}
+
+			auto plan = plan_providers(candidates, health.next_exploration_cursor());
+
+			// Judged slow and not due. Charged here, once, for the providers
+			// that really were passed over for being slow - and not for the ones
+			// the planner merely looked at.
+			for(const auto &skipped : plan.deferred)
+			{
+				health.note_slow_deferral(skipped.hash, shape);
+				Diagnostics::session_provider(skipped.hash, 0,
+											  Diagnostics::ProviderResult::DeferredSlow);
+			}
+
+			uint32_t refused_for_budget = 0;
+
+			for(const auto &step : plan.order)
+			{
+				// A prediction is checked against what is actually left, not
+				// against what was left when the plan was made. One call can
+				// still overrun - nothing interrupts a call already running, see
+				// the note in Include/ProviderHealth.h - so this is what keeps
+				// an overrun from costing the providers behind it.
+				if(!provider_step_fits(step, budget.remaining_us()))
+				{
+					health.note_budget_deferral(step.hash, shape);
+					Diagnostics::session_provider(step.hash, 0,
+												  Diagnostics::ProviderResult::DeferredBudget);
+					refused_for_budget++;
 					continue;
 				}
+
+				// Granted before the call rather than after it, so a probe that
+				// is started and then fails does not leave the provider due
+				// forever.
+				if(step.call == ProviderCall::Reprobe)
+					health.note_reprobe_started(step.hash, shape);
+
+				auto &slot = planned[step.ordinal];
+				const auto &reg = *slot.reg;
 
 				auto spent_before = budget.spent_us();
 
 				auto cmd = acquire_explorer_command(reg.clsid);
 				if(!cmd)
 				{
-					health.record(hash, shape, budget.spent_us() - spent_before, false);
-					Diagnostics::session_provider(hash, budget.spent_us() - spent_before,
+					health.record(step.hash, shape, budget.spent_us() - spent_before, false);
+					Diagnostics::session_provider(step.hash, budget.spent_us() - spent_before,
 												  Diagnostics::ProviderResult::Failed);
 					continue;
 				}
@@ -507,12 +644,16 @@ namespace Nilesoft
 				// knowable without asking the handler anything, and it is what
 				// this item is called next time. src/shared/MenuIdentity.h.
 				item->explorer_clsid = reg.clsid;
-				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd, selection);
+
+				bool state_pending = false;
+				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd, selection,
+																  &state_pending);
 
 				auto cost = budget.spent_us() - spent_before;
-				health.record(hash, shape, cost, filled != FillResult::Failed);
-				Diagnostics::session_provider(hash, cost,
+				health.record(step.hash, shape, cost, filled != FillResult::Failed);
+				Diagnostics::session_provider(step.hash, cost,
 					filled == FillResult::Failed ? Diagnostics::ProviderResult::Failed
+					: state_pending				 ? Diagnostics::ProviderResult::Pending
 												 : Diagnostics::ProviderResult::Ok);
 
 				// The handler's own title, for the report's name directory.
@@ -522,7 +663,7 @@ namespace Nilesoft
 				// per distinct provider per process.
 				// docs/refactor/05-capabilities.md section 1.
 				if(!item->title.empty())
-					Diagnostics::provider_name(hash, reg.clsid, item->title.c_str());
+					Diagnostics::provider_name(step.hash, reg.clsid, item->title.c_str());
 
 				if(filled != FillResult::Shown)
 				{
@@ -538,17 +679,50 @@ namespace Nilesoft
 					continue;
 				}
 
-				GUID canonical{};
-				// Out-parameter is valid only when the method succeeds.
+				// Read here, while the object is in hand, and kept for the
+				// publishing pass. Out-parameter is valid only when the method
+				// succeeds.
 				// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getcanonicalname
-				if(FAILED(cmd->GetCanonicalName(&canonical)))
-					canonical = GUID_NULL;
+				if(FAILED(cmd->GetCanonicalName(&slot.canonical)))
+					slot.canonical = GUID_NULL;
+
+				slot.item = std::move(item);
+			}
+
+			/*
+				A menu that did not fit, said out loud, once.
+
+				Recorded only when at least one provider was actually refused, so
+				it is a signal rather than a line on every report. The
+				per-provider `deferred(budget)` records remain the detail; this
+				is the summary, and it follows the rule
+				docs/refactor/08-handoff.md section 1 already states: when adding
+				a cap, print its overflow in the same commit.
+
+				Not to be confused with `dropped_providers`, which means the
+				fixed-size telemetry array overflowed - a fact about the report,
+				not about the menu.
+			*/
+			if(refused_for_budget)
+			{
+				Diagnostics::MenuPerfScope over(L"explorer.commands.over_budget");
+				over.annotate(static_cast<long>(refused_for_budget));
+			}
+
+			// Registration order, for both what is shown and which of two
+			// providers claiming the same identity wins it.
+			for(auto &slot : planned)
+			{
+				if(!slot.item)
+					continue;
+
+				auto item = std::move(slot.item);
 
 				ExplorerCommandIdentity identity;
 				identity.hash = item->hash;
 				identity.type = item->type;
-				identity.clsid = reg.clsid;
-				identity.canonical = canonical;
+				identity.clsid = slot.reg->clsid;
+				identity.canonical = slot.canonical;
 				if(explorer_command_already_represented(identity, accepted))
 					continue;
 

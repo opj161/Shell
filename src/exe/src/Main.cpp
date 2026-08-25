@@ -1142,9 +1142,16 @@ static int BuildPerfReport(bool detailed, string &out)
 				report.append_format(L"                 provider %-38s %u.%u ms  %s",
 									 identity.c_str(), ms, tenth,
 									 perf_export_result_name(record.providers[v].result));
-				// (name appended below when the host knows it)
+				// The same spelling the Reliability window uses. A handler's
+				// GetTitle answers with the string meant for a *menu item*, so
+				// it carries mnemonic markers - "E&dit with Adobe Acrobat" -
+				// and this report printed them raw while the window stripped
+				// them, so one machine had two names for one extension and
+				// neither could be searched for the other's.
+				// shared/PerfReport.h, docs/refactor/09-remediation-plan.md J.
 				if(known)
-					report.append_format(L"  %s", known);
+					report.append_format(L"  %s",
+										 Nilesoft::Shell::Diagnostics::without_mnemonics(known).c_str());
 				report.append(L"\r\n");
 			}
 
@@ -1306,8 +1313,29 @@ namespace Nilesoft
 								}
 							}
 
-							at->samples++;
-							at->worst_us = std::max<uint32_t>(at->worst_us, record.providers[v].microseconds);
+							/*
+								A deferral is not a timing sample.
+
+								Both kinds are recorded with 0 microseconds -
+								nothing was called - so counting them as samples
+								made a provider that had never been measured
+								read as one measured at 0.0 ms and "ok". They
+								are counted separately instead, and the two
+								kinds separately from each other, because
+								quarantine is the remedy for one and not for the
+								other. docs/refactor/09-remediation-plan.md D.
+							*/
+							auto result = record.providers[v].result;
+							if(Diagnostics::perf_export_result_is_slow_deferral(result))
+								at->slow_deferrals++;
+							else if(Diagnostics::perf_export_result_is_budget_deferral(result))
+								at->budget_deferrals++;
+							else
+							{
+								at->samples++;
+								at->worst_us = std::max<uint32_t>(
+									at->worst_us, record.providers[v].microseconds);
+							}
 						}
 					}
 				}

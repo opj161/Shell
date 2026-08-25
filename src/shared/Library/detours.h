@@ -43,129 +43,58 @@ BOOL WINAPI DetourIsFunctionImported(PBYTE pbCode, PBYTE pbAddress);
 #include <vector>
 #include <tlhelp32.h>
 
+#include "../DetourEnlistment.h"
+
 /*
 	One detour transaction, with every other thread in the process enlisted in it.
 
-	Detours rewrites the first instructions of the target function. Microsoft is
-	explicit about what that costs threads which are not part of the transaction:
-	"Threads not enlisted in the transaction are not updated when the transaction
-	commits. As a result, they may attempt to execute an illegal combination of old
-	and new code."
+	The mechanism, the contract it answers to and every failure path now live in
+	shared/DetourEnlistment.h, which names no Detours symbol and can therefore be
+	driven by the unit suite. This is the binding of that machinery to the real
+	functions, and the only place the two meet.
+
+	Two things it is worth keeping in view here:
+
+	The current thread stays unenlisted on purpose, and by thread id rather than by
+	handle comparison. DetourUpdateThread documents its pseudo handle as a no-op -
+	"If hThread is equal to the current threads pseudo handle ... no action is
+	performed and NO_ERROR is returned", which is why the version before this one
+	enlisted nothing at all - and a real handle to the current thread "is currently
+	unsupported and will result in application hangs".
 
 	  https://github.com/microsoft/Detours/wiki/DetourUpdateThread
 
-	That is not theoretical here. The one function this codebase detours inline is
-	CoCreateInstance, and it does so inside explorer.exe, which has dozens of
-	threads and calls it from most of them.
-
-	What was here before enlisted `GetCurrentThread()` and nothing else - which the
-	same page documents as doing nothing at all: "If hThread is equal to the current
-	threads pseudo handle ... no action is performed and NO_ERROR is returned." So
-	no thread was ever enlisted.
-
-	The current thread stays unenlisted on purpose, and by thread id rather than by
-	handle comparison: passing a real handle to the current thread "is currently
-	unsupported and will result in application hangs".
-
-	Handles are held open until after the commit, because that is when Detours
-	reads and rewrites the thread contexts.
+	And begin() answers false when the process could not be brought into a known
+	state: a snapshot that failed, a live thread that could not be opened, a thread
+	Detours would not record. Committing anyway is what the page above describes as
+	leaving threads to "execute an illegal combination of old and new code", and
+	that is worse than not installing the hook.
 */
-class DetourTransaction
+inline const Nilesoft::Shell::InlineDetourApi &default_inline_detour_api()
+{
+	static const Nilesoft::Shell::InlineDetourApi api
+	{
+		&::CreateToolhelp32Snapshot,
+		&::Thread32First,
+		&::Thread32Next,
+		&::CloseHandle,
+		&::OpenThread,
+		&DetourUpdateThread,
+		&DetourTransactionBegin,
+		&DetourTransactionAbort,
+		&DetourTransactionCommitEx,
+		&DetourSetIgnoreTooSmall,
+	};
+	return api;
+}
+
+class DetourTransaction : public Nilesoft::Shell::InlineDetourTransaction
 {
 public:
-	DetourTransaction() = default;
-	~DetourTransaction() { abort(); }
-
-	DetourTransaction(const DetourTransaction &) = delete;
-	DetourTransaction &operator=(const DetourTransaction &) = delete;
-
-	bool begin()
+	DetourTransaction()
+		: Nilesoft::Shell::InlineDetourTransaction(default_inline_detour_api())
 	{
-		if(_open)
-			return false;
-
-		DetourSetIgnoreTooSmall(TRUE);
-		if(DetourTransactionBegin() != NO_ERROR)
-			return false;
-
-		_open = true;
-		enlist();
-		return true;
 	}
-
-	bool commit()
-	{
-		if(!_open)
-			return false;
-
-		auto rc = DetourTransactionCommit();
-		_open = false;
-		release();
-		return rc == NO_ERROR;
-	}
-
-	void abort()
-	{
-		if(_open)
-		{
-			DetourTransactionAbort();
-			_open = false;
-		}
-		release();
-	}
-
-private:
-	void enlist()
-	{
-		auto snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-		if(snapshot == INVALID_HANDLE_VALUE)
-			return;
-
-		// The snapshot covers every process, so entries have to be filtered.
-		const auto pid = ::GetCurrentProcessId();
-		const auto self = ::GetCurrentThreadId();
-
-		THREADENTRY32 entry{};
-		entry.dwSize = sizeof(entry);
-
-		if(::Thread32First(snapshot, &entry))
-		{
-			do
-			{
-				// th32OwnerProcessID is only present when the entry reaches it.
-				if(entry.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID)
-								  + sizeof(entry.th32OwnerProcessID))
-					continue;
-
-				if(entry.th32OwnerProcessID != pid || entry.th32ThreadID == self)
-					continue;
-
-				auto thread = ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT
-										   | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION,
-										   FALSE, entry.th32ThreadID);
-				if(!thread)
-					continue;
-
-				if(DetourUpdateThread(thread) == NO_ERROR)
-					_threads.push_back(thread);
-				else
-					::CloseHandle(thread);
-			}
-			while(::Thread32Next(snapshot, &entry));
-		}
-
-		::CloseHandle(snapshot);
-	}
-
-	void release()
-	{
-		for(auto thread : _threads)
-			::CloseHandle(thread);
-		_threads.clear();
-	}
-
-	bool _open = false;
-	std::vector<HANDLE> _threads;
 };
 
 template<typename T>

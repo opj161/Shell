@@ -72,7 +72,18 @@ namespace Nilesoft
 			// wants the next menu to see it without waiting out the interval.
 			void reload()
 			{
-				auto path = _path_override.empty() ? Quarantine::default_path() : _path_override;
+				// Under the lock, like every other read of it. refresh_if_stale
+				// below already took it for exactly this, and this one did not -
+				// so a set_path_for_testing racing a menu's refresh could read
+				// the string while it was being assigned. Not reachable from a
+				// shipping path today, which is the argument for fixing it while
+				// it still is not. docs/refactor/09-remediation-plan.md R6.4.
+				std::wstring path;
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					path = _path_override.empty() ? Quarantine::default_path() : _path_override;
+				}
+
 				auto entries = Quarantine::load(path);
 
 				std::vector<uint32_t> hashes;

@@ -408,3 +408,116 @@ TEST(config_watcher, stopping_twice_is_harmless)
 	watcher.stop();
 	CHECK(!watcher.watching());
 }
+
+/*
+	Every exit from the watch thread must leave watching() false.
+
+	Four of the five ways out of the loop used to leave it true: a failed
+	WaitForMultipleObjects, an index outside the handle range, a failed
+	FindNextChangeNotification, and - before it was given its own store - a
+	re-point that found nothing watchable. The watcher was gone; watching() said
+	it was there. Nothing user-visible reads it yet, which is exactly why the
+	regression would have been silent until something did, and is the same shape
+	as the re-entrant start() in docs/refactor/03-config-safety.md section 3b.
+
+	The wait is injected rather than provoked. Closing a handle another thread is
+	already blocked on does not reliably return that thread's wait, so a test
+	written that way would measure a race instead of the invariant.
+*/
+namespace
+{
+	DWORD WINAPI wait_that_fails(DWORD, const HANDLE *, BOOL, DWORD)
+	{
+		return WAIT_FAILED;
+	}
+
+	// Inside neither the stop slot nor any notification slot. The loop treats
+	// this as unusable and returns, which it should - and used to do while
+	// still claiming to be watching.
+	DWORD WINAPI wait_that_answers_out_of_range(DWORD, const HANDLE *, BOOL, DWORD)
+	{
+		return WAIT_OBJECT_0 + MAXIMUM_WAIT_OBJECTS;
+	}
+
+	bool wait_until_not_watching(const ConfigWatcher &watcher, DWORD timeout_ms)
+	{
+		auto deadline = ::GetTickCount64() + timeout_ms;
+		while(::GetTickCount64() < deadline)
+		{
+			if(!watcher.watching())
+				return true;
+			::Sleep(10);
+		}
+		return !watcher.watching();
+	}
+}
+
+TEST(config_watcher, a_failed_wait_ends_the_watch_and_says_so)
+{
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	ConfigWatcher watcher;
+	watcher.set_wait_for_testing(&wait_that_fails);
+	CHECK(watcher.start({ file }, &count_reload));
+
+	CHECK_MSG(wait_until_not_watching(watcher, 4000),
+			  "the thread returned on WAIT_FAILED, so watching() must be false");
+
+	watcher.stop();
+	CHECK(!watcher.watching());
+}
+
+TEST(config_watcher, an_out_of_range_wait_result_ends_the_watch_and_says_so)
+{
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	ConfigWatcher watcher;
+	watcher.set_wait_for_testing(&wait_that_answers_out_of_range);
+	CHECK(watcher.start({ file }, &count_reload));
+
+	CHECK_MSG(wait_until_not_watching(watcher, 4000),
+			  "the thread returned on an unusable index, so watching() must be false");
+
+	watcher.stop();
+	CHECK(!watcher.watching());
+}
+
+TEST(config_watcher, a_re_point_with_nothing_watchable_ends_the_watch_and_says_so)
+{
+	// The fifth exit, and the only one reachable without the seam: the reload
+	// callback re-points at a set with no watchable directory in it, rearm()
+	// refuses it, and the thread stops. "Best-effort" has always meant the
+	// keyboard combos remain.
+	//
+	// A bare filename rather than an empty list, because start() rejects an
+	// empty list before it reaches the re-entrancy check and would therefore
+	// never ask for the re-point at all. config_watch_directories answers
+	// nothing for a path with no directory part - FindFirstChangeNotification's
+	// page: the path "cannot be a relative path or an empty string".
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	ConfigWatcher watcher;
+	g_reloads.store(0);
+	g_repointing_watcher = &watcher;
+	g_repointing_files = { L"nothing-watchable.nss" };
+
+	CHECK(watcher.start({ file }, &reload_and_repoint));
+
+	tmp.write(L"shell.nss", "item(title='BB')\r\n");
+
+	// Not wait_for_reloads: ConfigWatcher::reloads() is published *after* the
+	// re-point is applied, and this re-point is the one that ends the thread -
+	// so the counter never reaches one and waiting on it would time out
+	// whatever the watcher did. The callback ran; watching() going false is the
+	// observable that this test is actually about.
+	CHECK_MSG(wait_until_not_watching(watcher, 12000),
+			  "nothing left to watch, so watching() must be false");
+	CHECK_MSG(g_reloads.load(std::memory_order_acquire) >= 1,
+			  "and the save did reach the callback first");
+
+	g_repointing_watcher = nullptr;
+	watcher.stop();
+}

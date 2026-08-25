@@ -64,6 +64,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="Arguments.h" />
     <ClInclude Include="Trace.h" />
     <ClInclude Include="Probe.h" />
     <ClInclude Include="Scenarios.h" />

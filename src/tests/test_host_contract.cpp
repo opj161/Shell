@@ -211,3 +211,182 @@ TEST(host_contract, nothing_is_notified_for_a_cancelled_menu_that_left_a_stale_i
 	CHECK_EQ(done.result, TRUE);
 	CHECK(done.notify == HostNotification::None);
 }
+
+// ---- by-position replay -------------------------------------------------
+//
+// docs/refactor/01-takeover-contract.md section 3's replay table has always
+// required this and nothing implemented it. A host that set MNS_NOTIFYBYPOS on
+// the menu it handed Shell is owed a different message carrying a different
+// thing:
+//
+//     "MNS_NOTIFYBYPOS ... Menu owner receives a WM_MENUCOMMAND message instead
+//      of a WM_COMMAND message when the user makes a selection."
+//     https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+//
+//     "wParam - The zero-based index of the item selected.
+//      lParam - A handle to the menu for the item selected."
+//     https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand
+//
+// Before this, complete_host_contract could only answer Command - and since
+// such a host has no reason to give its items identifiers, `unhandled` was
+// usually 0, which reads as "the user cancelled". The click did nothing and
+// nothing said so.
+
+namespace
+{
+	HostSelection by_position(int selected, int unhandled, uint32_t position,
+							  void *menu, bool known = true)
+	{
+		HostSelection sel;
+		sel.selected = selected;
+		sel.unhandled = unhandled;
+		sel.by_position = true;
+		sel.position_known = known;
+		sel.position = position;
+		sel.containing_menu = menu;
+		return sel;
+	}
+
+	// Stands in for a borrowed HMENU. Never dereferenced by anything here.
+	void *const ROOT_MENU = reinterpret_cast<void *>(0xAB01);
+	void *const SUB_MENU = reinterpret_cast<void *>(0xAB02);
+
+	// The tracking identifier Shell gives a mirrored native item in this mode.
+	// ContextMenu::ID::start_native; outside the synthetic range on purpose.
+	constexpr int TRACKING = 0x60000000;
+}
+
+TEST(host_contract, a_by_position_host_is_told_which_position)
+{
+	auto done = complete_host_contract(NOTIFY_LIKE, by_position(TRACKING, TRACKING, 3, ROOT_MENU));
+
+	CHECK_EQ(done.result, TRUE);
+	CHECK(done.notify == HostNotification::MenuCommand);
+	CHECK_EQ(done.notify_position, (uint32_t)3);
+	CHECK(done.notify_menu == ROOT_MENU);
+}
+
+// lParam is "A handle to the menu for the item selected" - the submenu that
+// owns it, not the root. A host that looks the item up in the menu it is given
+// finds nothing if the root is passed for a nested selection.
+TEST(host_contract, a_nested_selection_names_its_own_submenu)
+{
+	auto done = complete_host_contract(NOTIFY_LIKE, by_position(TRACKING, TRACKING, 1, SUB_MENU));
+
+	CHECK(done.notify == HostNotification::MenuCommand);
+	CHECK_EQ(done.notify_position, (uint32_t)1);
+	CHECK(done.notify_menu == SUB_MENU);
+}
+
+// Position zero is a real position, and the first item of a menu is the one
+// most likely to be picked. A "0 means nothing was chosen" reading here is the
+// same class of defect as the identifier it replaces.
+TEST(host_contract, position_zero_is_a_position_and_not_a_cancellation)
+{
+	auto done = complete_host_contract(NOTIFY_LIKE, by_position(TRACKING, TRACKING, 0, ROOT_MENU));
+
+	CHECK(done.notify == HostNotification::MenuCommand);
+	CHECK_EQ(done.notify_position, (uint32_t)0);
+}
+
+TEST(host_contract, a_by_position_host_hears_nothing_for_an_item_shell_ran)
+{
+	// unhandled == 0: Shell recognised the item and ran it. Nothing is owed.
+	auto done = complete_host_contract(NOTIFY_LIKE, by_position(SYNTHETIC, 0, 2, ROOT_MENU, false));
+
+	CHECK_EQ(done.result, TRUE);
+	CHECK(done.notify == HostNotification::None);
+}
+
+TEST(host_contract, a_by_position_host_hears_nothing_when_it_cancels)
+{
+	auto done = complete_host_contract(NOTIFY_LIKE, by_position(0, 0, 0, ROOT_MENU, false));
+
+	CHECK_EQ(done.result, TRUE);
+	CHECK(done.notify == HostNotification::None);
+}
+
+// If Shell could not place the identifier, silence is the only safe answer: the
+// host is not listening for WM_COMMAND, and the value it would carry is a
+// tracking identifier that exists only inside this process.
+TEST(host_contract, an_unplaceable_selection_notifies_nothing_rather_than_falling_back)
+{
+	auto done = complete_host_contract(NOTIFY_LIKE,
+									   by_position(TRACKING, TRACKING, 0, nullptr, false));
+
+	CHECK_EQ(done.result, TRUE);
+	CHECK(done.notify == HostNotification::None);
+}
+
+TEST(host_contract, a_quiet_by_position_menu_is_still_quiet)
+{
+	// TPM_NONOTIFY is the host asking for no message at all, and that does not
+	// change because the message would have been a different one.
+	auto sel = by_position(TRACKING, TRACKING, 3, ROOT_MENU);
+	auto done = complete_host_contract(NOTIFY_LIKE | TPM_NONOTIFY, sel);
+
+	CHECK_EQ(done.result, TRUE);
+	CHECK(done.notify == HostNotification::None);
+}
+
+TEST(host_contract, an_ordinary_host_is_untouched_by_any_of_this)
+{
+	// Not by-position: still WM_COMMAND with the host's own identifier.
+	HostSelection sel;
+	sel.selected = NATIVE;
+	sel.unhandled = NATIVE;
+	auto done = complete_host_contract(NOTIFY_LIKE, sel);
+
+	CHECK(done.notify == HostNotification::Command);
+	CHECK_EQ(done.notify_id, (uint32_t)NATIVE);
+	CHECK_EQ(done.notify_position, (uint32_t)0);
+	CHECK(done.notify_menu == nullptr);
+}
+
+TEST(host_contract, a_returncmd_host_never_reaches_the_by_position_path)
+{
+	// The hook only sets by_position for a host without TPM_RETURNCMD, but the
+	// function must not depend on the caller for that: a host that asked for an
+	// identifier gets its identifier and no message.
+	auto sel = by_position(NATIVE, NATIVE, 3, ROOT_MENU);
+	auto done = complete_host_contract(EXPLORER_LIKE, sel);
+
+	CHECK_EQ(done.result, NATIVE);
+	CHECK(done.notify == HostNotification::None);
+}
+
+TEST(host_contract, a_failed_by_position_track_is_still_zero_and_silent)
+{
+	auto sel = by_position(0, 0, 0, ROOT_MENU, false);
+	sel.tracking_failed = true;
+	auto done = complete_host_contract(NOTIFY_LIKE, sel);
+
+	CHECK_EQ(done.result, 0);
+	CHECK(done.notify == HostNotification::None);
+}
+
+// The four-argument form the hook used before this work, and the older tests
+// still use. It must keep meaning exactly what it meant.
+TEST(host_contract, the_short_form_still_describes_an_ordinary_host)
+{
+	auto done = complete_host_contract(NOTIFY_LIKE, NATIVE, NATIVE);
+
+	CHECK(done.notify == HostNotification::Command);
+	CHECK_EQ(done.notify_id, (uint32_t)NATIVE);
+}
+
+TEST(host_contract, a_native_tracking_identifier_is_not_a_synthetic_one)
+{
+	// ContextMenu.h: ident::start_native 0x60000000, ident::end_native
+	// 0x6fffffff. The range sits above start_sys deliberately, so
+	// ContextMenu::ID::equals() answers false for it and InvokeCommand leaves a
+	// mirrored native item to the host - which is the whole point of giving it
+	// an identifier of Shell's own in the first place.
+	//
+	// It must also stay clear of is_synthetic_id, or the guard in
+	// complete_host_contract would treat a placed host item as one of Shell's
+	// and swallow the notification.
+	CHECK(!is_synthetic_id(0x60000000));
+	CHECK(!is_synthetic_id(0x6ffffffe));
+	CHECK(is_synthetic_id(0x5ffffffe));
+}

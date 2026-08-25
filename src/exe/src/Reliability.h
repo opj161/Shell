@@ -66,6 +66,27 @@ namespace Nilesoft
 				uint32_t worst_us{};
 				uint32_t samples{};
 				bool quarantined{};
+
+				/*
+					The two deferrals, kept apart, because they ask the user for
+					opposite things.
+
+					`slow_deferrals` is Shell's judgement about this extension:
+					it has never once answered quickly. Quarantine is the
+					remedy, and this window offers it.
+
+					`budget_deferrals` is a statement about a *menu*: this
+					extension was never judged at all - the menu ran out of its
+					allowance before reaching it. Quarantining it would punish
+					it for something it did not do; what that reading calls for
+					is a larger budget or fewer handlers.
+
+					They were one word until docs/refactor/09-remediation-plan.md
+					finding D, and merged this window told a user to quarantine
+					an extension whose only fault was its neighbours'.
+				*/
+				uint32_t slow_deferrals{};
+				uint32_t budget_deferrals{};
 			};
 
 			struct Snapshot
@@ -108,39 +129,14 @@ namespace Nilesoft
 					+ label.substr(label.size() - tail);
 			}
 
-			/*
-				Drop the mnemonic markers a handler puts in its title.
-
-				`IExplorerCommand::GetTitle` answers with the string meant for a
-				menu item, so it carries them: this machine's Acrobat handler
-				returns "E&dit with Adobe Acrobat". A LISTBOX is not a menu and
-				gives `&` no meaning, so it renders literally and the row reads
-				as a typo.
-
-				The Win32 rule, applied here rather than invented: a doubled
-				`&&` is a literal ampersand, a single one marks the character
-				after it.
-			*/
-			inline std::wstring without_mnemonics(std::wstring_view title)
-			{
-				std::wstring out;
-				out.reserve(title.size());
-
-				for(size_t i = 0; i < title.size(); i++)
-				{
-					if(title[i] != L'&')
-					{
-						out += title[i];
-						continue;
-					}
-					if(i + 1 < title.size() && title[i + 1] == L'&')
-					{
-						out += L'&';
-						i++;
-					}
-				}
-				return out;
-			}
+			// Moved to shared/PerfReport.h so `-report perf` and this window
+			// cannot spell one extension two ways: the report printed a raw
+			// "E&dit with Adobe Acrobat" while this list showed "Edit with
+			// Adobe Acrobat", so neither could be searched for the other's
+			// spelling. Kept as a name here because test_reliability_rows.cpp
+			// pins its rules under it.
+			// docs/refactor/09-remediation-plan.md finding J.
+			using Nilesoft::Shell::Diagnostics::without_mnemonics;
 
 			inline std::wstring format_row(const ProviderRow &row)
 			{
@@ -161,11 +157,22 @@ namespace Nilesoft
 				uint32_t ms = 0, tenth = 0;
 				Diag::perf_report_split_ms(row.worst_us, ms, tenth);
 
+				// The verdict, and it is not "quarantined or fine". A row whose
+				// only records are budget deferrals has never been measured at
+				// all - reporting it as "not asked yet" would be true and
+				// useless, and reporting it as slow would be false.
+				const wchar_t *verdict = L"ok";
+				if(row.quarantined)
+					verdict = L"quarantined";
+				else if(row.samples == 0 && row.budget_deferrals && !row.slow_deferrals)
+					verdict = L"menu ran out of budget";
+				else if(row.samples == 0 && row.slow_deferrals)
+					verdict = L"deferred as slow";
+				else if(row.samples == 0)
+					verdict = L"not asked yet";
+
 				wchar_t tail[96]{};
-				::swprintf_s(tail, L"%6u.%u ms   %s",
-							 ms, tenth,
-							 row.quarantined ? L"quarantined"
-											 : (row.samples ? L"ok" : L"not asked yet"));
+				::swprintf_s(tail, L"%6u.%u ms   %s", ms, tenth, verdict);
 				return label + tail;
 			}
 

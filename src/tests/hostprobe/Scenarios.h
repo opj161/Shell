@@ -20,7 +20,12 @@ namespace hostprobe
 							UnmatchedCharAfterNavigating,
 							// For ShellItem, whose item identifiers are not
 							// known until the handlers have filled the menu.
-							SelectDrivableCommand, CancelWhatever,
+							SelectDrivableCommand,
+						// Steers by title. The only way to reach a mirrored
+						// native item in a by-position menu, where Shell tracks
+						// those under identifiers of its own.
+						SelectByPositionTarget,
+						CancelWhatever,
 							// Reads the menu back through MSAA instead of
 							// choosing anything from it. See MenuReader.h.
 							ReadComposedMenu };
@@ -48,6 +53,11 @@ namespace hostprobe
 		ShellTrackedItsOwnMenu,
 		EveryInitPopupHasOneUninit,
 		CommandCarriesTheNativeIdentifier,
+
+		// A host that set MNS_NOTIFYBYPOS is owed WM_MENUCOMMAND carrying the
+		// position of the item in *its own* menu, and no WM_COMMAND at all.
+		// docs/refactor/09-remediation-plan.md R2.
+		MenuCommandNamesTheHostPosition,
 
 		// Rendering, read back off the live menu through MSAA. These are the
 		// properties docs/refactor/08-handoff.md section 3.8 asks for before
@@ -100,6 +110,21 @@ namespace hostprobe
 
 		UINT command_id{};
 		UINT command_position{};
+		HMENU command_menu{};
+
+		// Where the item the script chose sits in the host's own menu, and the
+		// menu that holds it. Read off the host's HMENU before tracking, so the
+		// expectation compares what Shell replayed against what the host built
+		// rather than against a number this file made up.
+		UINT expected_position{ 0xFFFFFFFF };
+		HMENU host_root_menu{};
+
+		// What the host's own menu says at the position Shell replayed, and
+		// what it says at the position the script actually chose. Compared as
+		// well as the numbers, because the two menus tend to be the same length
+		// around the end and an index can agree by accident.
+		std::wstring replayed_title;
+		std::wstring expected_title;
 
 		// The driver could not put the highlight where the script asked. Always
 		// a harness fault, never a finding about Windows, so it is reported

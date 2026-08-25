@@ -127,6 +127,30 @@ namespace Nilesoft
 			// Empty `items` on a node with a handle means "not opened yet".
 			NativePopupState native_popup;
 
+			/*
+				Where a mirrored native item sits in the host's own menu.
+
+				`enumerate_native_menu_level` has always walked the borrowed menu
+				by index and thrown the index away, because the host's wID was
+				assumed to be the item's identity. For a menu the host addresses
+				by position that assumption is wrong in both directions - the
+				identifier is commonly 0 and duplicates are legal - and the
+				position is the only thing WM_MENUCOMMAND can be built from:
+				"wParam - The zero-based index of the item selected. lParam - A
+				handle to the menu for the item selected."
+				https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand
+
+				The menu is kept as well as the position because lParam names the
+				menu that *owns* the item, which for a nested selection is the
+				submenu rather than the root. Borrowed; Shell never destroys it.
+			*/
+			struct NativeSource
+			{
+				HMENU menu{};
+				UINT position{};
+				bool known{};
+			} native_source;
+
 			// Packaged IExplorerCommand this item was built from. Owned when
 			// explorer_command_owned is true. Not an IContextMenu handler.
 			// MenuItemInfo retains a second ref for Invoke after Uninitialize.
@@ -484,15 +508,50 @@ plutovg_move_to(pluto, start.x, start.y);
 				static constexpr auto start_id = 0x0fffffff; //0-65535
 				static constexpr auto start_sys = 0x5fffffff;
 
+				/*
+					Tracking identifiers for mirrored native items, used only
+					when the borrowed root carried MNS_NOTIFYBYPOS.
+
+					Deliberately outside [start_id, start_sys), so equals() below
+					still answers false and InvokeCommand still treats these as
+					the host's items rather than Shell's. They exist because in a
+					by-position menu the host's own wID is not an identity: it is
+					commonly 0 - which the composition path then replaces with a
+					*Shell* identifier, making a host item look like one of
+					Shell's - and duplicates across items are legal, so the first
+					match wins and the wrong item is reported. Neither is
+					survivable when the whole point is telling the host which
+					position was chosen. docs/refactor/09-remediation-plan.md R2.
+
+					They never leave the process: complete_host_contract maps one
+					back to {position, containing menu} before anything is
+					posted, and refuses to notify at all if it cannot.
+				*/
+				static constexpr auto start_native = 0x60000000;
+				static constexpr auto end_native = 0x6fffffff;
+
 				uint32_t sys = start_sys;
 				uint32_t id = start_id;
+				uint32_t native = start_native;
 
 				uint32_t get_id() { return id++; }
 				uint32_t get_sys() { return sys++; }
 
+				// Zero when the range is exhausted, which no real menu reaches;
+				// the caller then leaves the host's own identifier in place.
+				uint32_t get_native()
+				{
+					return native < end_native ? native++ : 0;
+				}
+
 				bool equals(uint32_t ident) const
 				{
 					return(ident >= start_id && ident < start_sys);
+				}
+
+				bool is_native_tracking(uint32_t ident) const
+				{
+					return ident >= start_native && ident < end_native;
 				}
 
 			} ident;
@@ -582,24 +641,36 @@ plutovg_move_to(pluto, start.x, start.y);
 			};
 			std::vector<ss_t> _level_bitmap;
 
-			struct {
+			struct Windows
+			{
 				HWND owner{};
 				HWND active{};
 				HWND focus{};
-			}hwnd;
+			};
+			Windows hwnd;
 
-			struct {
+			// Named rather than anonymous, so a type outside this class can hold
+			// a reference to it. Include/Win32MenuPresenter.h needs exactly that
+			// for the four members the paint path reaches for; an anonymous
+			// struct can be a member and cannot be a parameter, which is what
+			// stopped the presenter becoming a class the first time
+			// (docs/refactor/08-handoff.md 3.9, docs/refactor/09 R4).
+			struct Composition
+			{
 				bool activated{};
 				bool DwmEnabled{};
 				explicit operator bool() const { return DwmEnabled && activated; }
-			} composition;
+			};
+			Composition composition;
 
-			struct {
+			struct FontSet
+			{
 				HFONT handle{};
 				LOGFONTW menu{};
 				Font icon;
 				Font icon10;
-			}font;
+			};
+			FontSet font;
 
 			struct symbole_tag 
 			{
@@ -618,11 +689,13 @@ plutovg_move_to(pluto, start.x, start.y);
 				}
 			};
 
-			struct {
+			struct Symbols
+			{
 				symbole_tag chevron;
 				symbole_tag checked;
 				symbole_tag bullet;
-			}symbol;
+			};
+			Symbols symbol;
 			
 			struct {
 
@@ -653,7 +726,7 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			} _settings;
 
-			struct
+			struct Current
 			{
 				HWND hWnd{};
 				HMENU hMenu{};
@@ -680,7 +753,8 @@ plutovg_move_to(pluto, start.x, start.y);
 					hdc = {};
 				}
 
-			} current;
+			};
+			Current current;
 
 			struct oooo
 			{
@@ -725,6 +799,23 @@ plutovg_move_to(pluto, start.x, start.y);
 			// written on every top-level popup and read by nothing at all.
 			MenuModel<MenuItemInfo> _model;
 			std::unordered_map<HMENU, menu_t> _menus;
+
+			/*
+				By-position replay for the borrowed root.
+
+				`_host_by_position` is the root's MNS_NOTIFYBYPOS style, read once
+				before composition - it is a menu *header* style and "has no
+				effect when applied to individual sub menus", so one read is the
+				whole answer:
+				https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+
+				`_native_origins` maps the tracking identifier Shell gave a
+				mirrored native item back to where that item lives in the host's
+				menu. Only populated in this mode, and only for items the host
+				can be told about.
+			*/
+			bool _host_by_position = false;
+			std::unordered_map<uint32_t, menuitem_t::NativeSource> _native_origins;
 
 			WinEventHook _winEventHook;
 			WindowsHook _keyboardHook;
@@ -917,6 +1008,43 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			HMENU MenuHandle() const;
 
+			/*
+				The presenter's view of this menu.
+
+				Built here and nowhere else, so the list of members the paint
+				path may reach is one struct in one place - Include/
+				Win32MenuPresenter.h - rather than "whatever MenuPresenter.cpp
+				happens to touch". Returned by value; it holds only references
+				to members of this object, which outlives every presenter made
+				from it.
+			*/
+			struct PresenterContext presenter_context();
+
+			/*
+				The borrowed root's MNS_NOTIFYBYPOS style, and where a tracked
+				identifier came from in the host's own menu.
+
+				Both are read by the hook *before* InvokeCommand, because
+				InvokeCommand destroys this object - see the note beside the call
+				in Main.cpp. Nothing here allocates or touches the menu; they are
+				lookups into what composition already recorded.
+			*/
+			bool host_notifies_by_position() const noexcept { return _host_by_position; }
+
+			bool native_origin(int tracked, uint32_t *position, HMENU *menu) const
+			{
+				if(tracked <= 0)
+					return false;
+				auto found = _native_origins.find(static_cast<uint32_t>(tracked));
+				if(found == _native_origins.end())
+					return false;
+				if(position)
+					*position = found->second.position;
+				if(menu)
+					*menu = found->second.menu;
+				return true;
+			}
+
 			/*template<typename T = long>
 			T dpi(auto value) const { return static_cast<T>(std::rint(value * double(_dpi) / 96.0)); }
 
@@ -1024,3 +1152,7 @@ plutovg_move_to(pluto, start.x, start.y);
 		};
 	}
 }
+
+// After the class, because PresenterContext names ContextMenu's nested types
+// and needs them complete. docs/refactor/09-remediation-plan.md R4.
+#include "Include/Win32MenuPresenter.h"

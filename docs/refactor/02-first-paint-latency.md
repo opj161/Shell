@@ -267,8 +267,42 @@ sequence; injecting the one-sample rule fails it 24 times.
 Acceptance, restated against what was built: a warm menu costs ~41 ms of
 provider work rather than ~170 ms; the first menu in a process is bounded by the
 budget instead of costing ~700 ms; a provider that has never been quick is
-skipped and recorded as `Deferred` in the ring; and no provider's exclusion is
-permanent.
+skipped and recorded as `DeferredSlow` in the ring; and no provider's exclusion
+is permanent.
+
+#### The same measurement a year of handlers later (2026-08-25)
+
+The ~41 ms above was taken against **22-25** registered handlers. Re-measured on
+the deployed build with `shell.exe -report perf:all` against the live Explorer
+(pid 19132, 70 menus, 16 held in the ring), with **37** handlers in a file menu:
+
+```text
+pre-display  p50 37.4 ms   p95 52.2 ms   n=16
+explorer.commands  36.6 ms  n=37     popup.total_pre_display  37.7 ms
+```
+
+Three things follow, and none of them is a regression in Shell's own code:
+
+1. **Shell's own pre-paint work is ~1.1 ms** (37.7 - 36.6). The first-paint work
+   of this branch did what it set out to do.
+2. **Third-party provider work is 36.6 ms of a 37.7 ms menu**, and the
+   per-provider records sum to ~35 ms of that, so the phase is honestly
+   attributed.
+3. The policy was tuned not to intervene there - `MENU_BUDGET_US` sits "just
+   above the measured steady-state total with reuse (~41 ms), so in normal
+   operation it never bites".
+
+That is the disagreement §06.4's "pre-display added by Shell <= 15 ms p95" and
+`ProviderHealth.h` had with each other, and §00.4a settles it by splitting the
+target: Shell's own work has a budget it meets with room to spare, and
+third-party work is budgeted and *reported* separately rather than counted
+against the same number.
+
+One of the sixteen sessions - the 52.2 ms one - is also the measurement behind
+§09 R1: budget exhaustion dropped six providers, four of which cost between
+0.3 ms and 1.6 ms and lost their place purely for being registered behind a
+13.9 ms one. Since R1 the resolution order is cheapest-known-first, so an
+overrun is charged to the provider that caused it.
 
 ### 2a-ii. The icon path — a leak found, and a cache declined
 

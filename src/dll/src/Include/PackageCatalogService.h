@@ -54,14 +54,40 @@
 #include <cstdint>
 
 #include "Include/ExplorerCommandCatalog.h"
+#include "Include/Packages.h"
 
 namespace Nilesoft
 {
 	namespace Shell
 	{
+		/*
+			One installed package, as the NSS package and appx functions see it.
+
+			Carried on the catalog snapshot rather than indexed separately,
+			because the scan already has both halves in hand: it enumerates
+			every full name and calls GetPackagePathByFullName on each one
+			before reading its manifest. Throwing the path away and asking for
+			it again on the menu thread bought nothing.
+
+			docs/refactor/09-remediation-plan.md R3, and it is what makes master
+			plan invariant 1 true for exists/identity/list/path: those became
+			reads of this vector, and a read of a published vector cannot
+			enumerate a registry.
+		*/
+		struct PackageEntry
+		{
+			PackageIdentity identity;
+			std::wstring install_path;
+		};
+
 		struct CatalogSnapshot
 		{
 			std::vector<ExplorerCommandRegistration> commands;
+
+			// Every installed package, with its resolved install path. Same
+			// scan, same publish, same lifetime as `commands`.
+			std::vector<PackageEntry> packages;
+
 			uint64_t built_at{};		// clock reading when this was published
 			uint64_t generation{};		// 1 for the first publish, then upward
 		};
@@ -125,7 +151,16 @@ namespace Nilesoft
 			// Returns false when the scan is discarded because the package set
 			// changed while it was running: its answer describes the machine as
 			// it was before that change, and the caller should scan again.
+			// Commands only, for the tests that are about freshness and
+			// coalescing rather than about package identities.
 			bool publish(std::vector<ExplorerCommandRegistration> commands,
+						 uint64_t now, uint64_t token)
+			{
+				return publish(std::move(commands), {}, now, token);
+			}
+
+			bool publish(std::vector<ExplorerCommandRegistration> commands,
+						 std::vector<PackageEntry> packages,
 						 uint64_t now, uint64_t token)
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
@@ -136,6 +171,7 @@ namespace Nilesoft
 
 				auto next = std::make_shared<CatalogSnapshot>();
 				next->commands = std::move(commands);
+				next->packages = std::move(packages);
 				next->built_at = now;
 				next->generation = ++_generation;
 				_current = std::move(next);
@@ -251,7 +287,15 @@ namespace Nilesoft
 			HANDLE _published{};	// manual-reset: a snapshot exists at last
 		};
 
+		// The result of one scan: the packaged verbs, and the packages they
+		// were found in. Both come out of the same walk.
+		struct CatalogScan
+		{
+			std::vector<ExplorerCommandRegistration> commands;
+			std::vector<PackageEntry> packages;
+		};
+
 		// The scan itself, exposed so a probe or a test can time it.
-		std::vector<ExplorerCommandRegistration> scan_package_catalog();
+		CatalogScan scan_package_catalog();
 	}
 }

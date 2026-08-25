@@ -139,9 +139,12 @@ partial** (9) and **one open** (19).
 
 **Item 19 closed in the third 2026-08-25 session**, which closes the backlog:
 favorites (§05.6a) and the rule inspector (§05.7a), over the parser provenance
-that landed first. The tally is now **nineteen closed** (items 1–8, 10–20) and
-**one partial** (9 — conditional attach, deferred with reasons in §01.9a that
-nothing has changed). `08-handoff.md` §3.6 is the running version of this.
+that landed first. After §09 the tally is **all twenty closed** as outcomes, and
+**15 implemented / 5 resolved differently** on the strict view in §00.3b — item
+9's conditional attach remains declined, not deferred. Two tallies rather than
+one, because an item that reads "closed" in every document stops being looked
+at, and that is exactly how item 5 kept a never-built replay path for three
+sessions (§01.3-0). `08-handoff.md` §3.6 is the running version of this.
 
 Two things worth carrying forward from how item 19 landed, because neither is
 about the feature:
@@ -232,11 +235,29 @@ and persistence is deferred until cold start has been measured without it.
 ~~4. Taskbar stage 1 zero-wait~~ — **withdrawn (§07 A2).** Taskbar work is Stage 2
 only and moves to Phase 3.
 
-Acceptance: R1/R1a assertions active in debug builds (no package I/O, no
-`GetState(TRUE)`, and no unbounded COM activation on the menu thread); a fake
-provider sleeping 2 s in `GetState` does not delay first paint and appears on the
-next menu; cold-start right-click p95 ≤ warm p95 + 10 ms on reference machine; ring
-shows provider table populated with a `deferred` count.
+Acceptance, **restated 2026-08-25** against what was built (§09 R7.8). A
+checkbox is a gate, not history: one of these could never be met and saying so
+is the correction.
+
+- ✅ No package I/O and no `GetState(TRUE)` on the menu thread — enforced by
+  `check-invariants` rules 1 and 10 rather than by a debug assertion, which is
+  stronger: it fails the build rather than a run somebody has to perform.
+  Package *enumeration* joined them in §09 R3.
+- ❌ **superseded** — "a fake provider sleeping 2 s in `GetState` does not delay
+  first paint and appears on the next menu." Not met, and not achievable
+  without moving `IExplorerCommand` calls off the menu thread, which §02.2a-i
+  declined on the documented grounds that "these methods are called on the UI
+  thread". What is delivered instead: the *first* such menu pays once, the
+  provider is remembered as slow and skipped from then on, and the exclusion
+  expires so a handler that gets fixed comes back. See §00.4a for the governing
+  wording this replaces R1a's literal form with.
+- ✅ Ring shows the provider table populated, with the deferral counted — and
+  since §09 R1.2 with the two deferrals told apart: `deferred(slow)` is a
+  judgement about the handler, `deferred(budget)` is a statement about the
+  menu, and they ask the user for opposite remedies.
+- ⏳ cold-start right-click p95 ≤ warm p95 + 10 ms on the reference machine —
+  open; the cold outlier is the first menu in a process and is bounded by the
+  budget rather than by this ratio.
 
 ## Phase 2 — takeover contract (2 weeks)
 
@@ -292,6 +313,25 @@ src\bin\x64\hostprobe.exe                       # every scenario, printed
 src\bin\x64\hostprobe.exe question              # just the ones that assert
 src\bin\x64\hostprobe.exe --verify src\tests\hostprobe\fixtures
 ```
+
+**`--verify`, `--record` and `--shell` each require their operand**, and a run
+that selects no scenario fails. Both rules exist because the abbreviated
+`hostprobe.exe --verify` used to fall through to the substring filter, match
+nothing, and report `0 scenario(s), 0 failure(s)` with exit code 0 — a gate that
+can be asked to exercise nothing and still say yes gates nothing. Exit codes
+above the failure range say why a run never reached an expectation: 121 nothing
+ran, 122 malformed command line, 123 `--shell` without `--takeover`, 124 Shell
+would not load, 125 no window. See `src/tests/hostprobe/Arguments.h` and §09 R0.
+
+**The expected counts are part of the gate**: 23 scenarios native (9 skipped,
+which are the takeover-only set — a native run reporting 0 skipped is not a
+native run) and 32 through takeover.
+
+**`--shell` cannot redirect the shell-namespace scenarios.** Those reach Shell
+through COM, and COM loads the copy named in the registry — so `--shell` points
+this process's *loader* at a build while `QueryContextMenu` activates the
+registered one. Use the per-user `InprocServer32` override in §08.3.7, and check
+the `takeover:` line names the build under test.
 
 It builds on every platform and **is deliberately not run by `build.ps1`**: it
 creates a window and shows real popup menus, which does not belong in a
@@ -462,7 +502,11 @@ desktop — run in the scheduled VM job (below), not PR CI.
   1. It **failed on its own tree** — the Recycle-Bin rule matched the comment that
      the same change added to explain the removal. A rule names something the code
      must not *do*; it must not fire on prose about it. The script now strips block
-     comments, line comments and string literals before matching.
+     comments and line comments before matching. **Not string literals** - this
+     said it did, and it does not: `strip_code` replaces comment bodies with
+     spaces and leaves literals alone. A rule whose pattern could match a string
+     has to be written to exclude one. Corrected 2026-08-25
+     (docs/refactor/09-remediation-plan.md R7.7).
   2. `Get-ChildItem -Path 'src\dll\src\**\*.h'` — **PowerShell's `**` is not a
      recursive glob.** It resolved exactly one directory level, covering 43 of 46
      headers and silently skipping `pch.h`, `dija.h` and everything under
@@ -506,6 +550,23 @@ at all, and a deploy that stops Explorer before copying gives it the previous bu
 Budgets set from measured p95/p99 on the reference machine, not invented: initial
 targets — pre-display added by Shell ≤ 15 ms p95 Explorer file context; taskbar
 hit-test added ≤ 2 ms; catalog refresh never on menu thread (hard gate, not budget).
+
+**Split into two numbers, 2026-08-25 (§09 R1.4).** One budget covering both
+Shell's own work and third-party handlers could not be met and could not be
+enforced, and `ProviderHealth.h` was tuned so that it never fired — so the
+document and the code stated incompatible targets and the code won silently.
+What replaces it:
+
+| | Target | Measured 2026-08-25, 37 handlers |
+|---|---|---|
+| **Shell's own pre-paint work** | ≤ 15 ms p95 | **~1.1 ms** — met with room to spare |
+| **Third-party provider work** | reported, ordered cheapest-first, capped per menu at `MENU_BUDGET_US`; a breach appears as `explorer.commands.over_budget` | 36.6 ms of a 37.7 ms menu |
+
+The second is deliberately not a pass/fail number on this branch: a handler's
+cost is the handler author's, Shell cannot interrupt a call already running, and
+the only lever that would lower it — condemning routine outliers rather than
+pathological ones — removes a menu item the user has today. That trade is
+costed in §09 R1.4 and belongs to the maintainer, not to a threshold edit.
 
 ## 5. Windows acceptance matrix (VM/manual; from A1§25, trimmed to what this plan changes)
 

@@ -89,13 +89,41 @@ namespace Nilesoft
 				Ok,
 				Pending,		// GetState answered E_PENDING
 				Failed,			// activation or a metadata call failed
-				Deferred,		// missed its first-paint deadline (docs/refactor/02 section 2a)
+
+				/*
+					Two ways to be left out, and they call for opposite actions.
+
+					DeferredSlow is a judgement about the handler: it has never
+					once answered quickly, so Shell stopped asking until the
+					re-probe interval comes round. The remedy is to quarantine
+					it, or to accept it.
+
+					DeferredBudget is a statement about the *menu*: this handler
+					was never judged at all, the menu simply ran out before
+					reaching it. The remedy is a larger budget or fewer
+					handlers, and quarantining the provider would be punishing
+					it for something it did not do.
+
+					They were one word until docs/refactor/09-remediation-plan.md
+					finding D. Collapsed, a report could not tell "this extension
+					is slow" from "your menu is full", and the Reliability Center
+					offered quarantine for both.
+				*/
+				DeferredSlow,
 
 				// The user quarantined it (docs/refactor/05 section 1b). A
-				// separate word from Deferred on purpose: "it has never once
-				// been quick" and "you told me to stop asking" are different
-				// answers, and only one of them is Shell's own judgement.
+				// separate word from the deferrals on purpose: "it has never
+				// once been quick" and "you told me to stop asking" are
+				// different answers, and only one of them is Shell's own
+				// judgement.
 				Quarantined,
+
+				// Appended rather than inserted beside DeferredSlow, because
+				// the numeric value is the wire format - see PerfExport.h,
+				// perf_export_result_name. Inserting would have renumbered
+				// Quarantined under a reader that still called 4 by its old
+				// name.
+				DeferredBudget,
 			};
 
 			struct PhaseRecord

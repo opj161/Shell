@@ -210,3 +210,88 @@ TEST(package_catalog, concurrent_callers_start_exactly_one_scan)
 
 	CHECK_EQ(claims.load(), 1);
 }
+
+// ---- the package half of the same snapshot ------------------------------
+//
+// The scan already enumerated every installed package and resolved every
+// install path in the course of finding packaged verbs, and then threw both
+// away - so PackageIndex enumerated the same registry again, on the menu
+// thread, to answer package.exists(). Publishing them together is what turns
+// that scan into a read. docs/refactor/09-remediation-plan.md R3.
+
+namespace
+{
+	std::vector<Nilesoft::Shell::PackageEntry> package_payload(const wchar_t *name,
+															   const wchar_t *path)
+	{
+		std::vector<Nilesoft::Shell::PackageEntry> out;
+		Nilesoft::Shell::PackageEntry entry;
+		entry.identity.full_name = name;
+		entry.identity.name = name;
+		entry.install_path = path;
+		out.push_back(std::move(entry));
+		return out;
+	}
+}
+
+TEST(package_catalog, a_publish_carries_packages_as_well_as_commands)
+{
+	CatalogStore store;
+
+	uint64_t token = 0;
+	CHECK(store.claim_refresh(1000, &token));
+	CHECK(store.publish(payload(0xAA),
+						package_payload(L"Microsoft.WindowsTerminal_1.0_x64__abc",
+										L"C:\\Program Files\\WindowsApps\\wt"),
+						1000, token));
+
+	auto snapshot = store.current();
+	CHECK(snapshot != nullptr);
+	CHECK_EQ(snapshot->packages.size(), (size_t)1);
+	CHECK(snapshot->packages[0].identity.full_name
+		  == L"Microsoft.WindowsTerminal_1.0_x64__abc");
+
+	// The path is the one the scan resolved. Asking GetPackagePathByFullName
+	// again on the menu thread was the cost this removes.
+	CHECK(snapshot->packages[0].install_path
+		  == L"C:\\Program Files\\WindowsApps\\wt");
+}
+
+TEST(package_catalog, both_halves_are_replaced_together_by_a_later_scan)
+{
+	CatalogStore store;
+
+	uint64_t token = 0;
+	CHECK(store.claim_refresh(1000, &token));
+	CHECK(store.publish(payload(0xAA), package_payload(L"One_1.0_x64__abc", L"C:\\one"),
+						1000, token));
+
+	auto first = store.current();
+
+	CHECK(store.claim_refresh(1000 + CatalogStore::DefaultTtlMs + 1, &token));
+	CHECK(store.publish(payload(0xBB), package_payload(L"Two_1.0_x64__abc", L"C:\\two"),
+						1000 + CatalogStore::DefaultTtlMs + 1, token));
+
+	auto second = store.current();
+
+	// The older snapshot is untouched - a menu holding it keeps a consistent
+	// view of both halves, which is the whole reason they share a publish.
+	CHECK_EQ(first->packages.size(), (size_t)1);
+	CHECK(first->packages[0].identity.full_name == L"One_1.0_x64__abc");
+	CHECK(second->packages[0].identity.full_name == L"Two_1.0_x64__abc");
+	CHECK_EQ(marker_of(second), 0xBBu);
+}
+
+// A discarded scan must not leave half of itself behind either.
+TEST(package_catalog, a_scan_invalidated_while_running_publishes_neither_half)
+{
+	CatalogStore store;
+
+	uint64_t token = 0;
+	CHECK(store.claim_refresh(1000, &token));
+	store.invalidate();
+	CHECK(!store.publish(payload(0xCC), package_payload(L"Late_1.0_x64__abc", L"C:\\late"),
+						 1000, token));
+
+	CHECK(store.current() == nullptr);
+}
