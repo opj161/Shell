@@ -82,6 +82,40 @@ TEST(hostprobe_args, an_option_cannot_be_swallowed_as_another_options_operand)
 	CHECK(!a.verifying());
 }
 
+// The third shape of the same defect, and the one automation produces rather
+// than a person: an empty operand satisfied `i + 1 < args.size()`, is not an
+// option, and was stored. `verifying()` is `!verify_dir.empty()`, so the run
+// verified against nothing and said nothing about it. Measured before the
+// guard: `--verify ""` -> 23 scenarios, 0 failures, exit 0, no `verified
+// against` line. An unset environment variable expands to exactly this.
+TEST(hostprobe_args, verify_with_an_empty_directory_is_a_usage_error)
+{
+	auto a = parse({ L"--verify", L"" });
+	CHECK(a.failed);
+	CHECK_EQ(a.exit_code, kUsageExitCode);
+	CHECK(!a.verifying());
+}
+
+TEST(hostprobe_args, record_with_an_empty_directory_is_a_usage_error)
+{
+	auto a = parse({ L"--record", L"" });
+	CHECK(a.failed);
+	CHECK_EQ(a.exit_code, kUsageExitCode);
+	CHECK(!a.recording());
+}
+
+// --shell is the one where an empty operand is worst: an empty path means the
+// probe loads nothing and every shell-namespace scenario silently exercises
+// whatever copy the registry names, which is the "two knowingly broken builds
+// passed every assertion" failure the harness was hardened against.
+TEST(hostprobe_args, shell_with_an_empty_path_is_a_usage_error)
+{
+	auto a = parse({ L"--takeover", L"--shell", L"" });
+	CHECK(a.failed);
+	CHECK_EQ(a.exit_code, kUsageExitCode);
+	CHECK(a.shell_dll.empty());
+}
+
 TEST(hostprobe_args, an_unknown_option_is_an_error_not_a_filter)
 {
 	auto a = parse({ L"--verfiy", L"src\\tests\\hostprobe\\fixtures" });

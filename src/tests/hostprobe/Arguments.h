@@ -100,6 +100,20 @@ namespace hostprobe
 						 + operand, kUsageExitCode);
 					return false;
 				}
+				if(operand.empty())
+				{
+					// The original defect's third shape, and the one automation
+					// produces. `--verify ""` satisfied `i + 1 < args.size()`
+					// and is not an option, so it was accepted and stored - and
+					// `verifying()` is `!verify_dir.empty()`, so verification
+					// silently switched itself off. Measured before this guard:
+					// `--verify ""` ran 23 scenarios, reported 0 failures, exited
+					// 0, and printed no `verified against` line. An unset
+					// variable in a script expands to exactly this.
+					fail(std::wstring(name) + L" needs a directory or path, and "
+						 L"was given an empty one", kUsageExitCode);
+					return false;
+				}
 				into = operand;
 				i++;
 				return true;
