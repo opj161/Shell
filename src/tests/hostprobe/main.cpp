@@ -370,6 +370,12 @@ int __cdecl wmain(int argc, wchar_t **argv)
 			::wprintf(L"  asking: %s\n", s.why);
 		::fflush(stdout);
 
+		// Between menus, not before the first: the previous one's teardown is
+		// what has to finish, and there is no previous one yet. See
+		// Probe::settle for the measurement that put this here.
+		if(ran > 1)
+			probe.settle(120);
+
 		auto r = run_scenario(s);
 
 		if(r.setup_failed)
@@ -385,6 +391,17 @@ int __cdecl wmain(int argc, wchar_t **argv)
 
 		::wprintf(L"  returned %d (GetLastError %lu)\n", r.returned, r.last_error);
 		::wprintf(L"%s", r.trace.c_str());
+
+		// The measurement, for the scenarios that took one. Not a verdict:
+		// see Result::render_popup_rect for why a size has to be read by a
+		// person rather than asserted against a number this file made up.
+		if(r.render_attempted && r.render_popups_seen == 1)
+			::wprintf(L"  measured  popup %ldx%ld at (%ld,%ld), %zu item(s)%s\n",
+					  r.render_popup_rect.right - r.render_popup_rect.left,
+					  r.render_popup_rect.bottom - r.render_popup_rect.top,
+					  r.render_popup_rect.left, r.render_popup_rect.top,
+					  r.render_items,
+					  r.render_submenu_opened ? L", submenu opened" : L"");
 
 		if(r.navigation_failed)
 		{
@@ -421,7 +438,19 @@ int __cdecl wmain(int argc, wchar_t **argv)
 				failures++;
 			}
 			else if(!diff(expected, r.trace))
+			{
+				// Said in the same words as every other failure, and naming the
+				// scenario, because this one is the reason a real transient has
+				// escaped capture twice. `diff` prints the offending line and
+				// nothing else, so a run that filtered its output for "FAIL"
+				// saw a failure *count* with no failure in it - which reads as
+				// a harness bug rather than as the thing it is. The scenario
+				// name matters too: the `[name]` header can be a screenful
+				// above by the time a trace has been printed.
+				::wprintf(L"    FAIL %s does not match its recorded baseline\n",
+						  s.name.c_str());
 				failures++;
+			}
 		}
 
 		::fflush(stdout);

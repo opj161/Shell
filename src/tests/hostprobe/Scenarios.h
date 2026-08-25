@@ -136,6 +136,15 @@ namespace hostprobe
 		size_t render_items{};
 		std::wstring render_detail;
 
+		// Printed rather than asserted, and the distinction is the point. The
+		// geometry expectation catches a popup and its items *disagreeing*;
+		// it cannot catch a measure pass that changed every number by the
+		// same amount, because the result is still internally consistent.
+		// Section 05.5a caught exactly that shape by hand - 239x1031 against
+		// 938x990 - so the reading is reported for a person to compare
+		// across builds, which is what that comparison needed.
+		RECT render_popup_rect{};
+
 		bool render_readable{};
 		bool render_order_matches{};
 		bool render_geometry_ok{};

@@ -192,6 +192,14 @@ namespace hostprobe
 			// two are alternatives rather than additions: the reader does its
 			// own navigation, to whichever item turns out to open a submenu.
 			bool read_menu{};
+
+			// Also steer into a submenu and read that. Only the placement
+			// scenario asserts on it, and opening one costs a navigation across
+			// a thirty-item menu plus the wait for a second popup - so the
+			// three scenarios that only read the root do not pay for it. Work a
+			// test does not assert on is not free: it is time, and it is one
+			// more thing that can perturb the reading.
+			bool read_submenu{};
 		};
 
 		// Runs one tracking call with the given script, and returns whatever the
@@ -223,6 +231,26 @@ namespace hostprobe
 
 			auto pt = away_from_cursor();
 
+			// The documented preamble, and the reason a run used to fail about
+			// once in four. TrackPopupMenu's remarks:
+			//
+			//   "when the current window is the foreground window, the second
+			//    time this menu is displayed, it appears and then immediately
+			//    disappears. To correct this, you must force a task switch to
+			//    the application that called TrackPopupMenu. This is done by
+			//    posting a benign message to the window or thread"
+			//   https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenu
+			//
+			// This harness shows twenty-three to thirty-one menus in a row from
+			// one window, so every one of them after the first is "the second
+			// time". When it bit, the menu vanished before the driver pressed
+			// anything: no WM_MENUSELECT at all, a return of 0, and a recorded
+			// trace that no longer matched - which read as a finding about
+			// Windows rather than as the harness failing to meet a contract.
+			// docs/refactor/08-handoff.md recorded that as an unexplained
+			// transient for three sessions.
+			::SetForegroundWindow(_owner);
+
 			::SetLastError(ERROR_SUCCESS);
 			int result = 0;
 			if(use_ex)
@@ -230,6 +258,11 @@ namespace hostprobe
 			else
 				result = ::TrackPopupMenu(menu, flags, pt.x, pt.y, 0, _owner, nullptr);
 			_last_error = ::GetLastError();
+
+			// The other half of the same remark, and it has to be after the
+			// call: the task switch it forces is what lets the *next* menu
+			// appear and stay. Posted, not sent, exactly as the sample shows.
+			::PostMessageW(_owner, WM_NULL, 0, 0);
 
 			if(thread)
 			{
@@ -253,6 +286,40 @@ namespace hostprobe
 		}
 
 		DWORD last_error() const { return _last_error; }
+
+		// Lets the previous menu finish going away before the next one opens.
+		//
+		// Measured, because the alternative was guessing: the recorded traces
+		// flake as a function of *how many menus this process has already
+		// shown*, not of which scenario. Twenty runs of four scenarios and
+		// eight runs of eight produced no mismatch at all; fourteen runs of
+		// twenty-three produced two. Nothing about the failing scenarios is
+		// special - the ones seen were select.plain.ex, select.nonotify.classic,
+		// select.returncmd_nonotify.classic and submenu.returncmd - and each of
+		// them passes indefinitely on its own.
+		//
+		// The harness opened the next menu the instant the previous tracking
+		// call returned, which no host does and which leaves teardown racing
+		// the next TrackPopupMenu. This pumps rather than sleeps, because the
+		// teardown that has to finish is message-driven: the menu window is
+		// destroyed on this thread, and a thread that is not pumping is a
+		// thread where that has not happened yet.
+		void settle(DWORD ms)
+		{
+			auto until = ::GetTickCount64() + ms;
+			for(;;)
+			{
+				MSG msg;
+				while(::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+				{
+					::TranslateMessage(&msg);
+					::DispatchMessageW(&msg);
+				}
+				if(::GetTickCount64() >= until)
+					return;
+				::Sleep(10);
+			}
+		}
 
 	private:
 		Probe() = default;
@@ -391,6 +458,37 @@ namespace hostprobe
 				_target_reached.store(true);
 		}
 
+		// Waits until this thread actually owns a visible popup window.
+		//
+		// This replaces a blind 800 ms sleep, and the blind wait was the second
+		// half of the transient. `_menu_up` is set by the earliest of several
+		// messages - but under TPM_NONOTIFY the only one of those that survives
+		// is WM_MENUSELECT, which does not arrive until something is
+		// *selected*, and nothing is selected until this driver presses a key.
+		// So for every NONOTIFY scenario the event never fired, the driver
+		// waited out its whole budget and then started pressing keys at a menu
+		// it had never confirmed was there. When the machine was slow enough
+		// that it was not, the keystrokes went nowhere, the menu closed
+		// untouched, and the recorded trace no longer matched.
+		//
+		// The window is the signal that needs no notifications at all. Matching
+		// on the owner thread rather than on any visible #32768 keeps another
+		// application's menu from answering for ours.
+		bool wait_for_our_menu(DWORD budget_ms)
+		{
+			for(DWORD waited = 0; waited < budget_ms; waited += 25)
+			{
+				for(auto window : visible_popup_windows())
+				{
+					if(::GetWindowThreadProcessId(window, nullptr) == _owner_thread)
+						return true;
+				}
+				if(::WaitForSingleObject(_menu_up, 25) == WAIT_OBJECT_0)
+					return true;
+			}
+			return false;
+		}
+
 		// Polls until a popup window exists, then a little longer, and returns
 		// what is on screen.
 		//
@@ -458,7 +556,7 @@ namespace hostprobe
 					break;
 				}
 			}
-			if(!index)
+			if(!index || !_script.read_submenu)
 				return;
 
 			_snapshot.submenu_attempted = true;
@@ -501,14 +599,14 @@ namespace hostprobe
 
 		void drive()
 		{
-			// A first sign of life, if there is one to wait for. Under
-			// TPM_NONOTIFY there is not: measured on this machine, that flag
-			// suppresses WM_ENTERMENULOOP, WM_INITMENU, WM_INITMENUPOPUP,
-			// WM_UNINITMENUPOPUP and WM_EXITMENULOOP, and the first thing the
-			// owner hears is a WM_MENUSELECT caused by a key this driver has not
-			// pressed yet. So the wait is short and the navigation below is what
-			// actually establishes that the menu is up.
-			::WaitForSingleObject(_menu_up, 800);
+			// Under TPM_NONOTIFY the owner hears nothing until something is
+			// selected - measured on this machine, that flag suppresses
+			// WM_ENTERMENULOOP, WM_INITMENU, WM_INITMENUPOPUP,
+			// WM_UNINITMENUPOPUP and WM_EXITMENULOOP - so there is no message
+			// to wait for and this used to wait out a fixed budget instead.
+			// Waiting for the window needs no notifications; see
+			// wait_for_our_menu for the transient that came of guessing.
+			wait_for_our_menu(2000);
 
 			if(_script.read_menu)
 			{

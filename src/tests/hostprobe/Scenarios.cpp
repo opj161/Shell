@@ -182,11 +182,12 @@ namespace hostprobe
 		// Chooses nothing. The driver reads the menu back through MSAA and
 		// opens whichever item turns out to have a submenu, so the destination
 		// is discovered on the machine rather than written down here.
-		Probe::Script read_composed_menu()
+		Probe::Script read_composed_menu(bool with_submenu)
 		{
 			Probe::Script s;
 			s.root = Target::none();
 			s.read_menu = true;
+			s.read_submenu = with_submenu;
 			s.keys = { Key::vk(VK_ESCAPE) };
 			return s;
 		}
@@ -590,7 +591,9 @@ namespace hostprobe
 		case ScriptKind::SelectDrivableCommand:
 			script = select_drivable(shell_menu.drivable_command()); break;
 		case ScriptKind::CancelWhatever:  script = cancel_whatever(); break;
-		case ScriptKind::ReadComposedMenu: script = read_composed_menu(); break;
+		case ScriptKind::ReadComposedMenu:
+			script = read_composed_menu(
+				s.expectation == Expect::ASubmenuOpensAgainstItsParent); break;
 		}
 
 		probe.clear_navigation_failure();
@@ -644,6 +647,7 @@ namespace hostprobe
 			result.render_items = snap.root.items.size();
 			result.render_submenu_attempted = snap.submenu_attempted;
 			result.render_submenu_opened = snap.submenu_opened;
+			result.render_popup_rect = snap.root.rect;
 
 			// One popup and no more. Two means another menu was open on this
 			// desktop, and then none of these readings is about Shell - see
