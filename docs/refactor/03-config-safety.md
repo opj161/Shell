@@ -283,6 +283,46 @@ same page: "Notifications may not be returned when calling
 FindFirstChangeNotification for a remote file system" — a configuration on a
 share may never notify, so nothing here is allowed to be the only way back.
 
+### 3b. It worked once per Explorer lifetime — found and fixed 2026-08-25
+
+The feature above shipped on 2026-08-24 and was verified: edit the installed
+`shell.nss`, watch the menu follow. That verification took **one** edit, and one
+edit was exactly how many the watcher could serve.
+
+`ConfigWatcher::start()` begins with `stop()`, because a reload can add or
+remove an import and the watch set has to be re-pointed — §3a's "re-pointed on
+every successful load" is the intended behaviour and the reason `start()` is
+restartable. But the caller doing the re-pointing is `Initializer::init`, which
+runs **as the watcher's own callback, on the watcher's own thread**. So `stop()`
+joined the thread that was asking. Joining the current thread is
+`resource_deadlock_would_occur`, so `join()` threw — and `stop()` had already
+signalled the stop event, so the run loop returned on its next wait.
+`load_generation`'s `catch(...)` swallowed the exception, `watching()` went on
+answering `true`, and nothing was logged.
+
+Every edit after the first was ignored until Explorer restarted.
+
+**Why four sessions of testing missed it.** The failure is silent in exactly the
+way `AGENTS.md` collects — no crash, no log line, a feature that simply stops —
+and thirteen unit tests covered this class while every one of them called
+`start()` from the *test's* own thread, which is the single caller the old code
+was correct for. It surfaced only because a later experiment needed two
+consecutive live edits and the second one did nothing.
+
+**The fix makes the request data.** `start()` called on the watcher's thread
+records the new file list and raises a flag; `run()` applies it through
+`rearm()`, which opens the new notification handles before closing the old ones,
+so a failure part-way leaves the watcher watching what it already was rather
+than watching nothing. `stop()` drops a re-point the thread never reached.
+
+Verified in a real Explorer: two full OFF→ON→OFF→ON rounds of a settings edit,
+each reaching the menu. `a_callback_that_re_points_the_watcher_does_not_kill_it`
+fails without it — and it had to be written twice, because the first version
+*terminated the suite* instead of reporting: the throw reaches the top of the
+watcher thread when nothing catches it. The callback now wraps `start()` the way
+`load_generation` does, which is both faithful and the difference between a test
+that reports and one that takes the process with it.
+
 **The residual risk, stated.** The reload runs `init()` on the watcher's own
 thread, as this section specifies. That is safe by the snapshot design — a whole
 new `CACHE` is built and a `shared_ptr` swapped under `_snapshot_mutex`, while
@@ -329,7 +369,11 @@ the watcher against real files, not the parse under injection.
 - [x] Fix config → new generation active without Explorer restart (watcher).
       Landed; see §3a. The manual Shift+Ctrl+right-click reload stays, because
       the watcher is best-effort and a configuration on a network share may
-      never notify.
+      never notify. **Corrected 2026-08-25 (§3b): this held for exactly one
+      edit per Explorer lifetime and then stopped silently, because the reload
+      callback re-pointed the watcher by joining its own thread. Fixed and
+      re-verified with repeated live edits, which is what the original
+      acceptance run should have been.**
 - [ ] Fresh machine with corrupt stock config → clean "never loaded" refusal + log
       (no half-menus).
 - [x] Suite pins all three states; watcher covered by a real-file integration

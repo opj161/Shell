@@ -564,6 +564,76 @@ today). Rendered as a pinned section with usage counters in ProgramData JSON. Pr
 local only. Scope M. Unlocks "recently used", "pinned actions" — genuine productivity
 stock Windows lacks.
 
+### 6a. As implemented (2026-08-25) — three departures, and a defect only a real menu could find
+
+`settings { favorites = N }` lifts up to N items into a section at the top of
+the menu. Unset and 0 both mean off, so **no configuration that exists today
+changes**, and off costs a menu nothing at all: no file is read, nothing is
+stat'd, and no identity is built.
+
+| | |
+|---|---|
+| `src/shared/MenuIdentity.h` | what an item is called across sessions |
+| `src/shared/Favorites.h` | the per-user file |
+| `Include/MenuFavorites.h` | which items are promoted, and in what order (pure) |
+| `Include/FavoritesStore.h` | the process-lifetime holder |
+| `shell.exe -favorites` | `list` / `pin` / `unpin` / `forget` |
+
+**Departure 1: a custom item is signed by title, not by its rule's location.**
+This section specifies "NSS rule id (file + rule ordinal hash)". That key is
+brittle against the thing this product's users do constantly — editing
+`shell.nss`. The config watcher (§03.3) exists because they do. A rule
+identified by where it sits in a file changes identity when a line is added
+above it, so inserting one item at the top of a configuration would silently
+un-pin everything below it, on the save. A title signature has the opposite
+failure — renaming loses the pin — which is both rarer and *legible*.
+
+Provenance is not made redundant by this and is not an alternative to it.
+`Include/RuleProvenance.h` records file and line on every rule for the
+inspector (§7), which wants to point at the rule a person should go and edit.
+That is a question about *this* menu, answered while the generation is live.
+Identity is a question about menus that have not happened yet.
+
+A packaged verb still signs by CLSID, and that half of the section was right:
+a handler retitles itself for the selection ("Compress to holiday.zip"), so a
+title is not its identity — and the CLSID is already what `-quarantine:add`
+takes.
+
+**Departure 2: `%LocalAppData%`, not ProgramData.** ProgramData needs elevation,
+which would make recording that somebody used a menu item an administrative act.
+The same correction §1b already made for quarantine, for the same reason.
+
+**Departure 3: the root level only.** A favourite is *moved*, not copied, and
+the candidates are the items already in the menu being composed. Reaching into a
+submenu to pull something out is `moveto`'s job; doing it here would mean
+materialising native submenus before first paint to find out what is in them,
+which is the eager walk §04.6a spent a whole item removing. Stated as a limit
+rather than left as an oversight.
+
+Three rules the planner refuses on, each named in `ColumnPlan`-style so
+"nothing happened" is distinguishable from "this menu had no favourites in it":
+a separator is never promoted, an entry that is neither pinned nor ever used is
+not evidence, and a section that would be the whole menu is not a section.
+
+**The defect real-Explorer testing found, and nothing else would have.**
+`Nilesoft::string::c_str()` returns **nullptr** for an empty string, and
+`std::wstring_view`'s pointer constructor calls `char_traits::length` on it. A
+top-level item's `path` is empty — so this faulted on the *first item of every
+menu*, and with the feature on the menu never appeared at all. No crash, no log
+line: the access violation happened inside the hook's SEH region, where
+`catch(...)` under `/EHsc` does not catch. It is in `AGENTS.md` now with the
+rest of that family.
+
+**Verified in a real Explorer, deployed** (Windows 11 26200.8875 x64):
+
+| | menu |
+|---|---|
+| `favorites` unset, settled | 30 items — `View \| Sort by \| Refresh …` |
+| `favorites = 2`, `native:Refresh` and a NanaZip CLSID pinned | **`Refresh \| NanaZip \| ———`** at the top, then the rest |
+
+Both origins promoted, the separator placed, the cap honoured, and two full
+OFF→ON round trips live with no restart.
+
 ## 7. Rule/context inspector
 
 Modifier-hover or context submenu on any item ("Why is this here?") dumping, from data
@@ -573,6 +643,61 @@ rule's `where=` against current selection, construction timing from ring. Implem
 is mostly formatting of existing state; the long pole is threading rule-provenance
 (file+line) through the parser — add during the §04 seam work while touching those very
 files. Converts NSS opacity into approachability (A1§21). Scope M.
+
+### 7a. As implemented (2026-08-25) — the tip is the surface, and one of the four fields is declined
+
+**Shift+Alt+right-click** composes the menu as usual and replaces every item's
+tooltip with where it came from. `Include/MenuInspector.h` is the formatting,
+which is pure and enumerated by `test_menu_inspector.cpp`;
+`ContextMenu::annotate_for_inspection` is the read.
+
+```text
+From Windows
+Rule shell.nss:12, modify.nss:88
+native:Refresh
+```
+
+**The tip, not a submenu.** This section offers "modifier-hover or context
+submenu". A "Why is this here?" submenu on every item would change what every
+menu contains, for every user, to serve a question almost nobody is asking at
+any given moment — and it would be a submenu on items that have one already. The
+tip is a surface this product already owns (`Include/Tip.h`), it is per-item, it
+appears on hover, and it costs a menu that is not being inspected nothing. Tips
+are forced on while inspecting: a configuration that switched them off has not
+thereby asked for Shift+Alt to do nothing.
+
+**The long pole was the parser, exactly as this section said**, and it landed
+first — `Include/RuleProvenance.h`, an index into `CACHE::files` plus a line, on
+every `NativeMenu` the parser builds. What this section did *not* anticipate is
+that the other half needed no work at all: `menuitem_t::native_items` already
+collects every `modify`/`moveto` rule that matched an item, while the rules are
+applied. "Matched modify/moveto rule locations" is therefore a read, not a pass.
+
+**The identity is printed whole**, because it is exactly the argument
+`shell.exe -favorites:pin` takes. §1c's lesson, applied before it could be
+re-learned: a diagnostic that names a thing differently from the command that
+acts on it names it for nobody.
+
+**One of the four fields is declined: "evaluation of the rule's `where=`
+against current selection".** The rules were evaluated during composition and
+only their *effect* was kept. Re-evaluating an expression in order to display it
+would run the configuration a second time, with a different `_this`, and could
+disagree with what the menu actually did — a wrong answer about why something
+happened is worse than no answer. The rule's location is given instead, which is
+where somebody goes to read the `where=` themselves. Timing is not per-item
+either: the ring records phases, and composing one item is not a phase.
+
+**Verified in a real Explorer**: `menu.inspected` appears in
+`shell.exe -report perf`, and the composed menu is byte-identical to the
+uninspected one — so the annotation runs over every real item, natives with
+empty paths and packaged verbs included, without changing composition.
+
+**Not verified by machine, and stated rather than implied:** that the tooltip
+*renders* the text on hover. MSAA does not read tips. The formatting is
+unit-tested and the gesture is now reported in `-report perf`, which is what a
+user can check; the visual half needs a person, the same way §02.4a's flicker
+wait does. The marker exists precisely because the one question a user of this
+feature could not otherwise answer is "did Shift+Alt register at all?"
 
 ## 8. Explicitly deferred (consensus)
 
@@ -590,5 +715,5 @@ A2§28, master plan §2.
 | MSAA exposure | screen-reader usable menus | — | **already satisfied**, see §3 |
 | Mnemonics/type-ahead | keyboard-complete menus | S | none — **both stages landed** |
 | Smart columns | giant menus stay usable | — | **landed**, see §5a |
-| Favorites/recents | personal muscle-memory layer | M | MenuModel |
-| Inspector | explainable configuration | M | seams + parser provenance |
+| Favorites/recents | personal muscle-memory layer | — | **landed**, see §6a |
+| Inspector | explainable configuration | — | **landed**, see §7a |

@@ -14,9 +14,9 @@ followed, and the departure is deliberate: work is sequenced by **what can be
 proved on this machine**, taking small verified defects first and large
 speculative pieces last, so every commit ships.
 
-Six rules have held throughout and are worth keeping. A seventh (rule 6) was
-learned late, by an audit that found this document had quietly stopped being
-true:
+Six rules have held throughout and are worth keeping. Rule 6 was learned late,
+by an audit that found this document had quietly stopped being true, and rule 8
+later still — by two defects that only a deployed build could show:
 
 1. **Measure before designing.** Every latency item in this branch was probed
    first, and in six cases the number changed the design — three times it
@@ -31,12 +31,17 @@ true:
 3. **Cite the contract, quote the passage.** Both in the code and in the commit
    message. Where documentation is silent, the harness measures it and the
    conclusion is labelled as measurement, not contract.
-4. **Declining is a result, and it gets written down.** Four items in this
-   branch were measured and *not* built. Each is recorded with its numbers in
-   the plan document that proposed it, so it is not re-proposed by the next
-   reader: the icon cache (§04.7), `MSAAMENUINFO` (§05.3), the taskbar
-   rectangle model (§02.5a), and making `priority` authoritative over the
-   `TreatAs` redirect (§01.9b).
+4. **Declining is a result, and it gets written down.** Ten items in this
+   branch were measured or reasoned about and *not* built. Each is recorded
+   with its numbers in the plan document that proposed it, so it is not
+   re-proposed by the next reader: the icon cache (§04.7), `MSAAMENUINFO`
+   (§05.3), the taskbar rectangle model (§02.5a), making `priority`
+   authoritative over the `TreatAs` redirect (§01.9b), the interception-backend
+   interface and its health check (§01.9c), the six-state popup lifecycle
+   (§01.6a), catalog persistence (§02.1 step 3), lazy large-selection metadata
+   and per-session memoization (§04.7), and the inspector's live `where=`
+   evaluation (§05.7a). Declining is a *result* only when the reason is
+   recorded; without it, it is just something nobody did.
 5. **Three platforms green before every commit.** `.\build.ps1 -Platform all`,
    0 warnings, invariants clean.
 6. **Audit this document against the plan, not against itself.** Added
@@ -51,14 +56,23 @@ true:
    measure something else — a deploy that landed one restart late, and registry
    values Explorer could not see. A third arrived on 2026-08-25 — a menu read
    seconds after an Explorer restart measures Explorer settling, and made a
-   no-op change look like it had rewritten the menu. All three are in
-   `AGENTS.md` under "Three ways an experiment can test something other than
-   what you think", because each produced a result that read as a finding
-   about Windows or as a regression.
+   no-op change look like it had rewritten the menu. All are in `AGENTS.md`
+   under "Three ways an experiment can test something other than what you
+   think" — five entries now, the name kept because it is what people look
+   for — because each produced a result that read as a finding about Windows
+   or as a regression.
+8. **Deploy it, drive it, and read the menu back.** Added 2026-08-25, and it is
+   the rule this session paid for twice. Both of its most valuable findings
+   were defects in work already marked done, and both surfaced while verifying
+   *something else* in a real Explorer: a config watcher that served exactly one
+   reload per process (§03.3b) and a `std::wstring_view` built from a null
+   `c_str()` faulting on the first item of every menu (§05.6a). Neither had a
+   crash, a log line, or a failing test, and 32,800 unit checks could not have
+   found either.
 
 ## 2. What has landed on this branch
 
-Forty-seven commits, `940ff6a`..HEAD. The table lists the ones that changed a
+Eighty commits, `a3431df`..HEAD. The table lists the ones that changed a
 decision or fixed something; pure documentation commits are omitted.
 
 | Commit | What |
@@ -106,6 +120,9 @@ decision or fixed something; pure documentation commits are omitted.
 | `f465242` | **Seam step 7b** — the layer compositing follows it, 400 more. `ContextMenu.cpp` 7,542 → 5,852 |
 | `4e81381` | **The harness transient** — ours, and a documented contract. 26 clean runs against 2-in-14 |
 | `32aaaa4` | **Dead code the split found** — `crop_image` and a `get_item` overload, called by nobody |
+| `e6164ad` | **Rule provenance** — every rule records the file and line it was written on. §05.7's long pole |
+| `de0216f` | **The config watcher died after one reload** — `start()` joined its own thread. Live editing had worked once per Explorer lifetime since it shipped |
+| `7ab9f42` | **Favorites and the inspector** — backlog item 19, and the last one. §05.6a, §05.7a |
 
 ### The measurements that changed decisions
 
@@ -143,6 +160,8 @@ decision or fixed something; pure documentation commits are omitted.
 | A menu item's `get_accChild` returns the submenu popup **with `accLocation` (0,0 0x0)**, open or closed | The documented MSAA descent cannot answer where anything was placed. Geometry comes from each popup's own `#32768`; parent and child are told apart by which window appeared. §08.3.8 |
 | `get_accName` strips `&` and keeps the accelerator; a separator answers **S_FALSE with a null BSTR** | Comparing MSAA against an HMENU means stripping the title and nothing else, and a reader that tests only `FAILED(hr)` turns a separator into a nameless item |
 | `native.modify_rules` is **0.1 ms across eleven consecutive menus**, for ~240 rule evaluations — about **0.4 us** each | Per-session memoization (§04.7) declined on its own gate. The purity whitelist is the real cost: memoizing something impure is a stale menu item, silently |
+| A live configuration edit reaches the menu; **the second one never does** | The config watcher had been dying after exactly one reload per Explorer lifetime since it shipped. It re-points by calling `start()` from its own callback, and `start()` joined its own thread. §03.3b |
+| `favorites = 2` with two identities pinned: **`Refresh \| NanaZip \| ———`** at the top of a real Explorer's menu, both origins | §05.6's pinned section works, and the identity scheme matches items a menu actually composed rather than only ones a test made up |
 
 ## 3. Where to pick up
 
@@ -150,9 +169,11 @@ Ordered by user value, with what is known about each. Everything above §3.6 has
 now landed, and so has everything §3.6 listed as remaining except one item.
 
 **If you read nothing else: §3.6 is the tally, and §3.9 is what to do next.**
-Item 17 is closed — every seam step has landed — so the backlog is eighteen
-closed, one partial and **one open**, and the open one is a capability rather
-than a refactor.
+**The twenty-item backlog is closed.** Item 19 — favorites and the rule
+inspector — landed on 2026-08-25, so the tally is nineteen closed and one
+partial (item 9's conditional attach, deferred with reasons that still hold).
+What is left is a short list of named, deliberate exceptions rather than a
+backlog; §3.9 has it.
 
 ### 3.1 A real *file* context menu in a third-party host — smaller than it looks
 
@@ -285,30 +306,44 @@ and `shell.exe -check` now says so. Making `TreatAs` "authoritative when
 healthy" — §9's original bullet — would have been the same behaviour with a
 different name.
 
-### 3.6 What is genuinely left
+### 3.6 The backlog, item by item
 
 This section said "three things" and was audited on 2026-08-24 against the
 master plan's own twenty-item backlog rather than against its own memory. That
 found one item it had lost entirely and one prerequisite it had assigned to the
 wrong piece of work. Both corrections are below, in place.
 
-The tally against `00-master-plan.md` §3, after the second 2026-08-25 session:
-**eighteen items closed** — built, or measured and declined with the numbers
-written down — **one partial**, **one open**.
+The tally against `00-master-plan.md` §3, after the third 2026-08-25 session:
+**nineteen items closed** — built, or measured and declined with the numbers
+written down — and **one partial**.
 
 | | Items |
 |---|---|
-| closed | 1–8, 10–18, 20 |
+| closed | 1–8, 10–20 |
 | partial | 9 (conditional attach deferred, §01.9a) |
-| open | 19 (favorites, inspector) |
+| open | — |
 
-**Item 19's gate was stated wrongly for several sessions and is now corrected.**
-This section used to say favorites and the inspector were both gated on item 17
-as a whole, which put them behind the presenter. They are not: §05.6 needs
-origin-stable identity from `MenuModel`, which landed as step 6, and §05.7 needs
-that plus file-and-line provenance threaded through the parser. **Neither needs
-seam step 7.** So the last open capability item is unblocked today, and the one
-large piece of work left is architectural hygiene rather than a gate.
+**Item 19 closed 2026-08-25**: parser provenance (`e6164ad`), then favorites and
+the inspector (`7ab9f42`). Its gate had been stated wrongly for several sessions
+and the correction is worth keeping, because it is the shape of mistake rule 6
+exists for: this section used to say both halves were gated on item 17 *as a
+whole*, which put them behind the presenter. They were not. §05.6 needed
+origin-stable identity from `MenuModel` (step 6) and §05.7 needed that plus
+provenance through the parser; neither needed step 7. The item was unblocked for
+a session before anyone noticed.
+
+**Two things came out of building it that are not about it**, and both are the
+reason this kind of work is done against a real Explorer:
+
+- **Item 16 was not as done as the table said.** Verifying the pinned section
+  needs two consecutive live configuration edits, and the second one never
+  arrived: the config watcher had been dying after exactly one reload per
+  Explorer lifetime since it shipped, silently, with `watching()` still
+  answering true. §03.3b. The original acceptance run made one edit.
+- **§05.6's identity scheme was wrong for this product's own users.** It keys a
+  custom item on where its rule sits in a file; for people who edit `shell.nss`
+  constantly — which is who the config watcher exists for — inserting a line at
+  the top un-pins everything below it. §05.6a records the departure.
 
 That tally was itself wrong for a few hours on 2026-08-25 — it said seventeen
 closed, counting item 20 whose middle third nobody has looked at, and counting
@@ -316,8 +351,10 @@ item 17 as wholly open after step 5 had landed. Rule 6 in §1 exists for exactly
 this and was written in the same session that then broke it; the fix is that a
 tally now names the item numbers rather than stating a count.
 
-**What is left is now genuinely one thing and its consequence.** Everything
-else in this section is recorded as landed or declined.
+**Nothing in this section is open any more.** Everything below is recorded as
+landed or declined, and is kept because the reasoning is what stops each one
+being re-proposed. §3.9 lists what remains, which is a set of named exceptions
+rather than a backlog.
 
 **The Reliability Center window (§05.1) — landed.** `shell.exe -reliability`:
 the providers every host asked, merged and sorted slowest first, with
@@ -501,6 +538,11 @@ hand:
 - `shell.exe -reliability` is now the fastest way to see every provider a
   machine's menus asked, merged across hosts and sorted slowest first. Faster
   than reading a `-report perf` when the question is "which extension".
+- **Shift+Alt+right-click annotates every item with where it came from**, and
+  `menu.inspected` in `-report perf` says the gesture registered. When a menu
+  contains something you did not expect, that is faster than reading the
+  configuration - it names the file and line of every rule that touched the
+  item. Section 05.7a.
 
 Added 2026-08-25, because the largest defect on this branch was found with them:
 
@@ -607,44 +649,76 @@ forever. `EndMenu` ends "the calling thread's active menu" and the reader is not
 that thread, so the documented alternative — posting `WM_CANCELMODE` to the
 owner — is the one to use.
 
-### 3.9 The next real piece of work
+### 3.9 What is left, now that the backlog is closed
 
-**Item 19 — favorites (§05.6) and the rule inspector (§05.7).** The last open
-backlog item, and no longer blocked by anything. Take them in that order;
-favorites is the smaller and needs nothing new.
+**The twenty-item backlog of `00-master-plan.md` §3 is closed.** Nineteen items
+built or measured-and-declined with their numbers written down, one partial.
+That is not the same as "there is nothing to do", and the difference matters to
+whoever reads this next: what follows is a set of **named, deliberate
+exceptions**, each with the reason it is where it is. None of them is a task
+nobody has looked at.
 
-**Favorites needs no new machinery, which is the point of seam step 6.**
-§05.6 asks for identity that survives a session and is not a session wID:
-an `IExplorerCommand`'s canonical CLSID, an NSS rule's identity, and a native
-item's normalised parent-path-plus-title signature. `MenuModel` already
-records the first two per composed item, with `ItemOrigin` saying which — see
-`Include/MenuModel.h`. Two things to decide rather than assume:
+**Sorted by what a reader can actually act on here.**
 
-- **Natives are deliberately not in `MenuModel`**, and favorites wants them.
-  The header says why the table is scoped to what Shell owns and what adding
-  them would change (`owns_item`, and therefore which items a keystroke can
-  match). Widening it is a real decision with a measurable consequence, not a
-  field to add quietly.
-- §05.6 proposes ProgramData JSON. Prefer `%LocalAppData%`, for the reason
-  §05.1b already established for quarantine: ProgramData needs elevation, and
-  this is a per-user preference.
+#### Buildable on this machine
 
-**The inspector's long pole is the parser, not the menu.** §05.7 says so and
-it is still true: file-and-line provenance has to be threaded through the
-parser, and `Parser::LoadedFiles()` already proves that recording per-file
-facts there is cheap. Everything else it needs — origin, matched rule, timing
-— the session already holds.
+- **`Win32MenuPresenter` as a named class.** The only architectural item left.
+  Seam step 7 moved 1,606 lines of painting and layer compositing into
+  `MenuPresenter.cpp` and stopped there on purpose: naming the class needs an
+  interface onto `ContextMenu`'s private state, and that interface could not be
+  designed honestly until the dependency was visible. It is now — whatever
+  `MenuPresenter.cpp` reaches for *is* the presenter's surface, readable off one
+  file instead of inferred from seven thousand lines. This is design work over
+  that list, not moving. §3.6 has the two mechanics a split hits.
+- **The `where=` half of the inspector**, if a way is found to show what a rule
+  evaluated to *without re-evaluating it*. §05.7a declines re-evaluation because
+  it would run the configuration a second time with a different `_this` and
+  could disagree with what the menu actually did. Capturing the verdict during
+  composition, behind the inspector's own gate, is the shape that would work;
+  nobody has costed it.
 
-**Also open, and smaller than either:**
+#### Needs a machine state this one is not in
 
-- §03.5's two untested acceptance criteria (a shadow whose manifest fails
-  verification being refused; a fresh machine with a corrupt stock config
-  reaching the clean never-loaded refusal). Both need a machine state this one
-  is not in.
-- The `Win32MenuPresenter` class itself — see the step 7 entry in §3.6. Design
-  work over a surface that is now readable off one file.
-- Item 9's conditional attach, deferred with reasons in §01.9a. Nothing has
-  changed those reasons.
+- **§03.5's two untested acceptance criteria**: a shadow whose manifest fails
+  verification being refused, and a fresh machine with a corrupt stock config
+  reaching the clean never-loaded refusal.
+- **The MSI upgrade matrix.** `AGENTS.md` has the one row that *is* verifiable
+  here and how to run it.
+
+#### Needs a person at the machine
+
+- **Whether any shipping third-party host takes the non-`RETURNCMD` path**
+  (§3.1). The code path is covered by
+  `takeover.a_native_item_replays_its_own_identifier` against a real borrowed
+  shell menu; what is open is a survey question about other people's software.
+- **The visual half of the flicker wait** (§02.4a). Its cost is 7 ms and its
+  benefit is a transient a screenshot cannot show.
+- **That the inspector's tooltip renders** (§05.7a). MSAA does not read tips, so
+  the machine can confirm the gesture registered — `menu.inspected` in
+  `shell.exe -report perf` — and that composition is unchanged, but not what the
+  tip looks like.
+
+#### Deferred with reasons that still hold
+
+- **Item 9's conditional attach** (§01.9a). Two reasons: the detour is already
+  installed only inside `if(rt.loader.explorer)`, so the blast radius is
+  narrower than the plan assumed; and the policy does not exist yet when the
+  decision would be made, so it would mean installing an inline detour from a
+  background thread while menus are open. Revisit alongside `TakeoverRouter`.
+- **Everything in §3.6 and §3.3 recorded as declined.** Each is there with its
+  measurement precisely so it is not re-proposed: the icon cache, `MSAAMENUINFO`,
+  the taskbar rectangle model, `priority` over `TreatAs`, the interception
+  interface and its health check, the six-state lifecycle machine, catalog
+  persistence, lazy large-selection metadata, and per-session memoization.
+
+**One habit to carry forward, because it earned its keep twice in the last
+session.** Both of that session's most valuable findings were defects in work
+that was already marked done, and both surfaced while trying to *verify
+something else* in a real Explorer: the config watcher serving exactly one
+reload per process (§03.3b), and a `std::wstring_view` built from a null
+`c_str()` faulting on the first item of every menu. Neither had a crash, a log
+line, or a failing test. The unit suite is 32,800 checks and could not have
+found either. **Deploy it, drive it, and read the menu back.**
 
 ## 4. Things that will bite
 
@@ -715,6 +789,22 @@ facts there is cheap. Everything else it needs — origin, matched rule, timing
   design and serialised by `_reload_mutex`. It has now been exercised inside a
   real `explorer.exe` — editing the installed `shell.nss` under elevation and
   watching the menu follow — but only for the `priority` setting.
+- **`string::c_str()` answers `nullptr` when the string is empty, and a
+  `std::wstring_view` built from one faults.** `return valid() ? m_data :
+  nullptr`, and `wstring_view`'s pointer constructor calls
+  `char_traits::length` on what it is handed. The strings that are empty are
+  not exotic: a top-level menu item's `path` is, so this took out the *first
+  item of every menu* the moment anything read it. No crash and no log line —
+  the access violation lands inside the hook's SEH region, where `catch(...)`
+  under `/EHsc` does not catch — so the symptom is a menu that never appears.
+  `MenuIdentity::view` is the guard; `AGENTS.md` has the family.
+- **The config watcher re-points itself from its own callback.**
+  `ConfigWatcher::start` is called by `Initializer::init`, which *is* the
+  watcher's callback, on the watcher's thread. It used to begin with `stop()`,
+  which joined the calling thread — `resource_deadlock_would_occur`, thrown,
+  swallowed by `load_generation`'s `catch(...)`, with the stop event already
+  signalled. Live editing worked once per Explorer lifetime. Do not reintroduce
+  a `stop()` on that path; §03.3b and `rearm()` are the shape that works.
 - **`string::Copy(dst, src, count)` writes `count + 1` slots** — count
   characters and *then* a terminator. Passing the capacity overruns by one. Same
   family as the `release(n - 1)` shape.
@@ -793,7 +883,7 @@ facts there is cheap. Everything else it needs — origin, matched rule, timing
 .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
 ```
 
-At the time of writing: **32,623 checks / 0 failures** on x64 and x86, arm64
+At the time of writing: **32,837 checks / 0 failures** on x64 and x86, arm64
 builds and packages, 0 warnings, `check-invariants: OK (10 rules, 0 deferred)` -
 both formerly-deferred rules turned on with their phase, as section 06.3
 intended - **23 harness scenarios native and 31 through takeover**, 0 failures.
@@ -804,14 +894,20 @@ single failure untrustworthy was diagnosed and fixed on 2026-08-25 (section 4),
 so **a harness failure is a finding again** rather than something to re-run
 until it goes away. A run takes about 24 s native and 32 s through takeover.
 
-`shell.exe -check`, `-report perf` and `-quarantine` are the three pieces of
-this branch a user drives directly:
+`shell.exe -check`, `-report perf`, `-quarantine` and `-favorites` are the
+pieces of this branch a user drives directly:
 
 ```powershell
 .\src\bin\x64\shell.exe -check:path\to\shell.nss
 .\src\bin\x64\shell.exe -report perf
 .\src\bin\x64\shell.exe -quarantine:add {CAE3F1D4-7765-4D98-A060-52CD14D56EAB}
+.\src\bin\x64\shell.exe -favorites:pin "native:Refresh"
 ```
+
+`-favorites` is the fourth. It lists what has been recorded and pins or releases
+one; promotion into the menu needs `settings { favorites = N }` as well, and
+without that setting the list is only a record. An identity contains spaces, so
+quote it.
 
 `-check` with no argument works now too, and reads the `shell.nss` beside the
 exe it was run from. That is **not** the same as "whatever this machine would
@@ -855,6 +951,31 @@ Added 2026-08-24, same method:
   could never have covered it;
 - **bare `-check`** from the installed directory now exits 0 rather than
   reporting no configuration at all.
+
+Added 2026-08-25, same method:
+
+- **favorites** (section 05.6a) — with `favorites` unset the settled desktop
+  menu reads 30 items beginning `View | Sort by | Refresh`; with
+  `settings { favorites = 2 }` and `native:Refresh` plus a NanaZip CLSID
+  pinned it reads **`Refresh | NanaZip | ———`** at the top and the rest below.
+  Both origins promoted, the separator placed, the cap honoured. Two full
+  OFF-to-ON round trips live, with no restart;
+- **the config watcher, repeatedly** (section 03.3b) — those round trips are
+  the verification. Before the fix the first edit reached the menu and no later
+  one did, for the life of the process;
+- **the inspector** (section 05.7a) — `menu.inspected` appears in
+  `shell.exe -report perf` when the menu is raised with Shift+Alt held, and the
+  composed menu is byte-identical to the uninspected one. What the *tooltip*
+  looks like is not machine-readable and was not read.
+
+One methodological note, because it nearly produced two false findings in one
+session. Menus read within a minute of an Explorer restart differed in both
+item count and native ordering — 30 items with two Directory Opus entries in
+one reading, 27 without them in another, both stable across three consecutive
+reads. Only readings taken from the *same settled Explorer session*, toggled
+back and forth, are comparable; the item count is not the signal, the position
+of the promoted block is. That is `AGENTS.md`'s third trap, met again in a
+form where "wait for two identical readings" was not by itself enough.
 
 **Still unverified there:** whether any real third-party host takes the
 non-`RETURNCMD` path (section 3.1 — the code path itself *is* covered, by

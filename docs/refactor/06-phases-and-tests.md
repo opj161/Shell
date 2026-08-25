@@ -120,6 +120,10 @@ in each is stated below rather than in a separate tracker.
 | ✅ | Seam step 6 (§04.4) — `MenuModel`, the origin table §01.4 specified. Three parallel vectors held one fact between them and `_main_popup` was read by nothing at all | 4 |
 | ✅ | Seam step 7 (§04.4) — the painting and the layer compositing leave `ContextMenu.cpp` for `MenuPresenter.cpp`, 1,606 lines, both halves verified byte-identical. 7,542 → 5,852. **Closes item 17.** Naming the `Win32MenuPresenter` class remains, and is design work over a surface the split has just made readable | 4 |
 | ✅ | The harness transient — diagnosed and fixed. A documented `TrackPopupMenu` contract the harness never met, a blind wait `TPM_NONOTIFY` makes impossible, and no settle between menus. 26 clean runs against 2-in-14. Found only once a fixture mismatch started printing `FAIL` like every other failure | 0 |
+| ✅ | **Rule provenance** (§05.7) — every `NativeMenu` records the file and line it was written on; `CACHE::files` carries the list into the generation. The inspector's long pole, and half of what favorites needed | 5 |
+| ✅ | **Favorites** (§05.6, §05.6a) — `settings { favorites = N }` lifts pinned and most-used items into a section at the top. Per-user file, `shell.exe -favorites`. Verified in a real Explorer: `Refresh \| NanaZip \| ———` promoted, both origins, cap honoured. Three departures from the plan, each with its reason | 5 |
+| ✅ | **Rule inspector** (§05.7, §05.7a) — Shift+Alt+right-click puts each item's origin, matched rule locations and identity in its tooltip. One of the plan's four fields declined: re-evaluating `where=` to display it could disagree with what the menu did. **Closes item 19, and the backlog** | 5 |
+| ✅ | **The config watcher died after one reload** (§03.3b) — `start()` re-pointing from its own callback joined its own thread, threw, and left the stop event signalled. "Save shell.nss and the menu follows" had worked once per Explorer lifetime since it landed. Found by needing two consecutive live edits | 3 |
 
 ### The 2026-08-24 backlog audit
 
@@ -129,10 +133,28 @@ backlog it tracks. Reconciled item by item against `00-master-plan.md` §3:
 **three partial** (item 9 conditional attach, item 14 the window, item 20
 memoization and lazy selection), **three open** (items 8, 17, 19).
 
-Item 8 was closed the same day (§01.9c). By the end of 2026-08-25 the tally is
-**eighteen closed** (items 1–8, 10–18, 20), **one partial** (9) and **one
-open** (19). `08-handoff.md` §3.6 names what is partial about each, and §3.9
-says what to do next — item 19, which seam step 6 unblocked.
+Item 8 was closed the same day (§01.9c). By the end of the second 2026-08-25
+session the tally was **eighteen closed** (items 1–8, 10–18, 20), **one
+partial** (9) and **one open** (19).
+
+**Item 19 closed in the third 2026-08-25 session**, which closes the backlog:
+favorites (§05.6a) and the rule inspector (§05.7a), over the parser provenance
+that landed first. The tally is now **nineteen closed** (items 1–8, 10–20) and
+**one partial** (9 — conditional attach, deferred with reasons in §01.9a that
+nothing has changed). `08-handoff.md` §3.6 is the running version of this.
+
+Two things worth carrying forward from how item 19 landed, because neither is
+about the feature:
+
+- **Building it found a defect in something already shipped.** Verifying the
+  pinned section needed two consecutive live configuration edits, and the second
+  never arrived — the config watcher had been dying after exactly one reload per
+  Explorer lifetime since it landed (§03.3b). Item 16 had been marked done on a
+  test that made one edit.
+- **The plan was wrong about one thing in a way only the product's own usage
+  shows.** §05.6 keys a custom item's identity on where its rule sits in a file;
+  for an audience that edits `shell.nss` constantly, that un-pins everything
+  below an inserted line. §05.6a records the departure and the reason.
 
 Item 20 is closed by measurement rather than by building, in all three of its
 parts: the icon cache was declined in §04.7; the lazy large-selection item on

@@ -246,6 +246,20 @@ presence of config-driven items (`New+`, `Terminal`, `File manage`, `Go To` in
 the stock configuration) is the cheap proof, because their absence means you are
 diffing Windows' own menu against Shell's.
 
+**A fifth, added 2026-08-25: a test that only ever calls a function the way the
+test calls it proves nothing about the way the product calls it.**
+`ConfigWatcher::start` is re-entered *by its own reload callback, on its own
+thread* — that is the shipping path, because every successful load re-points the
+watch set. `start()` began with `stop()`, which joined the calling thread;
+`join()` on the current thread is `resource_deadlock_would_occur`, so it threw,
+and the stop event was already signalled. The watcher died after exactly one
+reload, `watching()` went on answering true, and `load_generation`'s `catch(...)`
+swallowed the exception. Thirteen tests covered this class; every one of them
+called `start()` from the test's own thread, which is the single caller the code
+was correct for. It was found by editing a real `shell.nss` twice and noticing
+only the first edit arrived. **When a function is re-entered from a callback it
+owns, write the test that calls it from the callback.**
+
 **A fourth, added 2026-08-25: a failure reported in different words from every
 other failure is a failure nobody can find.** The trace harness failed about one
 run in four for three sessions and was written up twice as an unexplained
@@ -374,6 +388,23 @@ is `'\0'`, and `empty()` is false. Every length-driven caller downstream is then
 wrong, and nothing crashes to tell you. Guard the zero case before subtracting.
 This shape was in four places at once (`Registry.cpp` ×3, `Environment.h`,
 `Windows.h`, `FuncExpression.cpp`); `rg 'release\(.*-\s*1\)'` finds them.
+
+**`string::c_str()` answers `nullptr` for an empty string, and a
+`std::wstring_view` built from one is undefined.** `return valid() ? m_data :
+nullptr` (`System/Text/string.h`), and `std::wstring_view`'s pointer constructor
+calls `char_traits::length` on whatever it is given — so `wstring_view(s.c_str())`
+faults on every empty `s`. Nothing warns: it compiles, `/analyze` says nothing,
+and it reads like the most ordinary line in the file.
+
+What makes this worse than it sounds is which strings are empty. A top-level
+menu item's `path` is empty, so `signature_of(item->path.c_str(), …)` faulted on
+the *first item of every menu* — not an edge case, the common case. The symptom
+was a menu that never appeared, with `explorer.exe` still running and nothing in
+any log, because the access violation happened inside the hook's SEH region and
+`catch(...)` under `/EHsc` does not catch SEH. Convert through a helper that maps
+null to an empty view (`MenuIdentity::view`), or take `const wchar_t *` and check.
+Same family as `release(n - 1)` and the `MB_*`/`WC_*` flags: a silent wrong
+answer from a line that looks right.
 
 **Windows string APIs that will not terminate for you.** Two separate traps,
 both of which had been live in the tree for years:
