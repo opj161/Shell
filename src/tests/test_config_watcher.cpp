@@ -271,6 +271,132 @@ TEST(config_watcher, restarting_replaces_the_previous_watch)
 	watcher.stop();
 }
 
+/*
+	The reload callback re-points the watcher, and that must not kill it.
+
+	This is the shape the shipping code actually has and the one every other
+	test in this file misses. `Initializer::on_config_file_changed` calls
+	`init()`, a successful load calls `start_watching(parser->LoadedFiles())` -
+	because an edit can add or remove an import - and that lands in `start()`
+	**on the watcher's own thread**.
+
+	`start()` used to call `stop()`, which joins that same thread. The standard
+	makes joining the current thread `resource_deadlock_would_occur`, so
+	`join()` throws; but `stop()` had already signalled the stop event, so the
+	run loop returned on its next wait. The exception was caught by
+	`load_generation`'s `catch(...)` and the watcher was simply gone -
+	`watching()` still answering true, no log line, nothing.
+
+	The symptom was one reload per Explorer lifetime. Found in a real Explorer
+	on 2026-08-25, by editing the installed shell.nss twice and noticing only
+	the first edit reached the menu; every test here called `start()` from the
+	test's own thread, which is the one caller the old code was correct for.
+
+	Two reloads is the whole assertion. One is what the defect produced.
+*/
+namespace
+{
+	ConfigWatcher *g_repointing_watcher = nullptr;
+	std::vector<std::wstring> g_repointing_files;
+	std::atomic<bool> g_repoint_threw{ false };
+
+	void reload_and_repoint()
+	{
+		g_reloads.fetch_add(1, std::memory_order_release);
+		if(!g_repointing_watcher)
+			return;
+
+		// Wrapped for the same reason Initializer::load_generation wraps its
+		// whole body in catch(...): without it the throw described below
+		// reaches the top of the watcher thread and takes the process with it,
+		// so the suite would terminate instead of reporting - the flaw
+		// docs/refactor/08-handoff.md section 1 rule 2 exists to catch. In the
+		// DLL that catch is what made the defect invisible; here it is what
+		// makes it legible.
+		try
+		{
+			g_repointing_watcher->start(g_repointing_files, &reload_and_repoint);
+		}
+		catch(...)
+		{
+			g_repoint_threw.store(true, std::memory_order_release);
+		}
+	}
+}
+
+TEST(config_watcher, a_callback_that_re_points_the_watcher_does_not_kill_it)
+{
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	ConfigWatcher watcher;
+	g_reloads.store(0);
+	g_repoint_threw.store(false);
+	g_repointing_watcher = &watcher;
+	g_repointing_files = { file };
+
+	CHECK(watcher.start({ file }, &reload_and_repoint));
+
+	// Every write here is a different length on purpose. The stamp folds the
+	// file size into the write time, so two same-sized writes landing inside
+	// one file-time tick stamp identically and read as "nothing changed" -
+	// which is a flake in the test rather than a finding about the watcher, and
+	// it cost this test its first run.
+	tmp.write(L"shell.nss", "item(title='BB')\r\n");
+	CHECK_MSG(wait_for_reloads(watcher, 1, 8000), "the first save reaches the watcher");
+
+	// The one that used to be impossible. Long enough after the first that the
+	// debounce cannot fold the two together.
+	::Sleep(ConfigWatcher::DEBOUNCE_MS * 4);
+	tmp.write(L"shell.nss", "item(title='CCC')\r\n");
+	CHECK_MSG(wait_for_reloads(watcher, 2, 8000),
+			  "a second save must reach it too - the callback re-pointing the "
+			  "watcher must not stop it");
+
+	// And a third, so the fix is a working loop rather than an off-by-one that
+	// bought exactly one more reload.
+	::Sleep(ConfigWatcher::DEBOUNCE_MS * 4);
+	tmp.write(L"shell.nss", "item(title='DDDD')\r\n");
+	CHECK_MSG(wait_for_reloads(watcher, 3, 8000), "and so must every one after it");
+
+	CHECK_MSG(!g_repoint_threw.load(),
+			  "re-pointing from the callback must not throw - joining the "
+			  "calling thread is resource_deadlock_would_occur");
+
+	g_repointing_watcher = nullptr;
+	watcher.stop();
+	CHECK(!watcher.watching());
+}
+
+TEST(config_watcher, a_callback_can_re_point_the_watcher_at_a_different_file)
+{
+	// The reason the reload re-points at all: an edit can add or remove an
+	// import, so the set of files to watch changes with the configuration.
+	TempDir tmp;
+	auto first = tmp.write(L"one.nss", "item(title='One')\r\n");
+	auto second = tmp.write(L"two.nss", "item(title='Two')\r\n");
+
+	ConfigWatcher watcher;
+	g_reloads.store(0);
+	g_repointing_watcher = &watcher;
+	g_repointing_files = { second };		// what the "reload" decides to watch
+
+	CHECK(watcher.start({ first }, &reload_and_repoint));
+
+	tmp.write(L"one.nss", "item(title='OneAgain')\r\n");
+	CHECK_MSG(wait_for_reloads(watcher, 1, 8000), "the original watch is live");
+
+	::Sleep(ConfigWatcher::DEBOUNCE_MS * 4);
+
+	// Now only two.nss is watched, so editing it reloads and editing one.nss
+	// does not.
+	tmp.write(L"two.nss", "item(title='TwoAgain')\r\n");
+	CHECK_MSG(wait_for_reloads(watcher, 2, 8000), "the re-pointed watch is live");
+
+	g_repointing_watcher = nullptr;
+	watcher.stop();
+}
+
 TEST(config_watcher, stopping_twice_is_harmless)
 {
 	TempDir tmp;

@@ -151,10 +151,50 @@ namespace Nilesoft
 			*/
 			bool start(const std::vector<std::wstring> &files, Callback on_changed)
 			{
-				stop();
-
 				if(!on_changed || files.empty())
 					return false;
+
+				/*
+					Called from the reload callback, on this watcher's own
+					thread.
+
+					That is the normal case, not an exotic one: the callback is
+					Initializer::init, every successful load calls
+					start_watching again to re-point at the new import set
+					(docs/refactor/03-config-safety.md section 3a), and that
+					lands here.
+
+					stop() would then join the thread that is asking. The
+					standard makes that resource_deadlock_would_occur, so join()
+					throws - and by then stop() has already signalled the stop
+					event, so the run loop returns on its next wait. The watcher
+					died after exactly *one* reload, with `watching()` still
+					answering true, and the exception was swallowed by
+					load_generation's catch(...). "Save shell.nss and the menu
+					follows" worked once per Explorer lifetime and then silently
+					stopped.
+
+					Found in a real Explorer on 2026-08-25 by editing the
+					installed configuration twice; the first edit reached the
+					menu and no later one did. Nothing in the unit suite could
+					have caught it, because every test called start() from the
+					test's own thread - which is the one caller for whom the
+					old code was correct.
+
+					So the request becomes data. run() applies it where it can
+					re-arm its own handles without joining anybody.
+				*/
+				if(_thread.joinable() && _thread.get_id() == std::this_thread::get_id())
+				{
+					{
+						std::lock_guard<std::mutex> lock(_pending_mutex);
+						_pending = files;
+					}
+					_repoint.store(true, std::memory_order_release);
+					return true;
+				}
+
+				stop();
 
 				auto directories = config_watch_directories(files, MAX_DIRECTORIES);
 				if(directories.empty())
@@ -222,6 +262,15 @@ namespace Nilesoft
 				_watched.clear();
 				_stamps.clear();
 				_callback = nullptr;
+
+				// A re-point the callback asked for and the thread never got
+				// to. Dropped rather than carried into the next watch, which
+				// will be started with its own file list.
+				_repoint.store(false, std::memory_order_release);
+				{
+					std::lock_guard<std::mutex> lock(_pending_mutex);
+					_pending.clear();
+				}
 			}
 
 			// Reloads this watcher has actually triggered, for reporting and
@@ -310,11 +359,79 @@ namespace Nilesoft
 					if(_callback)
 						_callback();
 
-					// Published after the callback, so a test that waits for
-					// this to change is waiting for the reload to have
-					// happened rather than for it to have started.
+					// The callback re-points the watcher at whatever the reload
+					// turned out to load, and it cannot do that itself from
+					// this thread - see the note in start(). Applied here,
+					// where the handles can be exchanged without joining
+					// anything.
+					if(_repoint.exchange(false, std::memory_order_acquire))
+					{
+						std::vector<std::wstring> files;
+						{
+							std::lock_guard<std::mutex> lock(_pending_mutex);
+							files.swap(_pending);
+						}
+
+						// Nothing watchable in the new set. Stopping is the
+						// honest outcome and the keyboard reload combos remain,
+						// which is what "best-effort" has meant here all along.
+						if(!rearm(files))
+						{
+							_running.store(false, std::memory_order_release);
+							return;
+						}
+					}
+
+					// Published after the callback and after the re-point, so a
+					// test that waits for this to change is waiting for the
+					// reload to have happened rather than for it to have
+					// started.
 					_reloads.fetch_add(1, std::memory_order_release);
 				}
+			}
+
+			/*
+				Exchange the notification handles for ones covering `files`,
+				from the watcher's own thread.
+
+				The new handles are opened before the old ones are closed, so a
+				failure part-way leaves the watcher watching what it already
+				was rather than watching nothing.
+			*/
+			bool rearm(const std::vector<std::wstring> &files)
+			{
+				if(files.empty())
+					return false;
+
+				auto directories = config_watch_directories(files, MAX_DIRECTORIES);
+				if(directories.empty())
+					return false;
+
+				std::vector<HANDLE> handles;
+				handles.push_back(_stop);
+
+				for(const auto &directory : directories)
+				{
+					auto handle = ::FindFirstChangeNotificationW(
+						directory.c_str(), FALSE,
+						FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME);
+
+					if(handle != INVALID_HANDLE_VALUE)
+						handles.push_back(handle);
+				}
+
+				if(handles.size() <= 1)
+					return false;
+
+				// Index 0 is the stop event and is shared with the new set, so
+				// it is deliberately not closed here.
+				for(size_t i = 1; i < _handles.size(); i++)
+					::FindCloseChangeNotification(_handles[i]);
+
+				_watched = files;
+				_stamps = write_times(files);
+				_handles = std::move(handles);
+				return true;
 			}
 
 			std::thread _thread;
@@ -325,6 +442,12 @@ namespace Nilesoft
 			Callback _callback{};
 			std::atomic<bool> _running{};
 			std::atomic<uint64_t> _reloads{};
+
+			// A re-point asked for by the reload callback, which runs on the
+			// watcher's own thread and therefore cannot restart it. See start().
+			std::mutex _pending_mutex;
+			std::vector<std::wstring> _pending;
+			std::atomic<bool> _repoint{};
 		};
 	}
 }
