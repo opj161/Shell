@@ -79,6 +79,7 @@ inline const Nilesoft::Shell::InlineDetourApi &default_inline_detour_api()
 		&::Thread32Next,
 		&::CloseHandle,
 		&::OpenThread,
+		&::GetLastError,
 		&DetourUpdateThread,
 		&DetourTransactionBegin,
 		&DetourTransactionAbort,

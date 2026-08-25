@@ -46,8 +46,22 @@ namespace
 
 		bool snapshot_fails = false;
 		bool first_fails = false;
+		bool second_first_fails = false;	// the liveness re-check's own snapshot
 		DWORD open_fails_for = 0;
 		DWORD update_fails_for = 0;
+
+		// The last error, as the code under test now reads it: through the
+		// table, not through ::GetLastError. Thread32Next answers FALSE for a
+		// finished walk and for a broken one alike, so this is the only place
+		// the difference exists - which is why routing it was the change that
+		// made the failed-walk cases testable at all.
+		DWORD last_error = ERROR_NO_MORE_FILES;
+
+		// Per snapshot slot: stop the walk after this many entries, and leave
+		// this error when it stops. ERROR_NO_MORE_FILES is exhaustion; anything
+		// else is a walk that broke partway.
+		size_t stop_after[2] = { SIZE_MAX, SIZE_MAX };
+		DWORD walk_error[2] = { ERROR_NO_MORE_FILES, ERROR_NO_MORE_FILES };
 
 		LONG begin_result = NO_ERROR;
 		LONG commit_result = NO_ERROR;
@@ -78,6 +92,7 @@ namespace
 		if(g.snapshot_fails)
 		{
 			g.snapshots_taken++;
+			g.last_error = ERROR_ACCESS_DENIED;
 			return INVALID_HANDLE_VALUE;
 		}
 		// Slot 0 is the enlistment walk; slot 1 is the liveness re-check after
@@ -108,16 +123,30 @@ namespace
 	BOOL WINAPI fake_first(HANDLE h, LPTHREADENTRY32 entry)
 	{
 		int slot = slot_of(h);
-		if(g.first_fails && slot == 0)
+		if((g.first_fails && slot == 0) || (g.second_first_fails && slot == 1))
+		{
+			g.last_error = ERROR_INVALID_HANDLE;
 			return FALSE;
+		}
 		g.cursor[slot] = 0;
-		return fill(slot, entry) ? TRUE : FALSE;
+		if(fill(slot, entry))
+			return TRUE;
+		g.last_error = g.walk_error[slot];
+		return FALSE;
 	}
 
 	BOOL WINAPI fake_next(HANDLE h, LPTHREADENTRY32 entry)
 	{
-		return fill(slot_of(h), entry) ? TRUE : FALSE;
+		int slot = slot_of(h);
+		if(g.cursor[slot] < g.stop_after[slot] && fill(slot, entry))
+			return TRUE;
+
+		// Exhausted, or stopped early. Which one is only visible here.
+		g.last_error = g.walk_error[slot];
+		return FALSE;
 	}
+
+	DWORD WINAPI fake_last_error() { return g.last_error; }
 
 	BOOL WINAPI fake_close(HANDLE h)
 	{
@@ -130,7 +159,7 @@ namespace
 	{
 		if(g.open_fails_for == tid)
 		{
-			::SetLastError(ERROR_ACCESS_DENIED);
+			g.last_error = ERROR_ACCESS_DENIED;
 			return nullptr;
 		}
 		g.opened++;
@@ -162,7 +191,7 @@ namespace
 		static const InlineDetourApi api
 		{
 			&fake_snapshot, &fake_first, &fake_next, &fake_close,
-			&fake_open, &fake_update,
+			&fake_open, &fake_last_error, &fake_update,
 			&fake_begin, &fake_abort, &fake_commit, &fake_ignore_too_small,
 		};
 		return api;
@@ -265,6 +294,115 @@ TEST(detour_enlistment, a_thread_detours_will_not_record_fails_the_enlistment)
 	CHECK_EQ(g.closed, 1);
 }
 
+// ---- exhaustion is not the same fact as failure --------------------------
+//
+// Thread32Next answers FALSE when the walk is finished and when the walk broke,
+// and the difference is only in the last error:
+//
+//     "The ERROR_NO_MORE_FILES error value is returned by the GetLastError
+//      function if no threads exist or the snapshot does not contain thread
+//      information."
+//     https://learn.microsoft.com/en-us/windows/win32/api/tlhelp32/nf-tlhelp32-thread32next
+//
+// The walk ended `do { ... } while(api.thread_next(...))` with out.result
+// already set to Enlisted, so a snapshot that failed halfway through was a
+// *successful* enlistment of whatever had been reached so far - and the
+// transaction then rewrote CoCreateInstance's prologue in explorer.exe while
+// the threads past the break point knew nothing about it. Detours names that
+// outcome exactly: they "may attempt to execute an illegal combination of old
+// and new code".
+
+TEST(detour_enlistment, a_walk_that_breaks_partway_is_not_an_enlistment)
+{
+	reset();
+	g.stop_after[0] = 2;						// SELF, then OTHER_A, then stop
+	g.walk_error[0] = ERROR_ACCESS_DENIED;		// ... and not because it finished
+
+	auto e = enlist_process_threads(fake_api(), PID, SELF);
+
+	CHECK(!e.ok());
+	CHECK(e.result == EnlistmentResult::EnumerationFailed);
+	CHECK_EQ(e.error, (DWORD)ERROR_ACCESS_DENIED);
+
+	// OTHER_A was reached and enlisted before the break. The point is not that
+	// the work is undone here - the caller closes these - but that the result
+	// says the set is incomplete rather than claiming it is whole.
+	CHECK_EQ(g.updated, 1);
+}
+
+// The guard against fixing this too hard. A walk may legitimately end after any
+// number of entries; what makes it an enlistment is the reason it ended.
+TEST(detour_enlistment, a_walk_that_ends_early_but_says_so_is_still_an_enlistment)
+{
+	reset();
+	g.stop_after[0] = 2;
+	g.walk_error[0] = ERROR_NO_MORE_FILES;		// this snapshot really is done
+
+	auto e = enlist_process_threads(fake_api(), PID, SELF);
+
+	CHECK(e.ok());
+	CHECK_EQ(e.threads.size(), (size_t)1);
+}
+
+// ---- "could not look" is not "it is gone" -------------------------------
+//
+// The liveness re-check is the one place an OpenThread failure may be ignored,
+// and it may be ignored only on proof. thread_still_present answered a plain
+// bool, and both of its enumeration failures answered `false` - which the
+// caller read as "the thread ended during the race" and skipped it. The
+// snapshot-failure branch above them had it right all along, and said so:
+// "cannot prove it left; treat it as present".
+
+TEST(detour_enlistment, a_liveness_check_that_cannot_start_does_not_prove_a_thread_left)
+{
+	reset();
+	g.open_fails_for = OTHER_B;
+	g.second_first_fails = true;		// the re-check's snapshot will not walk
+
+	auto e = enlist_process_threads(fake_api(), PID, SELF);
+
+	CHECK(!e.ok());
+	CHECK(e.result == EnlistmentResult::ThreadUnavailable);
+	CHECK_EQ(e.thread_id, OTHER_B);
+
+	// The error reported is OpenThread's, read before the re-check ran, not
+	// whatever the re-check's own failure left behind.
+	CHECK_EQ(e.error, (DWORD)ERROR_ACCESS_DENIED);
+}
+
+TEST(detour_enlistment, a_liveness_check_that_breaks_partway_does_not_prove_a_thread_left)
+{
+	reset();
+	g.open_fails_for = OTHER_B;
+	g.use_second_snapshot_next = true;
+	g.second_entries = g.entries;			// OTHER_B is still there...
+	g.stop_after[1] = 2;					// ...but the walk stops before it,
+	g.walk_error[1] = ERROR_ACCESS_DENIED;	//    and not because it finished
+
+	auto e = enlist_process_threads(fake_api(), PID, SELF);
+
+	CHECK(!e.ok());
+	CHECK(e.result == EnlistmentResult::ThreadUnavailable);
+	CHECK_EQ(e.thread_id, OTHER_B);
+}
+
+// Same walk, same early stop, but reported as exhaustion: now the absence is
+// evidence, and the benign race is still ignored. Without this the previous two
+// tests could be satisfied by refusing every re-check.
+TEST(detour_enlistment, an_absence_from_a_completed_walk_is_still_the_benign_race)
+{
+	reset();
+	g.open_fails_for = OTHER_B;
+	g.use_second_snapshot_next = true;
+	g.second_entries = { { PID, SELF }, { PID, OTHER_A } };
+	g.walk_error[1] = ERROR_NO_MORE_FILES;
+
+	auto e = enlist_process_threads(fake_api(), PID, SELF);
+
+	CHECK(e.ok());
+	CHECK_EQ(e.threads.size(), (size_t)1);
+}
+
 // ---- the transaction on top of it ---------------------------------------
 //
 // These run against the *real* process id and thread id, because the
@@ -293,6 +431,25 @@ TEST(detour_enlistment, begin_refuses_when_the_snapshot_failed)
 	CHECK_EQ(g.aborts, 1);
 	CHECK_EQ(g.commits, 0);
 	CHECK(t.enlistment().result == EnlistmentResult::SnapshotFailed);
+}
+
+// The one that matters most, because it is the step between the defect and the
+// harm: a walk that broke must not reach a commit. Nothing is rewritten, the
+// transaction is closed, and Shell simply runs without its inline detour -
+// which is the existing behaviour for every other way this can fail, and is
+// strictly better than patching live code some threads were never told about.
+TEST(detour_enlistment, begin_refuses_when_the_walk_could_not_be_finished)
+{
+	reset_for_transaction();
+	g.stop_after[0] = 1;
+	g.walk_error[0] = ERROR_ACCESS_DENIED;
+
+	InlineDetourTransaction t(fake_api());
+	CHECK(!t.begin());
+
+	CHECK(t.enlistment().result == EnlistmentResult::EnumerationFailed);
+	CHECK_EQ(g.commits, 0);
+	CHECK_EQ(g.aborts, 1);
 }
 
 TEST(detour_enlistment, begin_refuses_when_detours_would_not_open_the_transaction)

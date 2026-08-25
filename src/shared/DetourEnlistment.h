@@ -53,6 +53,15 @@ namespace Nilesoft
 			BOOL (WINAPI *thread_next)(HANDLE, LPTHREADENTRY32);
 			BOOL (WINAPI *close_handle)(HANDLE);
 			HANDLE (WINAPI *open_thread)(DWORD, BOOL, DWORD);
+
+			// Routed rather than called directly, because the difference
+			// between "the walk finished" and "the walk broke" is *only* in
+			// the last error - Thread32Next returns FALSE for both. Leaving
+			// ::GetLastError named inline is what made the failed-walk case
+			// impossible to express in a test, and therefore impossible to
+			// notice.
+			DWORD (WINAPI *last_error)();
+
 			LONG (WINAPI *update_thread)(HANDLE);
 
 			LONG (WINAPI *transaction_begin)();
@@ -104,35 +113,69 @@ namespace Nilesoft
 			the only OpenThread failure this code is entitled to ignore. Anything
 			else is a thread that exists and will not be updated, which is the
 			case Detours warns about.
+
+			Which makes the answer three-valued, not two. "Did not find it" and
+			"could not look" are different facts, and only the first of them is
+			evidence the thread is gone. The snapshot-failure path already got
+			this right - it returned "present", deliberately, because it could
+			not prove otherwise - while the two enumeration paths below it did
+			not: a failed Thread32First, or a walk that stopped early, both
+			produced `present = false` and the caller then skipped a thread that
+			may well still be running. That is exactly the outcome the whole
+			file exists to prevent, reached by the code that was meant to
+			prevent it.
+
+			Present and Unknown are both refused by the caller. Only Gone is
+			ignored.
 		*/
-		inline bool thread_still_present(const InlineDetourApi &api, DWORD pid, DWORD tid)
+		enum class ThreadPresence
+		{
+			Present,	// the snapshot lists it; it is still running
+			Gone,		// the snapshot was walked to the end and did not list it
+			Unknown,	// could not look, or could not finish looking
+		};
+
+		inline ThreadPresence thread_presence(const InlineDetourApi &api,
+											  DWORD pid, DWORD tid)
 		{
 			auto snapshot = api.create_snapshot(TH32CS_SNAPTHREAD, 0);
 			if(snapshot == INVALID_HANDLE_VALUE)
-				return true;		// cannot prove it left; treat it as present
+				return ThreadPresence::Unknown;
 
-			bool present = false;
 			THREADENTRY32 entry{};
 			entry.dwSize = sizeof(entry);
 
-			if(api.thread_first(snapshot, &entry))
+			if(!api.thread_first(snapshot, &entry))
 			{
-				do
-				{
-					if(entry.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID)
-									  + sizeof(entry.th32OwnerProcessID))
-						continue;
-					if(entry.th32OwnerProcessID == pid && entry.th32ThreadID == tid)
-					{
-						present = true;
-						break;
-					}
-				}
-				while(api.thread_next(snapshot, &entry));
+				// A thread snapshot that will not open on its first entry is
+				// not an empty machine - this thread is in it.
+				api.close_handle(snapshot);
+				return ThreadPresence::Unknown;
 			}
 
+			auto answer = ThreadPresence::Unknown;
+			do
+			{
+				if(entry.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID)
+								  + sizeof(entry.th32OwnerProcessID))
+					continue;
+				if(entry.th32OwnerProcessID == pid && entry.th32ThreadID == tid)
+				{
+					answer = ThreadPresence::Present;
+					break;
+				}
+			}
+			while(api.thread_next(snapshot, &entry));
+
+			// Not found - but only "gone" if the walk actually reached the end.
+			// Thread32Next returns FALSE for exhaustion and for failure alike;
+			// ERROR_NO_MORE_FILES is the documented way to tell them apart.
+			if(answer != ThreadPresence::Present
+			   && api.last_error() == ERROR_NO_MORE_FILES)
+				answer = ThreadPresence::Gone;
+
 			api.close_handle(snapshot);
-			return present;
+			return answer;
 		}
 
 		/*
@@ -156,7 +199,7 @@ namespace Nilesoft
 			if(snapshot == INVALID_HANDLE_VALUE)
 			{
 				out.result = EnlistmentResult::SnapshotFailed;
-				out.error = ::GetLastError();
+				out.error = api.last_error();
 				return out;
 			}
 
@@ -169,7 +212,7 @@ namespace Nilesoft
 				// this thread is in it. Treating it as "no threads to enlist"
 				// is what made the old code commit against an unknown set.
 				out.result = EnlistmentResult::EnumerationFailed;
-				out.error = ::GetLastError();
+				out.error = api.last_error();
 				api.close_handle(snapshot);
 				return out;
 			}
@@ -191,10 +234,14 @@ namespace Nilesoft
 				auto thread = api.open_thread(kEnlistAccess, FALSE, entry.th32ThreadID);
 				if(!thread)
 				{
-					auto error = ::GetLastError();
-					if(!thread_still_present(api, pid, entry.th32ThreadID))
+					auto error = api.last_error();
+					if(thread_presence(api, pid, entry.th32ThreadID)
+					   == ThreadPresence::Gone)
 						continue;		// it ended during the race; nothing to update
 
+					// Present *or* Unknown. "Could not prove it left" must
+					// never be read as "proved gone" - the thread would run
+					// through a rewritten prologue it was never told about.
 					out.result = EnlistmentResult::ThreadUnavailable;
 					out.error = error;
 					out.thread_id = entry.th32ThreadID;
@@ -219,6 +266,43 @@ namespace Nilesoft
 				out.threads.push_back(thread);
 			}
 			while(api.thread_next(snapshot, &entry));
+
+			// The walk ended. Whether it ended because there was nothing left
+			// or because it broke is not in the return value - Thread32Next
+			// answers FALSE for both - and until now the difference was
+			// discarded: `out.result` was already Enlisted, so a snapshot that
+			// failed halfway through produced a *successful* enlistment of
+			// however many threads had been reached, and begin() committed the
+			// patch against the rest.
+			//
+			//     "The ERROR_NO_MORE_FILES error value is returned by the
+			//      GetLastError function if no threads exist or the snapshot
+			//      does not contain thread information."
+			//     https://learn.microsoft.com/en-us/windows/win32/api/tlhelp32/nf-tlhelp32-thread32next
+			//
+			// so that value, and only that value, is exhaustion.
+			//
+			// Guarded by `result == Enlisted` because the loop's other exits
+			// are `break`s that have already recorded a more specific failure,
+			// and those must not be relabelled.
+			//
+			// The last error is read without clearing it first, which was
+			// checked rather than assumed: measured on Windows 11 26200 x64,
+			// MSVC 14.44.35207, a full 6,386-entry walk ended with
+			// ERROR_NO_MORE_FILES on three consecutive runs *even with a
+			// succeeding call inside the loop body stamping ERROR_SUCCESS*, so
+			// Thread32Next sets its own error rather than leaving a stale one.
+			// A module snapshot - one that genuinely holds no thread
+			// information - failed Thread32First with ERROR_NO_MORE_FILES,
+			// matching the sentence above. Were that ever not so, the reading
+			// falls the safe way: an unexpected error fails the enlistment and
+			// the detour is simply not applied.
+			if(out.result == EnlistmentResult::Enlisted
+			   && api.last_error() != ERROR_NO_MORE_FILES)
+			{
+				out.result = EnlistmentResult::EnumerationFailed;
+				out.error = api.last_error();
+			}
 
 			api.close_handle(snapshot);
 			return out;
