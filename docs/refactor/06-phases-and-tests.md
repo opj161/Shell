@@ -335,7 +335,8 @@ the `takeover:` line names the build under test.
 
 It builds on every platform and **is deliberately not run by `build.ps1`**: it
 creates a window and shows real popup menus, which does not belong in a
-developer's build. Execution is the interactive VM job.
+developer's build. **Execution is a manual pre-merge step**, not a job — see
+§3.
 
 Three mechanics were established by probing rather than chosen, and each of the
 first attempts was wrong:
@@ -486,16 +487,57 @@ Two things to know before relying on this:
   one, which a per-user `HKCU\Software\Classes\CLSID\...\InprocServer32`
   override achieves without touching HKLM or restarting Explorer.
 
-CI role: builds the probe on all platforms but *execution* requires an interactive
-desktop — run in the scheduled VM job (below), not PR CI.
+CI role: builds the probe on all platforms. **Execution is manual.** Earlier
+revisions of this document routed it to "the scheduled VM job (below)"; there
+was no such job, here or anywhere in the repository, and a gate that exists
+only in prose is worse than an acknowledged manual one. §3 names the step and
+its owner.
 
-## 3. CI additions (cheap, immediate)
+## 3. CI additions
 
-- Run `scripts/validate-msi-lifecycle.ps1` post-build (currently manual only).
-- **`scripts/check-invariants.ps1` — landed and wired into `build.ps1`**, which runs
-  it after every successful platform build and fails the build on a violation. Six
-  enforced rules, two deferred (warn-only) that turn on with their phase:
-  `GetState(…, TRUE)` with Phase 1, `SPIF_SENDCHANGE` with Phase 3.
+**Landed 2026-08-26.** Until then `.github/workflows/build.yml` ran `msbuild` on
+the solution and `tests.exe`, and nothing else — so every rule below was
+enforced on a developer's machine only, and this branch had never been through
+CI at all, because the workflow triggered on `main` and PRs to `main`.
+
+- **`scripts/check-invariants.ps1` runs in CI**, as its own `invariants` job
+  rather than a matrix step. The check reads sources only, so running it once
+  per platform proves nothing extra; as a separate job it still reports when a
+  platform build fails, which is when a reintroduced pattern is most likely to
+  be the cause. It remains wired into `build.ps1` for the developer loop.
+- **`scripts/validate-msi-lifecycle.ps1` runs in CI**, per platform, after the
+  build. It reads the emitted package read-only, so it needs no elevation and
+  no desktop. The build step gained `-restore` so the WiX SDK is restored
+  deterministically and the package is actually produced.
+
+  One defect had been hiding behind the manual-only status:
+  `validate-msi-lifecycle.ps1` passed under PowerShell 7 and threw on its
+  first assertion under Windows PowerShell 5.1 — the edition `build.ps1` and
+  `AGENTS.md` both invoke. `Query-Msi` returned an array, which a function
+  [unrolls into the pipeline](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_return#return-values-and-the-pipeline),
+  handing back a bare `[pscustomobject]` for any one-row query — and in Windows
+  PowerShell those
+  [have no `Count` property](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_pscustomobject#notes).
+  Fixed with the unary comma the same page prescribes.
+- **The working branch is in the push trigger** while it is live.
+- **hostprobe execution stays manual.** It creates a window and shows real
+  popup menus, and the takeover half needs a per-user COM override (§08.3.7);
+  a hosted runner is not a reliable interactive desktop, and a gate that
+  flakes teaches people to ignore it. Both canonical commands are a
+  **pre-merge step owned by the branch owner (`@opj161`)**, run at the
+  enforced counts with the `takeover:` line naming the build under test:
+
+  ```powershell
+  .\src\bin\x64\hostprobe.exe --verify .\src\tests\hostprobe\fixtures
+  .\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
+  ```
+
+  This is a real gap, stated rather than disguised as a job.
+- **`scripts/check-invariants.ps1` enforces ten rules, none deferred.** This
+  section said "six enforced rules, two deferred (warn-only) that turn on with
+  their phase: `GetState(…, TRUE)` with Phase 1, `SPIF_SENDCHANGE` with
+  Phase 3". Both of those are now enforced, as rules 9 and 10, and the script
+  reports `check-invariants: OK (10 rules, 0 deferred)`.
 
   Three things the first version got wrong, worth remembering when adding rules
   (§07 §1.1):

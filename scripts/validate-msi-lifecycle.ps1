@@ -18,8 +18,31 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+# Returns the rows as a single array object, never unrolled.
+#
+# The @(...) here is not enough on its own. A function that writes a
+# collection to the output stream has it enumerated: "When you return a
+# collection from your scriptblock or function, PowerShell automatically
+# unrolls the members and passes them one at a time through the pipeline"
+# https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_return#return-values-and-the-pipeline
+# So a query matching exactly one row handed the caller a bare
+# [pscustomobject] - and msi-query.ps1 emits [pscustomobject] rows.
+#
+# That is fine under PowerShell 7 and wrong under Windows PowerShell 5.1,
+# which is the edition build.ps1 and AGENTS.md both invoke: "In Windows
+# PowerShell, objects created by casting a Hashtable to [pscustomobject]
+# don't have the Length or Count properties. Attempting to access these
+# members returns $null."
+# https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_pscustomobject#notes
+# So every `$rows.Count -eq 1` assertion below compared $null against 1
+# and threw, and the first one is the REGISTRATION component - meaning the
+# whole gate failed on line one under 5.1 and passed under 7.
+#
+# The unary comma is the documented fix, from the same about_Return page:
+# "Utilizing a unary expression you can send your return value down the
+# pipeline as a single object".
 function Query-Msi([string]$Msi, [string]$Sql) {
-    @(& $queryTool $Msi $Sql)
+    return ,@(& $queryTool $Msi $Sql)
 }
 
 $contextClsid = "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"

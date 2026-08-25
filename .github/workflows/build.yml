@@ -2,7 +2,10 @@ name: Build
 
 on:
   push:
-    branches: [ "main" ]
+    # The working refactor branch is listed so that its gates run in CI while it
+    # is live. Before this it triggered on main only, so an 83-commit branch had
+    # never been through CI at all.
+    branches: [ "main", "refactor/takeover-master-plan" ]
     tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
@@ -11,6 +14,25 @@ permissions:
   contents: read
 
 jobs:
+
+  # Source-level invariants: patterns the refactor removed and that must not come
+  # back. Its own job rather than a step in the matrix, for two reasons: the check
+  # reads sources only, so running it three times proves nothing extra; and as a
+  # separate job it still reports when a platform build fails, which is exactly
+  # when a reintroduced pattern is most likely to be the cause.
+  #
+  # Invoked through `powershell` rather than the runner's default `pwsh` so that
+  # CI and build.ps1 run the script the same way, under the same edition.
+  invariants:
+
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check source invariants
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invariants.ps1
+
   build:
 
     strategy:
@@ -37,14 +59,35 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: nuget restore ${{env.SOLUTION_FILE_PATH}}
 
+    # -restore runs the Restore target before the build targets
+    # (https://learn.microsoft.com/en-us/visualstudio/msbuild/msbuild-command-line-reference).
+    # setup/wix/setup.wixproj is an SDK-style project - Sdk="WixToolset.Sdk/5.0.2" -
+    # so the toolset itself arrives through NuGet restore. Without it the solution
+    # can build every binary and silently emit no package, which is why the upload
+    # step below was written with if-no-files-found: warn.
     - name: Build
       working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{env.BUILD_PLATFORM}} ${{env.SOLUTION_FILE_PATH}}
+      run: msbuild /m /restore /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{env.BUILD_PLATFORM}} ${{env.SOLUTION_FILE_PATH}}
 
     - name: Run unit tests
       if: matrix.platform == 'x64' || matrix.platform == 'x86'
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: ${{env.BIN_PATH}}\tests.exe
+
+    # Reads the built package's Component, Registry, InstallExecuteSequence,
+    # CustomAction, Upgrade and RemoveFile tables. It installs nothing and writes
+    # nothing - msi-query.ps1 opens the database in read-only mode - so it needs
+    # no elevation and no desktop. Until now it was documented as a "cheap,
+    # immediate" CI addition and run by hand.
+    - name: Validate MSI lifecycle
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: |
+        $msi = "src\bin\setup-${{matrix.platform}}.msi"
+        if (-not (Test-Path -LiteralPath $msi)) {
+          throw "$msi was not produced by the build. If every binary built, suspect the WiX SDK restore rather than the authoring."
+        }
+        powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-msi-lifecycle.ps1 -Path $msi
+        exit $LASTEXITCODE
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
