@@ -533,11 +533,12 @@ CI at all, because the workflow triggered on `main` and PRs to `main`.
   ```
 
   This is a real gap, stated rather than disguised as a job.
-- **`scripts/check-invariants.ps1` enforces ten rules, none deferred.** This
+- **`scripts/check-invariants.ps1` enforces eleven rules, none deferred.** This
   section said "six enforced rules, two deferred (warn-only) that turn on with
   their phase: `GetState(…, TRUE)` with Phase 1, `SPIF_SENDCHANGE` with
-  Phase 3". Both of those are now enforced, as rules 9 and 10, and the script
-  reports `check-invariants: OK (10 rules, 0 deferred)`.
+  Phase 3". Both of those are enforced now, as rules 9 and 10; rule 11 - the
+  two-call `GetMenuItemInfo` pattern - was added by W6.6. The script reports
+  `check-invariants: OK (11 rules, 0 deferred)`.
 
   Three things the first version got wrong, worth remembering when adding rules
   (§07 §1.1):
