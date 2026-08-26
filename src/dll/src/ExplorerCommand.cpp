@@ -3,6 +3,7 @@
 #include "Include/PackageCatalogService.h"
 #include "Include/ProviderHealth.h"
 #include "Include/ProviderSchedule.h"
+#include "Include/ProviderCache.h"
 #include "Include/ExplorerCommandState.h"
 #include "Include/ProviderQuarantineStore.h"
 #include "Include/IconResource.h"
@@ -61,83 +62,33 @@ namespace Nilesoft
 			}
 
 			/*
-				Activated providers, kept alive and reused.
-
-				Measured on this machine: CoCreateInstance costs about 2 ms per
-				provider even fully warm, 46 ms across the 23 registered here,
-				and that was paid again on every single right-click. It is also
-				the one call in the sequence that has nothing to do with the
-				selection - GetState, GetTitle and GetIcon each take an
-				IShellItemArray parameter, so a live IExplorerCommand is meant to
-				be asked again about something else. Keeping them takes a warm
-				menu from ~170 ms to ~41 ms. See Include/ProviderHealth.h.
-
-				Thread-local, and that is the whole of the apartment story. These
-				are COM objects created in the menu thread's apartment, and
-				"interface pointers must be marshaled when passed between
-				apartments" - so rather than marshal, each thread keeps its own
-				and never lends them out. Explorer raises its menus from the same
-				thread over and over, which is exactly the case this helps.
-				https://learn.microsoft.com/en-us/windows/win32/com/single-threaded-apartments
-
-				No destructor runs on these. The module is pinned for the life of
-				the host and a thread-local destructor firing while another
-				thread is inside a menu is a shutdown crash waiting for a bad
-				day; a released process is a released process.
+				The provider cache moved to Include/ProviderCache.h, with the
+				reference-counting rules it enforces and the lifetime rule for a
+				host whose thread Shell does not own. Two defects came out of it
+				being a static thread_local vector and three free functions in
+				this anonymous namespace: the caller's reference was leaked on
+				the path that succeeded, and nothing ever released the cache.
+				Neither was reachable from a test, because a reference count was
+				exactly what could not be observed.
 			*/
-			struct CachedProvider
-			{
-				GUID clsid{};
-				IExplorerCommand *cmd{};
-			};
+			void provider_add_ref(IExplorerCommand *cmd) { cmd->AddRef(); }
+			void provider_release(IExplorerCommand *cmd) { cmd->Release(); }
 
-			std::vector<CachedProvider> &provider_cache()
+			const ProviderComApi &default_provider_api()
 			{
-				static thread_local std::vector<CachedProvider> cache;
+				static const ProviderComApi api
+				{
+					&activate_explorer_command,
+					&provider_add_ref,
+					&provider_release,
+				};
+				return api;
+			}
+
+			ProviderCache &provider_cache()
+			{
+				static thread_local ProviderCache cache(default_provider_api());
 				return cache;
-			}
-
-			// Returns a pointer the caller owns a reference to, from the cache if
-			// this thread has one. The cache keeps its own reference, so the
-			// caller releases exactly as it always did.
-			IExplorerCommand *acquire_explorer_command(const GUID &clsid)
-			{
-				auto &cache = provider_cache();
-				for(auto &entry : cache)
-				{
-					if(::IsEqualGUID(entry.clsid, clsid) && entry.cmd)
-					{
-						entry.cmd->AddRef();
-						return entry.cmd;
-					}
-				}
-
-				auto cmd = activate_explorer_command(clsid);
-				if(!cmd)
-					return nullptr;
-
-				cmd->AddRef();				// one for the cache, one for the caller
-				cache.push_back({ clsid, cmd });
-				return cmd;
-			}
-
-			// Drops a provider this thread has stopped trusting - it failed a
-			// call it had answered before, so the object may be in a state its
-			// author never expected to be reused from. The next menu activates a
-			// fresh one.
-			void forget_explorer_command(const GUID &clsid)
-			{
-				auto &cache = provider_cache();
-				for(size_t i = 0; i < cache.size(); i++)
-				{
-					if(::IsEqualGUID(cache[i].clsid, clsid))
-					{
-						if(cache[i].cmd)
-							cache[i].cmd->Release();
-						cache.erase(cache.begin() + static_cast<ptrdiff_t>(i));
-						return;
-					}
-				}
 			}
 
 			// Why an item did or did not end up in the menu.
@@ -625,7 +576,11 @@ namespace Nilesoft
 
 				auto spent_before = budget.spent_us();
 
-				auto cmd = acquire_explorer_command(reg.clsid);
+				// Borrowed for this scope: the reference the caller has to drop
+				// is released when `cmd` goes out of scope, on every path.
+				// Releasing it by hand is what the Shown path below used to
+				// forget, leaking one reference per provider per menu.
+				auto cmd = provider_cache().borrow(reg.clsid);
 				if(!cmd)
 				{
 					health.record(step.hash, shape, budget.spent_us() - spent_before, false);
@@ -645,8 +600,8 @@ namespace Nilesoft
 				item->explorer_clsid = reg.clsid;
 
 				bool state_pending = false;
-				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd, selection,
-																  &state_pending);
+				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd.get(),
+																  selection, &state_pending);
 
 				/*
 					Read here, before the cost is taken, and that is the whole
@@ -701,15 +656,23 @@ namespace Nilesoft
 
 				if(filled != FillResult::Shown)
 				{
-					cmd->Release();
-
 					// Hidden is a live provider declining this selection, and
 					// happens constantly - it stays cached. Failed means a call
 					// that used to work did not, so this thread stops reusing
 					// that object; a fresh activation next time costs 2 ms and
 					// beats asking a wedged provider forever.
 					if(filled == FillResult::Failed)
-						forget_explorer_command(reg.clsid);
+					{
+						// Two references exist here and both have to go: this
+						// scope's, which `cmd` owns, and the cache's, which
+						// forget() drops. Either order is correct - borrow()
+						// took a reference for the handle, so the object cannot
+						// be released out from under it - and this one is
+						// written first because it is the order the two counts
+						// read in: 2 -> 1 -> 0.
+						cmd.reset();
+						provider_cache().forget(reg.clsid);
+					}
 					continue;
 				}
 
@@ -786,6 +749,24 @@ namespace Nilesoft
 				Diagnostics::MenuPerfScope over(L"explorer.commands.over_budget");
 				over.annotate(static_cast<long>(refused_for_budget));
 			}
+
+			/*
+				What this thread may keep, and for how long.
+
+				Selected.loader.contextmenuhandler is set when Shell was
+				reached through IShellExtInit/IContextMenu - a third-party file
+				manager's own thread, whose lifetime Shell knows nothing
+				about. Holding COM references on such a thread until process
+				exit is the leak D9 names, and a thread-local destructor is
+				not the fix: it can run after that thread's CoUninitialize.
+
+				Here is the point where the apartment is provably still live -
+				same thread, inside the menu path, before anything unwinds.
+				Include/ProviderCache.h has the rule and what it costs.
+			*/
+			provider_cache().end_of_menu(
+				Selected.loader.contextmenuhandler ? ProviderLifetime::ThisMenuOnly
+												   : ProviderLifetime::AcrossMenus);
 
 			// Registration order, for both what is shown and which of two
 			// providers claiming the same identity wins it.
