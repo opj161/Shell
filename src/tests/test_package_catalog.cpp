@@ -295,3 +295,157 @@ TEST(package_catalog, a_scan_invalidated_while_running_publishes_neither_half)
 
 	CHECK(store.current() == nullptr);
 }
+
+// ---- the wiring, not just the primitives -------------------------------
+//
+// Everything above tests CatalogStore, and it always passed. D3 lived one level
+// up, in the worker loop: abandon_refresh() existed, carried exactly the right
+// reasoning on it - "an empty catalog would remove every packaged verb from the
+// menu, which is worse than an old one" - was tested by the case above, and had
+// no production caller. The loop published every scan, including one that had
+// failed to read the registry at all.
+//
+// What that cost: scan_package_catalog returns an empty CatalogScan when
+// RegistryPackageSource::enumerate_full_names fails, publish() stamps it
+// built_at = now, and DefaultTtlMs is five minutes. So a transient registry
+// error made package.exists() answer a confident false about every package for
+// five minutes - and the stock configuration asks
+// package.exists("WindowsTerminal") on every single menu
+// (src/bin/imports/terminal.nss). The item would simply not be there, with
+// nothing anywhere saying why.
+//
+// The loop is refresh_catalog() now, with the clock and the scan injected, so
+// these run it.
+
+namespace
+{
+	using Nilesoft::Shell::CatalogScan;
+
+	CatalogScan good_scan(uint32_t marker)
+	{
+		CatalogScan scan;
+		scan.commands = payload(marker);
+		scan.ok = true;
+		return scan;
+	}
+
+	// What scan_package_catalog returns when it could not read the machine:
+	// empty, and indistinguishable from "nothing is installed" except for ok.
+	CatalogScan failed_scan()
+	{
+		return CatalogScan{};
+	}
+}
+
+TEST(package_catalog, a_failed_scan_is_abandoned_rather_than_published)
+{
+	CatalogStore store;
+	store.set_ttl(1000);
+	CHECK(run_one_scan(store, 5000, 0xAA));
+
+	int scans = 0;
+	Nilesoft::Shell::refresh_catalog(
+		store,
+		[] { return (uint64_t)6001; },
+		[&scans] { scans++; return failed_scan(); });
+
+	CHECK_EQ(scans, 1);
+
+	// Yesterday's answer survives. Publishing the empty one would have replaced
+	// it and stamped it fresh.
+	CHECK_EQ((long long)marker_of(store.current()), 0xAA);
+	CHECK_MSG(!store.refreshing(), "the slot must be released or nothing ever scans again");
+}
+
+TEST(package_catalog, a_failed_scan_does_not_hold_the_catalog_for_a_ttl)
+{
+	// The half that makes the previous test matter. Publishing a failed scan
+	// also reset built_at, so the next needs_refresh() said no for a whole TTL.
+	// Abandoning leaves the old timestamp alone, so the very next kick rescans.
+	CatalogStore store;
+	store.set_ttl(1000);
+	CHECK(run_one_scan(store, 5000, 0xAA));
+
+	Nilesoft::Shell::refresh_catalog(store, [] { return (uint64_t)6001; },
+									 [] { return failed_scan(); });
+
+	CHECK_MSG(store.needs_refresh(6002),
+			  "a failed attempt must leave the catalog as stale as it found it");
+}
+
+TEST(package_catalog, a_failed_scan_then_a_good_one_publishes_normally)
+{
+	CatalogStore store;
+	store.set_ttl(1000);
+	CHECK(run_one_scan(store, 5000, 0xAA));
+
+	Nilesoft::Shell::refresh_catalog(store, [] { return (uint64_t)6001; },
+									 [] { return failed_scan(); });
+	CHECK_EQ((long long)marker_of(store.current()), 0xAA);
+
+	Nilesoft::Shell::refresh_catalog(store, [] { return (uint64_t)6002; },
+									 [] { return good_scan(0xBB); });
+	CHECK_EQ((long long)marker_of(store.current()), 0xBB);
+}
+
+TEST(package_catalog, the_first_scan_of_a_process_failing_publishes_nothing_at_all)
+{
+	// Nothing has ever been published, so there is no old answer to fall back
+	// on. Publishing the empty scan here is the worst version of D3: it turns
+	// "we do not know yet" into "there are no packages", permanently as far as
+	// the next five minutes are concerned.
+	CatalogStore store;
+	store.set_ttl(1000);
+
+	Nilesoft::Shell::refresh_catalog(store, [] { return (uint64_t)5000; },
+									 [] { return failed_scan(); });
+
+	CHECK_MSG(!store.current(),
+			  "no snapshot is 'unknown'; an empty snapshot would be 'none'");
+	CHECK(store.needs_refresh(5001));
+}
+
+TEST(package_catalog, a_scan_overtaken_by_a_change_is_retried_within_the_same_kick)
+{
+	// The reason refresh_catalog loops. invalidate() during a scan discards its
+	// result, and the machine state that result described is already gone - so
+	// the kick that is already awake rescans rather than waiting for another.
+	CatalogStore store;
+	store.set_ttl(1000000);
+
+	int scans = 0;
+	Nilesoft::Shell::refresh_catalog(
+		store,
+		[] { return (uint64_t)5000; },
+		[&store, &scans]
+		{
+			scans++;
+			if(scans == 1)
+				store.invalidate();		// arrives while the first scan is running
+			return good_scan(0xCC);
+		});
+
+	CHECK_EQ(scans, 2);
+	CHECK_EQ((long long)marker_of(store.current()), 0xCC);
+}
+
+TEST(package_catalog, a_machine_changing_faster_than_it_can_be_scanned_does_not_spin)
+{
+	CatalogStore store;
+	store.set_ttl(1000000);
+
+	int scans = 0;
+	Nilesoft::Shell::refresh_catalog(
+		store,
+		[] { return (uint64_t)5000; },
+		[&store, &scans]
+		{
+			scans++;
+			store.invalidate();			// every scan is overtaken
+			return good_scan(0xDD);
+		});
+
+	CHECK_EQ(scans, 4);
+	CHECK_MSG(!store.current(), "nothing was ever current enough to publish");
+	CHECK_MSG(!store.refreshing(), "and the slot is not left claimed");
+}

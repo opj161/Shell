@@ -182,19 +182,49 @@ namespace Nilesoft
 
 			// Subkey names only. Opening every package key and reading every value
 			// is what used to make this scan expensive.
+			//
+			// Only ERROR_NO_MORE_ITEMS ends this walk successfully. RegEnumKeyEx
+			// distinguishes three outcomes and this loop used to collapse all of
+			// them: "If the function succeeds, the return value is ERROR_SUCCESS.
+			// If the function fails, the return value is a system error code. If
+			// there are no more subkeys available, the function returns
+			// ERROR_NO_MORE_ITEMS. If the lpName buffer is too small to receive
+			// the name of the key, the function returns ERROR_MORE_DATA."
+			// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumkeyexw
+			//
+			// The Remarks say the same thing as an instruction: call it "until
+			// there are no more subkeys (meaning the function returns
+			// ERROR_NO_MORE_ITEMS)".
+			//
+			// `else if(rc != ERROR_MORE_DATA) break; ... return true` therefore
+			// reported a partial enumeration as a complete one, and the caller
+			// published the result as the machine's whole package set. What that
+			// costs is in PackageCatalogService::run.
+			//
+			// ERROR_MORE_DATA is treated as a failure rather than skipped, and
+			// that is the one behaviour change here rather than a strictly
+			// stricter reading. A package full name is bounded by
+			// PACKAGE_FULL_NAME_MAX_LENGTH - name 50 + version 23 +
+			// architecture + resource id 30 + publisher id 13 with separators,
+			// about 127 characters (Windows Kits/10/Include/.../um/minappmodel.h)
+			// - so a 512-character buffer cannot overflow in practice, and a hit
+			// means something is wrong with the key rather than with the buffer.
+			// Silently advancing past an indexed key is the behaviour worth
+			// removing.
 			for(DWORD i = 0;; i++)
 			{
 				wchar_t name[512]{};
 				DWORD cch = static_cast<DWORD>(std::size(name));
 				auto rc = ::RegEnumKeyExW(key, i, name, &cch, nullptr, nullptr, nullptr, nullptr);
 				if(rc == ERROR_SUCCESS)
+				{
 					out.emplace_back(name, cch);
-				else if(rc != ERROR_MORE_DATA)
-					break;
-			}
+					continue;
+				}
 
-			::RegCloseKey(key);
-			return true;
+				::RegCloseKey(key);
+				return rc == ERROR_NO_MORE_ITEMS;
+			}
 		}
 
 		std::wstring RegistryPackageSource::resolve_path(const std::wstring &full_name)

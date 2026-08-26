@@ -293,9 +293,61 @@ namespace Nilesoft
 		{
 			std::vector<ExplorerCommandRegistration> commands;
 			std::vector<PackageEntry> packages;
+
+			// Whether this scan actually saw the machine.
+			//
+			// Without it, "the registry would not enumerate" and "this machine
+			// has no packages installed" are the same value - two empty vectors
+			// - and the worker published the first as though it were the
+			// second. Default false, so an early return is a failure by
+			// construction rather than by remembering to say so.
+			bool ok{};
 		};
 
 		// The scan itself, exposed so a probe or a test can time it.
 		CatalogScan scan_package_catalog();
+
+		/*
+			One kick's worth of refreshing, with the clock and the scan injected.
+
+			The worker's loop lived inline in PackageCatalogService::run, which
+			runs on a thread that never exits, in a process with a real registry.
+			Nothing could test it - and what it did with a *failed* scan is the
+			whole of D3: it published one, so a transient registry error became a
+			catalog saying this machine has no packages, held for the five-minute
+			DefaultTtlMs.
+
+			Loops rather than scanning once because an invalidate() arriving
+			mid-scan discards the result, and the machine state that result
+			described is already gone. Bounded, so a machine changing faster than
+			it can be scanned does not spin.
+		*/
+		template<typename Clock, typename Scan>
+		inline void refresh_catalog(CatalogStore &store, Clock &&now, Scan &&scan,
+									int max_attempts = 4)
+		{
+			for(int attempt = 0; attempt < max_attempts; attempt++)
+			{
+				uint64_t token = 0;
+				if(!store.claim_refresh(now(), &token))
+					return;
+
+				auto scanned = scan();
+
+				// A scan that could not read the machine is not an answer about
+				// the machine. abandon_refresh releases the slot and leaves what
+				// is published alone, so the next kick tries again instead of
+				// pinning an empty catalog for a TTL.
+				if(!scanned.ok)
+				{
+					store.abandon_refresh();
+					return;
+				}
+
+				if(store.publish(std::move(scanned.commands),
+								 std::move(scanned.packages), now(), token))
+					return;
+			}
+		}
 	}
 }

@@ -81,7 +81,7 @@ namespace Nilesoft
 			RegistryPackageSource source;
 			std::vector<std::wstring> names;
 			if(!source.enumerate_full_names(names))
-				return out;
+				return out;		// out.ok stays false
 
 			out.packages.reserve(names.size());
 
@@ -115,6 +115,7 @@ namespace Nilesoft
 						explorer_command_xml::merge(out.commands, reg.clsid, type);
 				}
 			}
+			out.ok = true;
 			return out;
 		}
 
@@ -267,27 +268,31 @@ namespace Nilesoft
 			{
 				::WaitForSingleObject(_work, INFINITE);
 
-				// Loop rather than scan once: an invalidate() that arrives
-				// while a scan is running discards its result, and the machine
-				// state it described is already gone.
-				for(int attempts = 0; attempts < 4; attempts++)
-				{
-					uint64_t token = 0;
-					if(!_store.claim_refresh(::GetTickCount64(), &token))
-						break;
-
-					auto scanned = scan_package_catalog();
-
-					if(_store.publish(std::move(scanned.commands), std::move(scanned.packages),
-									  ::GetTickCount64(), token))
-						break;
-				}
+				/*
+					The attempt loop, the failed-scan policy and the retry bound
+					all live in refresh_catalog now, in the header, so that a test
+					can drive them. What they do with a failed scan is D3 of
+					docs/refactor/12-closure-plan.md: this published one, so a
+					transient registry error became a catalog saying the machine
+					has no packages, held for the five-minute DefaultTtlMs - and
+					the stock configuration asks package.exists("WindowsTerminal")
+					on every menu.
+				*/
+				refresh_catalog(_store, [] { return ::GetTickCount64(); },
+								[] { return scan_package_catalog(); });
 
 				// Manual reset and never reset again: this releases whoever is
 				// waiting for the first catalog, and every later waiter returns
 				// immediately. Set even when the scan failed - a waiter should
 				// stop waiting for an answer that is not coming, not sit out the
 				// whole budget.
+				//
+				// So the event means "an attempt finished", not "a snapshot
+				// exists". Those are different facts and the distinction is
+				// deliberate: snapshot_for_menu already handles a null current()
+				// and answers "unknown" rather than "none", which is the correct
+				// reading of a failed first scan. Separating the two would give
+				// a waiter nothing to wait for and no way to stop.
 				::SetEvent(_published);
 			}
 		}
