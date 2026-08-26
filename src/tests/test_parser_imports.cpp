@@ -363,3 +363,129 @@ TEST(parser_imports, a_file_that_was_read_is_recorded_even_when_it_declares_noth
 			  "a file with no declarations is still a file that was read");
 	CHECK_EQ(parsed.root_items, (size_t)0);
 }
+
+// ---------------------------------------------------------------------------
+// parser_malformed - inputs that used to take explorer.exe down during config
+// load rather than being reported.
+//
+// These live in this file, under their own suite name, because they need the
+// same TempConfigDir / ensure_initializer / Parsed harness above and a second
+// translation unit would construct a second Initializer.
+//
+// All three faults are the family AGENTS.md describes: an access violation
+// inside the hook's SEH region, which catch(...) under /EHsc does not catch. The
+// symptom is a menu that never appears, with explorer.exe still running and
+// nothing in any log - so what each of these asserts is simply that the parse
+// RETURNS. Whether the file is accepted or rejected is secondary; not faulting
+// is the invariant.
+// ---------------------------------------------------------------------------
+
+// Parser::parse_func returns nullptr whenever parse_ident fails, which is any
+// non-alphabetic character after the dot. parse_color dereferenced it unguarded.
+TEST(parser_malformed, a_colour_with_a_non_identifier_postfix_is_reported_not_fatal)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"colour.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title='y' image=#ff0000.5)\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+	CHECK_MSG(!parsed.ok, "a non-identifier colour postfix is malformed input");
+}
+
+// Ident::equals(uint32_t) compares the LAST segment, and verify_ident's
+// icon/image/img/svg arms classify any second segment as an Identifier with no
+// lower bound on argc - so these reach the IDENT_FOR / IDENT_FOREACH argument
+// checks with `args` empty and indexed out of range.
+TEST(parser_malformed, a_wildcard_namespace_ending_in_for_does_not_index_an_empty_argument_list)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"wildfor.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title='y' image=icon.for)\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+}
+
+TEST(parser_malformed, a_wildcard_namespace_ending_in_foreach_does_not_index_an_empty_argument_list)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	// svg's default arm is check(argc >= 0, ...), so it accepts zero arguments
+	// and this reached both args[0] and args[1].
+	auto root = tmp.write(L"wildforeach.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title='y' image=svg.foreach)\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+}
+
+// The one-argument form reached args[1] with a single element present.
+TEST(parser_malformed, a_foreach_with_too_few_arguments_does_not_index_past_its_list)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"shortforeach.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title='y' image=icon.foreach(@a))\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+}
+
+// A `for` with the wrong arity is reported rather than being built.
+// verify_ident requires argc == 3, so this never reaches ForStatement at all.
+//
+// NOTE ON WHAT THIS DOES *NOT* COVER. There is a second null dereference in
+// ForStatement::Eval (Expression.cpp): Context::get_variable answers nullptr
+// when the name resolves nowhere - node scope, then the Parent chain, then
+// runtime/local/global all miss - and the result was passed straight to
+// ->Copy(). That has been guarded, but it is NOT covered by any test here, and
+// this test is deliberately not written as though it were: it was first drafted
+// to claim that coverage and PASSED against the unguarded build, because
+// Parsed only calls parser.Load(). Load parses; it never evaluates an item
+// title, so ForStatement::Eval is never entered. Reaching it needs a harness
+// that drives Context::Eval over a composed menu, which this file does not
+// have.
+//
+// The guard is retained on the strength of the code rather than a test: the
+// very next function up in the same file, VariableExpression::Eval, already
+// writes `if(auto variable = context->get_variable(Id, this); variable)`, so
+// nullptr is the documented-by-usage answer from that call and ForStatement is
+// the one caller that did not check it.
+TEST(parser_malformed, a_for_with_the_wrong_arity_is_reported_not_fatal)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"forvar.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title=for(i, 10))\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+}

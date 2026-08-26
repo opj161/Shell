@@ -572,7 +572,15 @@ namespace Nilesoft
 				auto line = l->line;
 				std::unique_ptr<FuncExpression> func(parse_func());
 
-				if(func->Id.equals({ IDENT_COLOR_LIGHT, IDENT_COLOR_DARK, IDENT_COLOR_INVERT, IDENT_OPACITY }))
+				// parse_func returns nullptr whenever parse_ident fails, which is
+				// any non-alphabetic character after the dot - `#ff0000.5` is
+				// enough. Dereferencing it here faulted during config load, and an
+				// access violation on this path is invisible: it happens inside
+				// the hook's SEH region, which catch(...) under /EHsc does not
+				// catch. A null postfix is the same malformed input as a postfix
+				// that is not one of the four colour functions, so it is reported
+				// the same way, at the same column and line.
+				if(func && func->Id.equals({ IDENT_COLOR_LIGHT, IDENT_COLOR_DARK, IDENT_COLOR_INVERT, IDENT_OPACITY }))
 				{
 					auto id = func->Id[0];
 					func->Id.set(0, IDENT_COLOR);
@@ -869,8 +877,18 @@ namespace Nilesoft
 					{
 						skip(true, !inside_quotes);
 
+						// `args` is filled only inside the `if(l->next_is('('))` arm
+						// above, so it is empty for the parenthesis-less form. These
+						// two arms key on Ident::equals(uint32_t), which compares the
+						// LAST segment, and the icon/image/img/svg arms of
+						// verify_ident classify any second segment as an Identifier
+						// with no lower bound on argc - so `icon.foreach` and
+						// `svg.for` reach here with nothing in `args` and indexed
+						// out of range. Check the arity before indexing; a wrong
+						// argument count is already this branch's own error.
 						if(ident.equals(IDENT_FOREACH))
 						{
+							error_if(args.size() < 2, TokenError::IdentifierArgumentsUnexpected, ident_col);
 							error_if(!args[0]->IsVariable(), TokenError::IdentifierArgumentsUnexpected, ident_col);
 
 							auto id = &args[1]->ident()->Id;
@@ -883,6 +901,7 @@ namespace Nilesoft
 						}
 						else if(ident.equals(IDENT_FOR))
 						{
+							error_if(args.empty(), TokenError::IdentifierArgumentsUnexpected, ident_col);
 							error_if(!args[0]->IsAssign(), TokenError::IdentifierArgumentsUnexpected, ident_col);
 						}
 						else if(ident.equals(IDENT_IF) && args.size() == 1)

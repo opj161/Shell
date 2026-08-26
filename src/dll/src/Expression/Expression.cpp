@@ -139,7 +139,19 @@ namespace Nilesoft
 			{
 				std::vector<string> list;
 
-				auto var = context->get_variable(this->Init, this)->Copy();
+				// get_variable answers nullptr when the name resolves nowhere -
+				// node scope, then the Parent chain, then runtime/local/global all
+				// miss. `for(i, 10)` with no enclosing initializer for `i` is
+				// enough. Dereferencing it faulted while composing the menu, where
+				// the access violation is invisible to catch(...) under /EHsc
+				// because it happens inside the hook's SEH region. An unresolvable
+				// loop variable yields no body, which is what this statement
+				// already returns for an absent Init.
+				auto init = context->get_variable(this->Init, this);
+				if(!init)
+					return nullptr;
+
+				auto var = init->Copy();
 				int x = 0;
 
 				for(int i = context->Eval(var).move();
