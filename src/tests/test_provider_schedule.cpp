@@ -51,6 +51,58 @@ namespace
 		return c;
 	}
 
+	/*
+		A provider that is cheap at its best and expensive on its last answer.
+
+		The shape that opened the starvation trap, and it is not exotic: two
+		samples where the second is a spike. Section 02.2a records cold handlers
+		at ~30 ms each and one at 209 ms on a large selection, so a second sample
+		above MENU_BUDGET_US is ordinary.
+
+		It is deliberately *not* slow. Judgement is on best_us alone, and 2 ms is
+		far under SLOW_PROVIDER_US, so nothing here is condemned - which is
+		precisely why the slow-provider re-probe could never rescue it.
+	*/
+	ProviderCandidate spiked(uint32_t ordinal, uint32_t best_us, uint32_t last_us,
+							 bool budget_due = false)
+	{
+		ProviderCandidate c;
+		c.ordinal = ordinal;
+		c.hash = 0x3000 + ordinal;
+		c.has_timing = true;
+		c.samples = MIN_SAMPLES_TO_JUDGE;
+		c.best_us = best_us;
+		c.last_us = last_us;
+		c.slow = false;
+		c.budget_reprobe_due = budget_due;
+		return c;
+	}
+
+	/*
+		Indexing a plan that turned out shorter than expected.
+
+		CHECK_EQ records and continues, so a size assertion does not protect the
+		lines below it: on a short plan they run anyway and index past the end.
+		That is tolerable noise in a passing suite and actively harmful in the
+		one run that matters most - the one where a defect is deliberately
+		re-introduced to prove these tests catch it. Measured while doing exactly
+		that: the run died with 0xC0000005 and printed one FAIL out of five, so
+		the evidence the gate exists to produce was destroyed by the gate.
+
+		AGENTS.md names this shape: a failure reported in different words from
+		every other failure is a failure nobody can find. A default-constructed
+		step fails the comparison and says so.
+	*/
+	ProviderStep step_at(const ProviderPlan &plan, size_t i)
+	{
+		return i < plan.order.size() ? plan.order[i] : ProviderStep{};
+	}
+
+	ProviderDeferred deferred_at(const ProviderPlan &plan, size_t i)
+	{
+		return i < plan.deferred.size() ? plan.deferred[i] : ProviderDeferred{};
+	}
+
 	std::vector<uint32_t> ordinals(const ProviderPlan &plan)
 	{
 		std::vector<uint32_t> out;
@@ -341,4 +393,131 @@ TEST(provider_schedule, the_plan_is_deterministic_for_a_given_set_of_timings)
 	CHECK_EQ(a[1], 1u);
 	CHECK_EQ(a[2], 2u);
 	CHECK(a == b);
+}
+
+// ---- a spike must not be a life sentence --------------------------------
+//
+// The most serious defect on this branch, and one the scheduler introduced.
+// Take best_us = 2 000 and last_us = 70 000 - two samples, the second a spike:
+//
+//   - `slow` is false, because judgement is on best_us alone and 2 ms is well
+//     under SLOW_PROVIDER_US. So the candidate is Known and can never be
+//     Reprobe, and REPROBE_AFTER does not apply to it;
+//   - provider_estimate_us is max(best, last) = 70 ms, above MENU_BUDGET_US,
+//     so provider_step_fits refused it against a completely unspent budget;
+//   - note_budget_deferral deliberately does not touch since_probe, because a
+//     provider the menu could not afford has not had its turn.
+//
+// Nothing moved. It was never called, so record() never ran, so last_us could
+// never come down and best_us could never rise into "slow". The item left every
+// menu for the life of the process - the same harm the scheduler was written to
+// remove, made permanent.
+
+TEST(provider_schedule, a_known_step_that_no_menu_could_admit_is_never_planned)
+{
+	// The structural half of the fix. A Known step is refused on its
+	// prediction, and what is *left* of a budget is never more than the whole
+	// budget - so a prediction above MENU_BUDGET_US describes a step that will
+	// be refused every single time it is planned.
+	std::vector<ProviderCandidate> c{
+		known(0, 1000),
+		spiked(1, 2000, MENU_BUDGET_US + 20000),
+		known(2, 3000),
+	};
+	auto plan = plan_providers(c, 0);
+
+	CHECK(plan_is_admissible(plan));
+
+	for(const auto &step : plan.order)
+		CHECK(step.ordinal != 1u);
+
+	CHECK_EQ(plan.deferred.size(), (size_t)1);
+	CHECK_EQ(deferred_at(plan, 0).ordinal, 1u);
+
+	// Charged as a budget refusal, not as a slow one: it is not slow, and
+	// calling it slow would send it down the REPROBE_AFTER path that cannot
+	// help it.
+	CHECK(deferred_at(plan, 0).why == ProviderDeferral::Budget);
+}
+
+TEST(provider_schedule, the_admissibility_invariant_holds_across_a_mixed_plan)
+{
+	std::vector<ProviderCandidate> c{
+		known(0, 3000), unknown(1), slow(2, 60000, false),
+		known(3, 1000), slow(4, 70000, true), unknown(5),
+		spiked(6, 2000, MENU_BUDGET_US + 1),
+		spiked(7, 500, MENU_BUDGET_US),			// exactly the budget: admissible
+	};
+	auto plan = plan_providers(c, 3);
+
+	CHECK(plan_is_admissible(plan));
+
+	// The boundary is `>`, not `>=`. A provider predicted to cost exactly the
+	// whole budget can be admitted by a menu that has spent nothing, so it is
+	// still planned.
+	bool seven_planned = false;
+	for(const auto &step : plan.order)
+		if(step.ordinal == 7u)
+			seven_planned = true;
+	CHECK(seven_planned);
+}
+
+TEST(provider_schedule, a_provider_refused_too_often_is_given_a_forced_turn)
+{
+	// The liveness half. Once the streak reaches BUDGET_REPROBE_AFTER the
+	// candidate is planned as a Reprobe, which reuses machinery that is already
+	// correct: provider_step_fits never refuses a non-Known step on a
+	// prediction, so the turn actually happens.
+	std::vector<ProviderCandidate> c{
+		known(0, 1000),
+		spiked(1, 2000, MENU_BUDGET_US + 20000, true),
+	};
+	auto plan = plan_providers(c, 0);
+
+	CHECK(plan.deferred.empty());
+	CHECK_EQ(plan.order.size(), (size_t)2);
+
+	// Ordered last, like every other re-probe: a forced retry must not evict
+	// known-healthy work from the same menu.
+	CHECK_EQ(step_at(plan, 1).ordinal, 1u);
+	CHECK(step_at(plan, 1).call == ProviderCall::Reprobe);
+
+	// And admitted, against a budget its estimate could not possibly fit.
+	CHECK(provider_step_fits(step_at(plan, 1), 1000));
+	CHECK(!provider_step_fits(step_at(plan, 1), 0));
+}
+
+TEST(provider_schedule, a_forced_turn_does_not_displace_affordable_work)
+{
+	std::vector<ProviderCandidate> c{
+		spiked(0, 2000, MENU_BUDGET_US + 20000, true),		// registered first
+		known(1, 9000),
+		known(2, 1000),
+	};
+	auto plan = plan_providers(c, 0);
+
+	// Cheapest known first, then the forced re-probe - even though the
+	// re-probed provider is ordinal 0.
+	CHECK_EQ(plan.order.size(), (size_t)3);
+	CHECK_EQ(step_at(plan, 0).ordinal, 2u);
+	CHECK_EQ(step_at(plan, 1).ordinal, 1u);
+	CHECK_EQ(step_at(plan, 2).ordinal, 0u);
+	CHECK(step_at(plan, 2).call == ProviderCall::Reprobe);
+}
+
+TEST(provider_schedule, an_affordable_provider_is_untouched_by_any_of_this)
+{
+	// The over-correction guard. A known provider whose estimate fits is still
+	// planned as Known and still ordered by its prediction; nothing about the
+	// spike handling reaches it.
+	std::vector<ProviderCandidate> c{ spiked(0, 2000, 9000), known(1, 1000) };
+	auto plan = plan_providers(c, 0);
+
+	CHECK(plan.deferred.empty());
+	CHECK_EQ(plan.order.size(), (size_t)2);
+	CHECK_EQ(step_at(plan, 0).ordinal, 1u);
+	CHECK(step_at(plan, 0).call == ProviderCall::Known);
+	CHECK_EQ(step_at(plan, 1).ordinal, 0u);
+	CHECK(step_at(plan, 1).call == ProviderCall::Known);
+	CHECK_EQ(step_at(plan, 1).estimate_us, 9000u);
 }

@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include "Include/ProviderHealth.h"
+#include "Include/ProviderSchedule.h"
 
 // Which packaged verb handlers get asked, and which wait for the next menu.
 //
@@ -39,18 +40,107 @@ namespace
 		for(int i = 0; i < times; i++)
 			health.record(clsid, shape, us, true);
 	}
+
+	enum class Decision { Try, DeferSlow, DeferBudget };
+
+	/*
+		One provider through the admission sequence the product actually runs.
+
+		These tests used to call ProviderHealth::consider(), which was the
+		original single-pass policy: it decided and mutated in one step. The
+		two-phase scheduler replaced it - planning reads through classify() and
+		the decisions that change state are named (note_slow_deferral,
+		note_reprobe_started, note_budget_deferral) - and consider() was left
+		behind with no caller in the product and twenty-nine here.
+
+		That is the shape AGENTS.md warns about in as many words: a test that
+		only ever calls a function the way the test calls it. Twenty-two tests
+		were pinning a policy that no longer shipped, while the policy that did
+		ship carried a defect - a known provider whose estimate exceeded the
+		whole menu budget could never be admitted, never be called, and so never
+		correct the estimate that refused it - that none of them could see,
+		because none of them ran it.
+
+		So consider() is gone and this helper takes its place, and it is a
+		transcription of ExplorerCommand.cpp's loop rather than a convenience:
+		classify, build the candidate, plan, charge the deferral or check the
+		live budget, in that order. If the product's sequence changes and this
+		does not, the tests below stop describing the product - which is exactly
+		the failure being corrected, so keep the two in step.
+	*/
+	Decision decide(ProviderHealth &health, uint32_t clsid, SelectionShape shape,
+					uint32_t budget_remaining_us)
+	{
+		ProviderCandidate candidate;
+		candidate.ordinal = 0;
+		candidate.hash = clsid;
+
+		ProviderTiming timing;
+		if(health.classify(clsid, shape, &timing))
+		{
+			candidate.has_timing = true;
+			candidate.samples = timing.samples;
+			candidate.best_us = timing.best_us;
+			candidate.last_us = timing.last_us;
+
+			if(timing.samples >= MIN_SAMPLES_TO_JUDGE
+			   && timing.best_us > SLOW_PROVIDER_US)
+			{
+				candidate.slow = true;
+				candidate.reprobe_due =
+					static_cast<uint32_t>(timing.since_probe) + 1 >= REPROBE_AFTER;
+			}
+
+			candidate.budget_reprobe_due =
+				static_cast<uint32_t>(timing.budget_deferrals) + 1 >= BUDGET_REPROBE_AFTER;
+		}
+
+		auto plan = plan_providers({ candidate }, health.next_exploration_cursor());
+
+		// Planned-out before the menu started: slow and not due, or a prediction
+		// no menu could satisfy.
+		for(const auto &skipped : plan.deferred)
+		{
+			if(skipped.why == ProviderDeferral::Budget)
+			{
+				health.note_budget_deferral(skipped.hash, shape);
+				return Decision::DeferBudget;
+			}
+			health.note_slow_deferral(skipped.hash, shape);
+			return Decision::DeferSlow;
+		}
+
+		for(const auto &step : plan.order)
+		{
+			// Affordability first, then the re-probe is granted - so a probe
+			// that is refused by the live budget does not reset its counter and
+			// lose its turn.
+			if(!provider_step_fits(step, budget_remaining_us))
+			{
+				health.note_budget_deferral(step.hash, shape);
+				return Decision::DeferBudget;
+			}
+
+			if(step.call == ProviderCall::Reprobe)
+				health.note_reprobe_started(step.hash, shape);
+
+			return Decision::Try;
+		}
+
+		return Decision::Try;		// one candidate always produces one outcome
+	}
 }
 
 TEST(provider_health, an_unknown_provider_is_always_tried)
 {
 	ProviderHealth health;
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, an_unknown_provider_is_deferred_only_when_nothing_is_left)
 {
 	ProviderHealth health;
-	CHECK(health.consider(A, ONE, 0) == ProviderVerdict::DeferBudget);
+	CHECK(decide(health, A, ONE, 0) == Decision::DeferBudget);
 }
 
 TEST(provider_health, a_provider_that_has_been_quick_keeps_its_place)
@@ -58,7 +148,7 @@ TEST(provider_health, a_provider_that_has_been_quick_keeps_its_place)
 	ProviderHealth health;
 	sample(health, A, FAST_US, 2);
 
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, a_provider_that_has_never_been_quick_is_deferred)
@@ -66,7 +156,7 @@ TEST(provider_health, a_provider_that_has_never_been_quick_is_deferred)
 	ProviderHealth health;
 	sample(health, A, PATHOLOGICAL_US, 2);
 
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::DeferSlow);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::DeferSlow);
 }
 
 TEST(provider_health, one_slow_sample_is_not_enough_to_condemn_a_provider)
@@ -77,20 +167,20 @@ TEST(provider_health, one_slow_sample_is_not_enough_to_condemn_a_provider)
 	ProviderHealth health;
 	sample(health, A, COLD_US, 1);
 
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, one_quick_answer_rehabilitates_a_provider_permanently)
 {
 	ProviderHealth health;
 	sample(health, A, COLD_US, 2);
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::DeferSlow);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::DeferSlow);
 
 	// Judged on its best time, so a single quick answer is enough - which is
 	// what makes a cold first sample survivable rather than fatal.
 	health.record(A, ONE, FAST_US, true);
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, a_deferred_provider_is_tried_again_eventually)
@@ -109,7 +199,7 @@ TEST(provider_health, a_deferred_provider_is_tried_again_eventually)
 	int deferred = 0;
 	for(int i = 0; i < REPROBE_AFTER * 2; i++)
 	{
-		if(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::DeferSlow)
+		if(decide(health, A, ONE, MENU_BUDGET_US) == Decision::DeferSlow)
 			deferred++;
 		else
 			break;
@@ -123,14 +213,25 @@ TEST(provider_health, a_reprobe_does_not_start_in_a_menu_with_nothing_left)
 	// The re-probe ignores affordability, so the one thing left to check is that
 	// it does not begin just as a menu runs out of budget - which is the worst
 	// possible moment to pay a slow provider's full cost.
+	//
+	// Under the shipped two-phase policy the *reason* differs from the one
+	// consider() gave, and the difference is an improvement rather than a
+	// relaxation. consider() answered DeferSlow throughout, because it decided
+	// the re-probe and the affordability in one step. Planning and admission are
+	// now separate: once the provider is due, the planner emits a Reprobe step
+	// and the live check refuses it for budget. So the assertion is on the
+	// property that matters - it is never *tried* in a menu with nothing left -
+	// rather than on which of two deferral words was printed.
 	ProviderHealth health;
 	sample(health, A, PATHOLOGICAL_US, 2);
 
 	for(int i = 0; i < REPROBE_AFTER * 2; i++)
-		CHECK(health.consider(A, ONE, 0) == ProviderVerdict::DeferSlow);
+		CHECK(decide(health, A, ONE, 0) != Decision::Try);
 
 	// And it is not lost - the next menu with room in it takes the probe.
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	// note_reprobe_started is granted only after the affordability check, so
+	// none of the refusals above consumed the turn.
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, a_provider_that_cannot_fit_in_what_is_left_waits)
@@ -138,16 +239,16 @@ TEST(provider_health, a_provider_that_cannot_fit_in_what_is_left_waits)
 	ProviderHealth health;
 	sample(health, A, 10000, 2);		// it costs 10 ms
 
-	CHECK(health.consider(A, ONE, 20000) == ProviderVerdict::Try);
-	CHECK(health.consider(A, ONE, 5000) == ProviderVerdict::DeferBudget);
+	CHECK(decide(health, A, ONE, 20000) == Decision::Try);
+	CHECK(decide(health, A, ONE, 5000) == Decision::DeferBudget);
 }
 
 TEST(provider_health, deferrals_and_failures_are_counted_for_reporting)
 {
 	ProviderHealth health;
 	sample(health, A, PATHOLOGICAL_US, 2);
-	health.consider(A, ONE, MENU_BUDGET_US);
-	health.consider(A, ONE, MENU_BUDGET_US);
+	decide(health, A, ONE, MENU_BUDGET_US);
+	decide(health, A, ONE, MENU_BUDGET_US);
 	health.record(A, ONE, FAST_US, false);
 
 	ProviderTiming timing;
@@ -164,8 +265,8 @@ TEST(provider_health, providers_are_tracked_separately)
 	sample(health, A, PATHOLOGICAL_US, 2);
 	sample(health, B, FAST_US, 2);
 
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::DeferSlow);
-	CHECK(health.consider(B, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::DeferSlow);
+	CHECK(decide(health, B, ONE, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, an_unseen_provider_reports_nothing_rather_than_zeroes)
@@ -203,7 +304,7 @@ TEST(provider_health, a_cold_first_menu_does_not_progressively_empty_the_menu)
 	// slow sample.
 	for(uint32_t i = 0; i < COUNT; i++)
 	{
-		if(health.consider(0x1000 + i, ONE, MENU_BUDGET_US) == ProviderVerdict::Try)
+		if(decide(health, 0x1000 + i, ONE, MENU_BUDGET_US) == Decision::Try)
 			health.record(0x1000 + i, ONE, COLD_US, true);
 	}
 
@@ -212,7 +313,7 @@ TEST(provider_health, a_cold_first_menu_does_not_progressively_empty_the_menu)
 	uint32_t tried = 0;
 	for(uint32_t i = 0; i < COUNT; i++)
 	{
-		if(health.consider(0x1000 + i, ONE, MENU_BUDGET_US) == ProviderVerdict::Try)
+		if(decide(health, 0x1000 + i, ONE, MENU_BUDGET_US) == Decision::Try)
 		{
 			tried++;
 			health.record(0x1000 + i, ONE, FAST_US, true);
@@ -223,7 +324,7 @@ TEST(provider_health, a_cold_first_menu_does_not_progressively_empty_the_menu)
 	// Menu 3 onward: all of them have a fast best time, so none is ever deferred
 	// for being slow again.
 	for(uint32_t i = 0; i < COUNT; i++)
-		CHECK(health.consider(0x1000 + i, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+		CHECK(decide(health, 0x1000 + i, ONE, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, a_genuinely_pathological_provider_is_still_caught)
@@ -232,13 +333,13 @@ TEST(provider_health, a_genuinely_pathological_provider_is_still_caught)
 	// must not protect one that is simply slow. Two samples, then it is out.
 	ProviderHealth health;
 
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
 	health.record(A, ONE, PATHOLOGICAL_US, true);
 
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
 	health.record(A, ONE, PATHOLOGICAL_US, true);
 
-	CHECK(health.consider(A, ONE, MENU_BUDGET_US) == ProviderVerdict::DeferSlow);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::DeferSlow);
 }
 
 TEST(provider_budget, a_fresh_budget_has_all_of_it_and_spends_down)
@@ -293,8 +394,8 @@ TEST(provider_health, a_cost_learned_on_one_file_says_nothing_about_two_hundred)
 	health.record(A, SelectionShape::Many, PATHOLOGICAL_US, true);
 	health.record(A, SelectionShape::Many, PATHOLOGICAL_US, true);
 
-	CHECK(health.consider(A, SelectionShape::Single, MENU_BUDGET_US) == ProviderVerdict::Try);
-	CHECK(health.consider(A, SelectionShape::Many, MENU_BUDGET_US) == ProviderVerdict::DeferSlow);
+	CHECK(decide(health, A, SelectionShape::Single, MENU_BUDGET_US) == Decision::Try);
+	CHECK(decide(health, A, SelectionShape::Many, MENU_BUDGET_US) == Decision::DeferSlow);
 }
 
 // The direction that costs a user their menu items rather than their time:
@@ -307,8 +408,8 @@ TEST(provider_health, being_slow_over_many_does_not_condemn_the_single_case)
 	sample(health, A, PATHOLOGICAL_US, 2, SelectionShape::Many);
 	sample(health, A, FAST_US, 2, SelectionShape::Single);
 
-	CHECK(health.consider(A, SelectionShape::Many, MENU_BUDGET_US) == ProviderVerdict::DeferSlow);
-	CHECK(health.consider(A, SelectionShape::Single, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, SelectionShape::Many, MENU_BUDGET_US) == Decision::DeferSlow);
+	CHECK(decide(health, A, SelectionShape::Single, MENU_BUDGET_US) == Decision::Try);
 }
 
 TEST(provider_health, each_shape_keeps_its_own_timing)
@@ -349,6 +450,95 @@ TEST(provider_health, a_background_click_is_not_a_selection_of_one)
 
 	sample(health, A, PATHOLOGICAL_US, 2, SelectionShape::Background);
 
-	CHECK(health.consider(A, SelectionShape::Background, MENU_BUDGET_US) == ProviderVerdict::DeferSlow);
-	CHECK(health.consider(A, SelectionShape::Single, MENU_BUDGET_US) == ProviderVerdict::Try);
+	CHECK(decide(health, A, SelectionShape::Background, MENU_BUDGET_US) == Decision::DeferSlow);
+	CHECK(decide(health, A, SelectionShape::Single, MENU_BUDGET_US) == Decision::Try);
+}
+
+// ---- one spike must not be a life sentence ------------------------------
+//
+// The whole sequence, through the shipping path, because a snapshot of any one
+// step in it looks reasonable. This is the defect the two-phase scheduler
+// introduced and that twenty-nine tests against the retired consider() could
+// not see.
+
+TEST(provider_health, a_single_spike_does_not_exclude_a_provider_for_the_process_lifetime)
+{
+	ProviderHealth health;
+
+	// Two samples. The second is a spike above the whole menu budget - ordinary
+	// rather than exotic: section 02.2a records cold handlers at ~30 ms each and
+	// one at 209 ms on a large selection.
+	health.record(A, ONE, FAST_US, true);
+	health.record(A, ONE, MENU_BUDGET_US + 20000, true);
+
+	// It is not slow. best_us is 2 ms, far under SLOW_PROVIDER_US, so no amount
+	// of REPROBE_AFTER can ever apply to it.
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK(timing.best_us <= SLOW_PROVIDER_US);
+
+	// And yet it is refused against a completely unspent budget, because the
+	// estimate is max(best, last).
+	int refused = 0;
+	auto last = Decision::DeferBudget;
+	for(int i = 0; i < BUDGET_REPROBE_AFTER * 3; i++)
+	{
+		last = decide(health, A, ONE, MENU_BUDGET_US);
+		if(last != Decision::DeferBudget)
+			break;
+		refused++;
+	}
+
+	// Exactly BUDGET_REPROBE_AFTER - 1 refusals, and then a turn. Before the
+	// fix this loop ran to its limit and the provider was gone for good: it was
+	// never called, so record() never ran, so last_us could never come down and
+	// best_us could never rise into "slow".
+	CHECK_EQ(refused, BUDGET_REPROBE_AFTER - 1);
+	CHECK(last == Decision::Try);
+
+	// The forced turn was granted, so the streak restarts rather than the
+	// provider being due on every menu from now on.
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.budget_deferrals, 0);
+
+	// It answers quickly, which is the point of asking: the estimate that
+	// refused it is corrected by the only thing that can correct it.
+	health.record(A, ONE, FAST_US, true);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
+	CHECK(decide(health, A, ONE, MENU_BUDGET_US) == Decision::Try);
+}
+
+TEST(provider_health, a_budget_deferral_still_does_not_consume_a_slow_providers_turn)
+{
+	// The two counters must stay independent. A provider refused for cost has
+	// not had its turn - that is why note_budget_deferral leaves since_probe
+	// alone - and adding budget_deferrals must not have quietly changed it.
+	ProviderHealth health;
+	sample(health, A, 10000, 2);
+
+	for(int i = 0; i < 5; i++)
+		CHECK(decide(health, A, ONE, 1000) == Decision::DeferBudget);
+
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.since_probe, 0);
+	CHECK_EQ(timing.budget_deferrals, 5);
+	CHECK_EQ(timing.deferrals, 5);
+}
+
+TEST(provider_health, any_answer_ends_the_budget_deferral_streak)
+{
+	ProviderHealth health;
+	sample(health, A, 10000, 2);
+
+	for(int i = 0; i < 5; i++)
+		CHECK(decide(health, A, ONE, 1000) == Decision::DeferBudget);
+
+	// A failed call is still an answer: it updates last_us, so the estimate that
+	// caused the refusals is no longer unchallenged.
+	health.record(A, ONE, FAST_US, false);
+
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.budget_deferrals, 0);
 }

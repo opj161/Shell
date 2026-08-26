@@ -126,6 +126,11 @@ namespace Nilesoft
 			// since_probe + 1 >= REPROBE_AFTER. Computed by the caller so this
 			// header holds no counter state.
 			bool reprobe_due{};
+
+			// budget_deferrals + 1 >= BUDGET_REPROBE_AFTER. The same idea for
+			// the other way a provider stops being called, and computed by the
+			// caller for the same reason.
+			bool budget_reprobe_due{};
 		};
 
 		struct ProviderPlan
@@ -172,7 +177,60 @@ namespace Nilesoft
 				}
 
 				if(c.has_timing && c.samples >= MIN_SAMPLES_TO_JUDGE)
-					known.push_back(&c);
+				{
+					/*
+						A known provider that keeps being refused for cost.
+
+						This is the trap the two-phase scheduler opened, and it
+						has nothing to do with being slow. Take best_us = 2 000
+						and last_us = 70 000 - two samples, the second a spike,
+						which section 02.2a's own cold-handler numbers make
+						ordinary rather than exotic:
+
+						  - `slow` is false, because judgement is on best_us
+						    alone and 2 ms is well under SLOW_PROVIDER_US, so it
+						    is Known and never Reprobe;
+						  - `provider_estimate_us` is max(best, last) = 70 ms,
+						    which is above MENU_BUDGET_US, so provider_step_fits
+						    refuses it against a *completely unspent* budget;
+						  - note_budget_deferral deliberately does not touch
+						    since_probe, because a provider the menu could not
+						    afford has not had its turn.
+
+						So it is never called, record() never runs, last_us can
+						never come down, and best_us can never rise into "slow".
+						The item disappears from every menu for the life of the
+						process - the same harm the whole scheduler was built to
+						remove (section 09 finding C), in a permanent form.
+
+						Two things close it, and both are needed.
+
+						First, a forced turn. `budget_reprobe_due` promotes the
+						candidate to Reprobe, which reuses machinery that is
+						already correct: provider_step_fits never refuses a
+						non-Known step on a prediction, and re-probes are ordered
+						last, so a forced retry cannot evict known-healthy work
+						from the same menu. One answer resets the streak and
+						corrects the estimate that caused it.
+
+						Second, and this is what makes the class unreachable
+						rather than merely survivable: a Known step whose
+						estimate exceeds the *whole* budget is a step no menu can
+						ever admit. Planning one is a lie about what the plan
+						will do, so it is not planned - it is deferred here, with
+						its reason, and the caller charges it exactly as the
+						resolution loop would have. plan_is_admissible() states
+						the resulting invariant and a test holds the planner to
+						it.
+					*/
+					if(c.budget_reprobe_due)
+						reprobe.push_back(&c);
+					else if(provider_estimate_us(c) > MENU_BUDGET_US)
+						plan.deferred.push_back({ c.ordinal, c.hash,
+												  ProviderDeferral::Budget });
+					else
+						known.push_back(&c);
+				}
 				else
 					unknown.push_back(&c);
 			}
@@ -254,6 +312,39 @@ namespace Nilesoft
 			if(step.call != ProviderCall::Known)
 				return true;
 			return step.estimate_us <= remaining_us;
+		}
+
+		/*
+			The structural guarantee, so that it can be asserted rather than
+			argued.
+
+			A Known step is refused on its prediction. A prediction above
+			MENU_BUDGET_US therefore cannot be satisfied by any menu, however
+			empty - provider_step_fits compares against what is *left*, and what
+			is left is never more than the whole budget. A plan containing such
+			a step is a plan with a step in it that will be refused every time it
+			is made, which is starvation written into the schedule rather than
+			arrived at by accident.
+
+			plan_providers does not produce one: such a candidate is either
+			promoted to Reprobe, which is admitted on remaining budget rather
+			than on a prediction, or deferred with ProviderDeferral::Budget so
+			the caller charges it once and it accrues toward its forced turn.
+
+			Checked by a test over the planner's whole output rather than
+			asserted at runtime, because it is a property of the policy and the
+			policy is pure - there is nothing to catch it doing at runtime that
+			the test cannot catch first.
+		*/
+		inline bool plan_is_admissible(const ProviderPlan &plan) noexcept
+		{
+			for(const auto &step : plan.order)
+			{
+				if(step.call == ProviderCall::Known
+				   && step.estimate_us > MENU_BUDGET_US)
+					return false;
+			}
+			return true;
 		}
 	}
 }

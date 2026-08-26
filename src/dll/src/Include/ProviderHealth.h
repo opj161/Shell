@@ -64,14 +64,6 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
-		// Whether to ask a provider anything at all, this menu.
-		enum class ProviderVerdict
-		{
-			Try,
-			DeferSlow,		// it has never once answered quickly
-			DeferBudget,	// this menu has spent what it is allowed to
-		};
-
 		/*
 			How much selection a provider was asked about.
 
@@ -130,6 +122,24 @@ namespace Nilesoft
 			uint16_t deferrals{};
 			uint16_t failures{};
 			uint16_t since_probe{};			// menus skipped since it was last tried
+
+			// Consecutive menus this provider was refused because its predicted
+			// cost did not fit, as opposed to because it was judged slow.
+			//
+			// A separate counter, and not a reuse of either of the two above.
+			// `deferrals` is incremented by both kinds and is a reporting total;
+			// `since_probe` carries the slow-provider accounting and is
+			// deliberately *not* touched by a budget deferral, because a
+			// provider the menu could not afford has not had its turn. Neither
+			// can answer "has this one been refused so often that it needs a
+			// forced turn", which is the question that keeps it alive.
+			//
+			// Reset by record() and by note_reprobe_started: any answer at all,
+			// forced or not, ends the streak.
+			//
+			// In-process only. PerfExportProvider is a separate layout, so this
+			// does not touch PERF_EXPORT_VERSION.
+			uint16_t budget_deferrals{};
 		};
 
 		/*
@@ -177,6 +187,29 @@ namespace Nilesoft
 		inline constexpr uint16_t MIN_SAMPLES_TO_JUDGE = 2;
 
 		/*
+			The same idea as REPROBE_AFTER, for the other way a provider can
+			stop being called - and an order of magnitude smaller, because it is
+			buying something an order of magnitude cheaper.
+
+			REPROBE_AFTER is calibrated for a provider whose probe *costs the
+			user a slow menu*: it is known slow, that is why it was deferred, so
+			200 keeps the price to a couple of seconds spread over a day's use.
+
+			A budget-deferred provider is in the opposite position. It is not
+			judged slow - its best time is under SLOW_PROVIDER_US, which is why
+			it was classified Known rather than condemned - so the belief is
+			that it is cheap and one sample was unlucky. Forcing its turn costs
+			whatever it actually costs now, which is expected to be small, and
+			the answer immediately corrects the estimate that got it refused.
+			There is no reason to make it wait 200 menus to find that out, and
+			every reason not to: until it answers, its `last_us` cannot come
+			down, so the estimate that refused it cannot change on its own.
+
+			20 is roughly "within one sitting" rather than "eventually".
+		*/
+		inline constexpr uint16_t BUDGET_REPROBE_AFTER = 20;
+
+		/*
 			Process-lifetime, shared across menu threads, guarded by one lock.
 			The lock is taken twice per provider per menu - once to decide, once
 			to record - against work measured in milliseconds, so it is not on
@@ -195,75 +228,30 @@ namespace Nilesoft
 			ProviderHealth(const ProviderHealth &) = delete;
 			ProviderHealth &operator=(const ProviderHealth &) = delete;
 
-			// Judgement is on the *best* time this provider has ever managed,
-			// never the last or the worst, and never before it has answered
-			// twice. Both rules exist for the same reason: the first menu in a
-			// process is cold and makes every provider look pathological. See
-			// the note on MIN_SAMPLES_TO_JUDGE.
-			ProviderVerdict consider(uint32_t clsid_hash, SelectionShape shape,
-									 uint32_t budget_remaining_us)
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				auto *timing = find(clsid_hash, shape);
-
-				// Not enough evidence to condemn it. Trying is the only way to
-				// get any, and the whole-menu budget still contains the damage.
-				if(!timing || timing->samples < MIN_SAMPLES_TO_JUDGE)
-					return budget_remaining_us > 0 ? ProviderVerdict::Try
-												   : ProviderVerdict::DeferBudget;
-
-				if(timing->best_us > SLOW_PROVIDER_US)
-				{
-					// Not its turn yet, or this menu has already spent its
-					// allowance - a re-probe is the worst thing to start when
-					// there is no room left for it.
-					if(++timing->since_probe < REPROBE_AFTER || budget_remaining_us == 0)
-					{
-						timing->deferrals++;
-						return ProviderVerdict::DeferSlow;
-					}
-
-					timing->since_probe = 0;
-
-					// Deliberately returns here rather than falling into the
-					// affordability check below. That check asks whether the
-					// provider fits in what is left, and a provider being
-					// re-probed never does - it is slow, that is why it was
-					// deferred. Falling through would mean the re-probe never
-					// actually happened and a provider that had since become
-					// fast stayed excluded for the life of the process.
-					return ProviderVerdict::Try;
-				}
-
-				// Expect it to cost what it best managed before. A provider that
-				// cannot fit in what is left waits for the next menu rather than
-				// pushing the whole menu past its budget.
-				if(budget_remaining_us < timing->best_us)
-				{
-					timing->deferrals++;
-					return ProviderVerdict::DeferBudget;
-				}
-
-				return ProviderVerdict::Try;
-			}
-
 			/*
 				What is remembered about a provider, without deciding anything
 				and without moving anything.
 
-				consider() above answers "try it or not" and mutates as it goes -
-				it advances since_probe, resets it when a re-probe is granted,
-				and counts a deferral. That is correct for a caller that asks
-				once per provider in the order it intends to call them, and wrong
-				for one that wants to *plan* first: a planning pass that asked
-				consider() for every registration would advance every slow
-				provider's re-probe counter once per menu whether or not it ever
-				got called, and count deferrals for providers it later decided to
-				call after all.
+				This class used to expose consider(), which answered "try it or
+				not" and mutated as it went - advancing since_probe, resetting it
+				when a re-probe was granted, counting a deferral. That is correct
+				for a caller that asks once per provider in the order it intends
+				to call them, and wrong for one that wants to *plan* first: a
+				planning pass that asked consider() for every registration would
+				advance every slow provider's re-probe counter once per menu
+				whether or not it ever got called, and count deferrals for
+				providers it later decided to call after all.
 
 				So planning reads, and the decisions that change state are named:
 				note_slow_deferral, note_reprobe_started, note_budget_deferral.
 				Include/ProviderSchedule.h.
+
+				consider() itself is gone. It had had no caller in the product
+				since the two-phase scheduler landed, and twenty-nine in
+				test_provider_health.cpp - two divergent admission policies, of
+				which only the unused one was under test. Those tests now drive
+				the shipping sequence through a helper that transcribes
+				ExplorerCommand.cpp's loop.
 			*/
 			bool classify(uint32_t clsid_hash, SelectionShape shape,
 						  ProviderTiming *out) const
@@ -292,12 +280,22 @@ namespace Nilesoft
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				if(auto *timing = find(clsid_hash, shape))
+				{
 					timing->since_probe = 0;
+					timing->budget_deferrals = 0;
+				}
 			}
 
 			// The menu ran out before this one was reached. Not a judgement
 			// about the provider, so it does not touch since_probe: a provider
 			// the menu could not afford has not had its turn.
+			//
+			// It does advance budget_deferrals, which is what makes that
+			// sentence true rather than aspirational. Without a count of its
+			// own, "has not had its turn" was a state with no exit: nothing
+			// else in this class moves while a provider is being refused, so a
+			// refusal that was going to repeat forever looked exactly like one
+			// that was not.
 			void note_budget_deferral(uint32_t clsid_hash, SelectionShape shape)
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
@@ -305,6 +303,8 @@ namespace Nilesoft
 				{
 					if(timing->deferrals < UINT16_MAX)
 						timing->deferrals++;
+					if(timing->budget_deferrals < UINT16_MAX)
+						timing->budget_deferrals++;
 				}
 			}
 
@@ -331,6 +331,10 @@ namespace Nilesoft
 				if(timing->samples < UINT16_MAX)
 					timing->samples++;
 				timing->since_probe = 0;
+
+				// It answered, so it is not being starved, whatever the answer
+				// was. Both streaks end here.
+				timing->budget_deferrals = 0;
 
 				if(!succeeded && timing->failures < UINT16_MAX)
 					timing->failures++;

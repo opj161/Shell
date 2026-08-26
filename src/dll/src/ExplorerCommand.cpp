@@ -576,6 +576,15 @@ namespace Nilesoft
 						candidate.reprobe_due =
 							static_cast<uint32_t>(timing.since_probe) + 1 >= REPROBE_AFTER;
 					}
+
+					// The other way a provider stops being called, and the one
+					// with no exit until this existed: refused for predicted
+					// cost, menu after menu, while the prediction that refuses
+					// it can only be corrected by calling it. See the note in
+					// plan_providers.
+					candidate.budget_reprobe_due =
+						static_cast<uint32_t>(timing.budget_deferrals) + 1
+							>= BUDGET_REPROBE_AFTER;
 				}
 
 				candidates.push_back(candidate);
@@ -587,17 +596,34 @@ namespace Nilesoft
 
 			auto plan = plan_providers(candidates, health.next_exploration_cursor());
 
-			// Judged slow and not due. Charged here, once, for the providers
-			// that really were passed over for being slow - and not for the ones
+			uint32_t refused_for_budget = 0;
+
+			// Passed over before the menu even started. Charged here, once, for
+			// the providers that really were passed over - and not for the ones
 			// the planner merely looked at.
+			//
+			// Two reasons reach this list now, and they are charged
+			// differently. Slow moves the provider one menu closer to a
+			// REPROBE_AFTER re-probe. Budget means the planner refused to
+			// schedule a Known step whose prediction no menu could satisfy; that
+			// is the same refusal the resolution loop below would have made, so
+			// it is charged the same way and counts the same way, and the
+			// provider accrues toward a forced turn instead of toward nothing.
 			for(const auto &skipped : plan.deferred)
 			{
+				if(skipped.why == ProviderDeferral::Budget)
+				{
+					health.note_budget_deferral(skipped.hash, shape);
+					Diagnostics::session_provider(skipped.hash, 0,
+												  Diagnostics::ProviderResult::DeferredBudget);
+					refused_for_budget++;
+					continue;
+				}
+
 				health.note_slow_deferral(skipped.hash, shape);
 				Diagnostics::session_provider(skipped.hash, 0,
 											  Diagnostics::ProviderResult::DeferredSlow);
 			}
-
-			uint32_t refused_for_budget = 0;
 
 			for(const auto &step : plan.order)
 			{
