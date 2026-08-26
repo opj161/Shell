@@ -201,3 +201,185 @@ TEST(packages_cache, the_default_constructed_cache_still_uses_the_live_service)
 	(void)cache.exists(L"SomethingThatIsNotInstalled");
 	CHECK(true);
 }
+
+// ---- R3 step 6: a miss asks for a rescan, but not on every menu ------------
+//
+// docs/refactor/12-closure-plan.md W9.2 / D12. PackageCatalogService::invalidate()
+// had no production caller: a package installed since the last scan stayed
+// invisible to package.exists for the rest of the five-minute DefaultTtlMs.
+// The reason it needs a gate at all is that the common miss is permanent - a
+// configuration asking about a package this machine does not have misses on
+// every menu, forever - so the un-gated fix is a package scan per menu.
+
+namespace
+{
+	int g_miss_refreshes = 0;
+	void count_miss() { g_miss_refreshes++; }
+}
+
+TEST(packages_cache, a_query_that_found_nothing_asks_for_a_rescan)
+{
+	reset();
+	g_miss_refreshes = 0;
+	PackagesCache cache(&provide, &count_miss);
+
+	CHECK(!cache.exists(L"SomethingInstalledSinceTheLastScan"));
+	CHECK_MSG(g_miss_refreshes == 1,
+			  "otherwise a package installed a minute ago is invisible for the "
+			  "rest of the five-minute TTL");
+}
+
+TEST(packages_cache, a_query_that_found_its_package_asks_for_nothing)
+{
+	reset();
+	g_miss_refreshes = 0;
+	PackagesCache cache(&provide, &count_miss);
+
+	CHECK(cache.exists(L"WindowsTerminal"));
+	CHECK(cache.exists(L"WindowsCalculator"));
+	CHECK_EQ(g_miss_refreshes, 0);
+}
+
+TEST(packages_cache, an_empty_name_is_not_a_miss)
+{
+	// It never reached the snapshot, so it says nothing about whether the
+	// snapshot is stale.
+	reset();
+	g_miss_refreshes = 0;
+	PackagesCache cache(&provide, &count_miss);
+
+	CHECK(!cache.exists(nullptr));
+	CHECK(!cache.exists(L""));
+	CHECK_EQ(g_miss_refreshes, 0);
+}
+
+TEST(packages_cache, a_permanent_miss_does_not_rescan_on_every_menu)
+{
+	// The shape that made the gate necessary: the same absent package asked
+	// for on menu after menu.
+	reset();
+	g_miss_refreshes = 0;
+	PackagesCache cache(&provide, &count_miss);
+
+	for(int menu = 0; menu < 200; menu++)
+		CHECK(!cache.exists(L"NotInstalledAndNeverWillBe"));
+
+	CHECK_MSG(g_miss_refreshes == 1,
+			  "200 menus, one background scan asked for - un-gated this is 200");
+}
+
+TEST(packages_cache, the_gate_reopens_after_its_interval_and_not_before)
+{
+	// The policy on its own, with the clock supplied, because asserting it
+	// through PackagesCache would mean a test that waits a minute.
+	MissRefreshGate gate;
+
+	CHECK_MSG(gate.should_refresh(0),
+			  "the first miss of a session is the one most likely to be a "
+			  "package installed while this process was running");
+
+	CHECK(!gate.should_refresh(1));
+	CHECK(!gate.should_refresh(MissRefreshIntervalMs - 1));
+	CHECK(gate.should_refresh(MissRefreshIntervalMs));
+
+	// And the window restarts from the grant, not from the first miss ever.
+	CHECK(!gate.should_refresh(MissRefreshIntervalMs + 1));
+	CHECK(gate.should_refresh(MissRefreshIntervalMs * 2));
+}
+
+TEST(packages_cache, a_late_first_miss_is_still_granted)
+{
+	// GetTickCount64 is a real uptime, so `now` is large in any process that
+	// is not started at boot. A gate that compared `now - 0` against the
+	// interval would have swallowed the first miss only near boot and worked
+	// everywhere else - the worst kind of defect to find.
+	MissRefreshGate gate;
+	CHECK(gate.should_refresh(5));
+	CHECK(!gate.should_refresh(6));
+}
+
+// ---- W9.1: the display name is resolved once per catalog generation --------
+//
+// Measured 2026-08-26 over the 289 packages on this machine: 5.773 ms mean for
+// the 155 with an indirect @{...} DisplayName, and a second pass in the same
+// process costs what the first did. Include/DisplayNameMemo.h has the numbers.
+
+TEST(display_name_memo, a_name_is_resolved_once_and_then_remembered)
+{
+	DisplayNameMemo memo;
+	int resolutions = 0;
+	auto resolve = [&](const std::wstring &) { resolutions++; return std::wstring(L"Terminal"); };
+
+	for(int menu = 0; menu < 50; menu++)
+		CHECK(memo.get(1, L"Microsoft.WindowsTerminal_x", resolve) == L"Terminal");
+
+	CHECK_MSG(resolutions == 1,
+			  "uncached this is 50 calls at 5.8 ms, on 50 consecutive menus");
+	CHECK_EQ(memo.size(), (size_t)1);
+}
+
+TEST(display_name_memo, an_empty_answer_is_remembered_too)
+{
+	// resolve_display_name returns nothing for 114 of the 289 packages here.
+	// Re-walking MrtCache on every menu to be told nothing again is the case
+	// least worth repeating.
+	DisplayNameMemo memo;
+	int resolutions = 0;
+	auto resolve = [&](const std::wstring &) { resolutions++; return std::wstring(); };
+
+	CHECK(memo.get(1, L"NoDisplayName_x", resolve).empty());
+	CHECK(memo.get(1, L"NoDisplayName_x", resolve).empty());
+	CHECK_EQ(resolutions, 1);
+}
+
+TEST(display_name_memo, different_packages_get_their_own_answers)
+{
+	DisplayNameMemo memo;
+	auto resolve = [](const std::wstring &n) { return std::wstring(L"name-of-") + n; };
+
+	CHECK(memo.get(1, L"a", resolve) == L"name-of-a");
+	CHECK(memo.get(1, L"b", resolve) == L"name-of-b");
+	CHECK(memo.get(1, L"a", resolve) == L"name-of-a");
+	CHECK_EQ(memo.size(), (size_t)2);
+}
+
+TEST(display_name_memo, a_new_catalog_generation_drops_everything_remembered)
+{
+	// A display name cannot change without the package changing, and a package
+	// changing republishes the catalog - so the generation is exactly the
+	// event that makes every remembered answer suspect.
+	DisplayNameMemo memo;
+	int resolutions = 0;
+	auto resolve = [&](const std::wstring &) { resolutions++; return std::wstring(L"v"); };
+
+	memo.get(1, L"pkg", resolve);
+	memo.get(1, L"pkg", resolve);
+	CHECK_EQ(resolutions, 1);
+	CHECK_EQ(memo.generation(), (uint64_t)1);
+
+	memo.get(2, L"pkg", resolve);
+	CHECK_MSG(resolutions == 2, "the package set moved; the old answer was about the old one");
+	CHECK_EQ(memo.size(), (size_t)1);
+	CHECK_EQ(memo.generation(), (uint64_t)2);
+}
+
+TEST(display_name_memo, an_answer_from_a_superseded_generation_is_not_stored)
+{
+	// The resolver runs outside the lock - it is the 5.8 ms call, and two menu
+	// threads asking for different names must not serialize on it. So the
+	// generation can move while it runs, and what comes back then describes a
+	// package set that is no longer the machine's.
+	DisplayNameMemo memo;
+	memo.get(7, L"seed", [](const std::wstring &) { return std::wstring(L"seed"); });
+	CHECK_EQ(memo.generation(), (uint64_t)7);
+
+	auto answer = memo.get(6, L"stale", [&](const std::wstring &)
+	{
+		// Behaves as though a publish landed while this was running.
+		memo.get(7, L"other", [](const std::wstring &) { return std::wstring(L"other"); });
+		return std::wstring(L"stale-answer");
+	});
+
+	CHECK_MSG(answer == L"stale-answer", "the caller that asked still gets an answer");
+	CHECK(memo.get(7, L"stale", [](const std::wstring &) { return std::wstring(L"fresh"); }) == L"fresh");
+}
