@@ -43,13 +43,51 @@ namespace
 		fs::path selection;
 		fs::path host;
 
+		/*
+			The temp directory in its *long* form, and that is load-bearing.
+
+			Several assertions below compare a path this tree built against one
+			that came back out of Windows - Path::Full, and a shell link read
+			with IShellLink, which answers the canonical long form. If %TEMP%
+			holds an 8.3 component the two spellings differ and the comparisons
+			fail, while nothing is actually wrong.
+
+			That is not hypothetical: every GitHub Windows runner has
+			`C:\Users\RUNNER~1\AppData\Local\Temp`, and this test failed there
+			on the first CI run this branch ever had - three assertions, none of
+			them about the behaviour under test. Reproduced locally by pointing
+			TEMP at a short path, which is also how it was diagnosed.
+
+			GetLongPathName is the documented conversion, and the tilde is not a
+			usable shortcut: "not all file systems follow this convention.
+			Therefore, do not assume that you can skip calling GetLongPathName
+			if the path does not contain a tilde (~) character."
+			https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlongpathnamew
+		*/
+		static fs::path long_temp_directory()
+		{
+			auto base = fs::temp_directory_path().native();
+
+			auto needed = ::GetLongPathNameW(base.c_str(), nullptr, 0);
+			if(needed == 0)
+				return base;
+
+			std::wstring out(needed, L'\0');
+			auto length = ::GetLongPathNameW(base.c_str(), out.data(), needed);
+			if(length == 0 || length >= needed)
+				return base;
+
+			out.resize(length);
+			return out;
+		}
+
 		TemporaryTree()
 		{
 			GUID id{};
 			::CoCreateGuid(&id);
 			wchar_t name[64]{};
 			::StringFromGUID2(id, name, static_cast<int>(std::size(name)));
-			root = fs::temp_directory_path() / (std::wstring(L"Shell-R6-") + name);
+			root = long_temp_directory() / (std::wstring(L"Shell-R6-") + name);
 			selection = root / L"selection-A";
 			host = root / L"host-B";
 			std::error_code error;

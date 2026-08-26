@@ -46,6 +46,22 @@ namespace
 			wchar_t base[MAX_PATH]{};
 			::GetTempPathW(MAX_PATH, base);
 
+			// The long form, because the parser records the files it opened in
+			// theirs and this test compares the two. On a machine whose %TEMP%
+			// carries an 8.3 component - every GitHub Windows runner has
+			// `C:\Users\RUNNER~1\...` - the spellings differ, so
+			// `parsed.loaded[0] == root` fails and shadow::save() finds nothing
+			// under the configuration directory and refuses. Both failed on the
+			// first CI run this branch ever had.
+			//
+			// The tilde is not a usable shortcut for deciding whether to call:
+			// "do not assume that you can skip calling GetLongPathName if the
+			// path does not contain a tilde (~) character."
+			// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlongpathnamew
+			wchar_t longer[MAX_PATH]{};
+			if(auto n = ::GetLongPathNameW(base, longer, MAX_PATH); n > 0 && n < MAX_PATH)
+				::wcscpy_s(base, longer);
+
 			wchar_t unique[MAX_PATH]{};
 			::swprintf_s(unique, L"%snss_imports_%lu_%llu\\", base,
 						 ::GetCurrentProcessId(), (unsigned long long)::GetTickCount64());

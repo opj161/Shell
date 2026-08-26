@@ -342,3 +342,65 @@ TEST(config_shadow, the_default_directory_is_under_local_appdata)
 	CHECK_MSG(directory.find(L"\\\\") == std::wstring::npos,
 			  "SHGetKnownFolderPath returns no trailing backslash, so joining must not double one");
 }
+
+// ---- one path, two spellings ----------------------------------------------
+
+TEST(config_shadow, a_short_form_root_still_finds_its_own_files)
+{
+	// The defect the first CI run this branch ever had found, in production
+	// code rather than in a test.
+	//
+	// save() decided whether a loaded file lives under the configuration
+	// directory by comparing their leading characters, and it took `root` from
+	// the caller while `loaded` came from the parser. Those are different
+	// sources and need not agree on 8.3 versus long form. When they disagreed,
+	// relative_to() matched nothing, every file was skipped, `pending` came out
+	// empty and save() returned false - so the shadow was silently never
+	// written, which for a last-known-good mechanism means it has quietly
+	// stopped existing.
+	//
+	// GetShortPathName is used to *construct* the disagreement rather than to
+	// assert anything: if this volume has 8.3 generation disabled it hands back
+	// the long path, both spellings match, and the test still passes for the
+	// ordinary reason. That is the honest way round - it can never fail
+	// spuriously on a machine that cannot reproduce the condition.
+	TempTree tree(L"shortform");
+	auto root = tree.write(L"root.nss", L"item(title='Root')");
+	tree.write(L"imports\\extra.nss", L"item(title='Extra')");
+
+	std::vector<std::wstring> loaded{ root, tree.at(L"imports\\extra.nss") };
+
+	wchar_t shortened[MAX_PATH]{};
+	auto n = ::GetShortPathNameW(root.c_str(), shortened, MAX_PATH);
+	CHECK_MSG(n > 0 && n < MAX_PATH, "GetShortPathName should answer for a file that exists");
+	if(n == 0 || n >= MAX_PATH)
+		return;
+
+	TempTree store(L"shortform_store");
+
+	// `loaded` is long-form throughout, exactly as the parser reports it; only
+	// the root is handed over short.
+	CHECK_MSG(shadow::save(store.path, std::wstring(shortened), loaded),
+			  "a root spelled differently from the files under it is still that "
+			  "directory, and the shadow has to be written");
+
+	auto resolved = shadow::resolve(store.path);
+	CHECK_MSG(!resolved.empty(), "and it has to verify and come back");
+}
+
+TEST(config_shadow, long_form_leaves_an_ordinary_path_alone)
+{
+	// The over-correction guard. long_form() falls back to the caller's string
+	// whenever GetLongPathName cannot answer - a path that does not exist, or a
+	// parent nobody may list - so it must not mangle or empty a plain one.
+	TempTree tree(L"longform");
+	auto file = tree.write(L"plain.nss", L"item(title='Plain')");
+
+	CHECK(shadow::long_form(file) == shadow::long_form(file));
+	CHECK(!shadow::long_form(file).empty());
+	CHECK(shadow::long_form(L"") == L"");
+
+	// Does not exist: the documented zero return, and the caller's string back.
+	auto missing = tree.at(L"no-such-file-here.nss");
+	CHECK(shadow::long_form(missing) == missing);
+}

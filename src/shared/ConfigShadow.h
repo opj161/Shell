@@ -148,9 +148,61 @@ namespace Nilesoft
 			return out;
 		}
 
+		/*
+			The long form of `path`, or `path` unchanged when there is not one.
+
+			relative_to() below decides whether one path is under another by
+			comparing their leading characters, and two spellings of the same
+			directory do not compare equal. The one that bites is 8.3: a caller
+			that passes `C:\Users\RUNNER~1\...` while the parser recorded
+			`C:\Users\runneradmin\...` gets no matches at all, every file is
+			skipped, `pending` ends up empty and save() answers false. The
+			shadow is then silently never written - a last-known-good mechanism
+			that has quietly stopped existing, which is the worst way for this
+			particular feature to fail.
+
+			Two calls, because the return value means different things:
+			"If the lpszLongPath buffer is too small to contain the path, the
+			return value is the size, in TCHARs, of the buffer that is required
+			to hold the path and the terminating null character", while on
+			success it is "the length ... not including the terminating null
+			character".
+			https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlongpathnamew
+
+			No tilde shortcut, because the same page says not to take one: "not
+			all file systems follow this convention. Therefore, do not assume
+			that you can skip calling GetLongPathName if the path does not
+			contain a tilde (~) character."
+
+			Zero means the path could not be queried - it does not exist, or a
+			parent directory is not listable - and the caller's string is then
+			the best answer available, which is also what the function itself
+			does when the file exists but has no long form.
+		*/
+		inline std::wstring long_form(const std::wstring &path)
+		{
+			if(path.empty())
+				return path;
+
+			auto needed = ::GetLongPathNameW(path.c_str(), nullptr, 0);
+			if(needed == 0)
+				return path;
+
+			std::wstring out(needed, L'\0');
+			auto length = ::GetLongPathNameW(path.c_str(), out.data(), needed);
+			if(length == 0 || length >= needed)
+				return path;
+
+			out.resize(length);
+			return out;
+		}
+
 		// The part of `full` below `directory`, or empty when it is not below it.
 		// Comparison is ordinal and case-insensitive, which is how the file
 		// system treats these paths.
+		//
+		// Both sides must already be in the same spelling; save() puts them
+		// there with long_form() above.
 		inline std::wstring relative_to(const std::wstring &directory, const std::wstring &full)
 		{
 			if(directory.empty() || full.size() <= directory.size())
@@ -410,20 +462,29 @@ namespace Nilesoft
 			if(directory.empty() || root.empty() || loaded.empty())
 				return false;
 
-			auto cut = root.find_last_of(L"\\/");
+			// One spelling for everything that is about to be compared against
+			// everything else. The caller's `root` and the parser's `loaded`
+			// come from different places and need not agree on short versus
+			// long form; see long_form() for what that used to cost.
+			auto normalized_root = long_form(root);
+
+			auto cut = normalized_root.find_last_of(L"\\/");
 			if(cut == std::wstring::npos)
 				return false;
-			auto config_directory = root.substr(0, cut);
+			auto config_directory = normalized_root.substr(0, cut);
 
 			Manifest manifest;
-			manifest.root = root.substr(cut + 1);
+			manifest.root = normalized_root.substr(cut + 1);
 
 			struct Pending { std::wstring source, relative; };
 			std::vector<Pending> pending;
 
 			for(const auto &full : loaded)
 			{
-				auto relative = relative_to(config_directory, full);
+				// `source` stays as the caller gave it - both spellings open
+				// the same file - while the comparison and the shadow's own
+				// layout use the long one.
+				auto relative = relative_to(config_directory, long_form(full));
 				if(relative.empty())
 				{
 					manifest.partial = true;
