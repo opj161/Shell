@@ -17,9 +17,12 @@ manual. This is the record of finishing it.
 
 ## 0. Verdict
 
-**All eleven code and gate workstreams (W0–W10) are complete and verified.**
-W11 (R8) remains, and remains what it always was: work that needs a machine or a
-person this one is not.
+**All eleven code and gate workstreams (W0–W10) are complete and verified**,
+with one qualification: W6.4's CI is authored, pushed and correctly triggered,
+but this fork has never executed an Actions workflow at all, so D4 is proven on
+paper and not in practice. Enabling Actions on the fork is a click nobody but
+the maintainer can make — §6. W11 (R8) remains what it always was: work that
+needs a machine or a person this one is not.
 
 The single most important result in this document is §4: `ac662c4` shipped a
 double-release into the menu path, the entire unit suite passed on it, and the
@@ -95,7 +98,7 @@ replace yet.
 
 | # | Finding | Resolution |
 |---|---|---|
-| **F-A** | The branch had never been through CI — 13 commits unpushed, so W6.4's workflow had never executed | Pushed; §6 |
+| **F-A** | The branch had never been through CI — 13 commits unpushed, so W6.4's workflow had never executed | Pushed — but **still not executed**; §6 |
 | **F-B** | `09` stale on cardinality *again* (23/32 vs a 23/33 harness), by the commit that added the scenario | `5215609` — every count in `09` now references the constants |
 | **F-C** | W3 shipped with no test; W8's fake could not stand in for one | `a965737` — `ProviderCall.h` + a real `IExplorerCommand` fake |
 | **F-D** | W8 written and green but unlanded and ungated | `ac662c4` — **and landing it exposed §4** |
@@ -342,7 +345,32 @@ All re-run on the final tree, `0adb5b1`.
 - **MSI lifecycle** — ok on all three packages under Windows PowerShell 5.1,
   the edition `build.ps1` and CI use.
 - `git diff --check` clean, working tree and `main...HEAD`.
-- **CI** — the branch is pushed, so W6.4's workflow runs for the first time.
+- **CI — pushed, but still not executed. This is the one gate that remains
+  open, and it needs the maintainer.** `eb22667` is on
+  `origin/refactor/takeover-master-plan`, and the workflow's trigger list
+  contains that branch, so the push should have created a run. It did not:
+
+  ```text
+  gh api repos/opj161/Shell/actions/workflows
+      337801049  Build  active  .github/workflows/build.yml
+  gh api repos/opj161/Shell/actions/workflows/337801049/runs
+      total_count: 0
+  ```
+
+  **Zero runs ever** — not merely none for this branch, and none for `main`
+  either. `actions/permissions` reports `enabled: true`, but that is the
+  *permissions* setting; a forked repository additionally requires a one-time
+  manual enable in its Actions tab ("I understand my workflows, go ahead and
+  enable them"), which has no API and cannot be done from here.
+  `gh workflow run` is not an alternative: the workflow has no
+  `workflow_dispatch` trigger, and `gh` resolves the bare repo argument to the
+  `upstream` remote (`moudey/Shell`) rather than the fork, which is worth
+  knowing before reading its 403 as something else.
+
+  So D4 is **authored and pushed but still unproven**. Enable Actions on the
+  fork and read the first run; until then the invariants, the MSI gate and the
+  suite are still enforced only on a developer's machine, which is exactly the
+  assurance gap `12` called the largest either QA pass found.
 
 ---
 
