@@ -4,6 +4,7 @@
 #include "Include/ProviderHealth.h"
 #include "Include/ProviderSchedule.h"
 #include "Include/ProviderCache.h"
+#include "Include/ProviderCall.h"
 #include "Include/ExplorerCommandState.h"
 #include "Include/ProviderQuarantineStore.h"
 #include "Include/IconResource.h"
@@ -599,46 +600,33 @@ namespace Nilesoft
 				// this item is called next time. src/shared/MenuIdentity.h.
 				item->explorer_clsid = reg.clsid;
 
-				bool state_pending = false;
-				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd.get(),
-																  selection, &state_pending);
-
 				/*
-					Read here, before the cost is taken, and that is the whole
-					of W3.
+					The fill and the canonical-name read are one measured span,
+					and Include/ProviderCall.h is where the rule that they are
+					lives. GetCanonicalName used to sit *after* health.record and
+					session_provider, so every remembered and reported provider
+					cost excluded it while the whole-menu budget charged it - the
+					gap section 09 2.1 read as Shell's own pre-paint work.
 
-					GetCanonicalName is an IExplorerCommand method like the ones
-					fill_menuitem_from_explorer_command just made, answered by
-					the same third-party handler on the same thread, and made
-					before this provider's item is published - so there is no
-					basis for treating it as outside the provider's cost. The
-					interface's own remark covers it with the rest: "None of the
-					methods of this interface should communicate with network
-					resources. These methods are called on the UI thread".
-					https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand
-
-					It used to sit after health.record and session_provider, so
-					every provider's remembered cost and every reported cost
-					excluded it. The whole-menu ProviderBudget charged it either
-					way, which is what made the gap visible rather than free:
-					section 09 §2.1 reads the difference between the 36.6 ms
-					explorer.commands phase and the ~35 ms of per-provider
-					records as "Shell's own pre-paint work is ~1.1 ms ... the
-					phase is honestly attributed". Part of that gap was this.
-
-					Only on the Shown path, because that is the only path that
-					publishes an item and therefore the only one that used to
-					make the call. The out-parameter is valid only when the
-					method succeeds.
-					https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getcanonicalname
+					`spent_before` was taken above, before the cache was asked,
+					so activation stays inside the cost.
 				*/
-				if(filled == FillResult::Shown)
-				{
-					if(FAILED(cmd->GetCanonicalName(&slot.canonical)))
-						slot.canonical = GUID_NULL;
-				}
+				bool state_pending = false;
+				auto filled = FillResult::Failed;
 
-				auto cost = budget.spent_us() - spent_before;
+				auto measured = measure_provider_call(
+					spent_before,
+					[&budget] { return budget.spent_us(); },
+					cmd.get(),
+					[&]
+					{
+						filled = fill_menuitem_from_explorer_command(
+							item.get(), cmd.get(), selection, &state_pending);
+						return filled == FillResult::Shown;
+					},
+					&slot.canonical);
+
+				auto cost = measured.cost_us;
 				health.record(step.hash, shape, cost, filled != FillResult::Failed);
 				Diagnostics::session_provider(step.hash, cost,
 					filled == FillResult::Failed ? Diagnostics::ProviderResult::Failed

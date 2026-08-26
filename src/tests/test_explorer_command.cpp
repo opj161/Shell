@@ -451,3 +451,163 @@ TEST(provider_cache, a_moved_handle_names_one_reference_and_not_two)
 	}
 	CHECK_EQ(g_world.find(clsid)->refs, 1L);
 }
+
+// ---- where a provider's cost stops being counted ---------------------------
+//
+// W3 of docs/refactor/12-closure-plan.md. GetCanonicalName used to be called
+// after health.record and Diagnostics::session_provider, so every remembered
+// and every reported provider cost excluded it, while the whole-menu
+// ProviderBudget charged it anyway - the gap section 09 2.1 read as Shell's
+// own pre-paint work.
+//
+// The fake below is a real IExplorerCommand, unlike the reference-counting one
+// above: this is about a method being *called*, so it has to be reachable
+// through the vtable. Its clock is a counter rather than a sleep, so the
+// assertion is exact instead of merely probable.
+
+#include "..\dll\src\Include\ProviderCall.h"
+
+namespace
+{
+	// The menu's elapsed budget, advanced only by the calls that pretend to
+	// take time. Nothing here reads a real clock.
+	uint32_t g_elapsed_us = 0;
+
+	inline constexpr uint32_t kFillCostUs = 700;
+	inline constexpr uint32_t kCanonicalCostUs = 900;
+
+	class CountedExplorerCommand : public IExplorerCommand
+	{
+	public:
+		int canonical_calls = 0;
+		HRESULT canonical_hr = S_OK;
+
+		// IUnknown. Not reference-counted: the test owns the object by scope,
+		// and ProviderCall.h neither retains nor releases what it is handed.
+		IFACEMETHODIMP QueryInterface(REFIID riid, void **ppv) override
+		{
+			if(!ppv)
+				return E_POINTER;
+			if(::IsEqualIID(riid, IID_IUnknown) || ::IsEqualIID(riid, IID_IExplorerCommand))
+			{
+				*ppv = static_cast<IExplorerCommand *>(this);
+				return S_OK;
+			}
+			*ppv = nullptr;
+			return E_NOINTERFACE;
+		}
+		IFACEMETHODIMP_(ULONG) AddRef() override { return 2; }
+		IFACEMETHODIMP_(ULONG) Release() override { return 1; }
+
+		IFACEMETHODIMP GetCanonicalName(GUID *guid) override
+		{
+			canonical_calls++;
+			g_elapsed_us += kCanonicalCostUs;		// the handler taking its time
+			if(FAILED(canonical_hr))
+				return canonical_hr;
+			if(guid)
+				*guid = provider_guid(0x77);
+			return S_OK;
+		}
+
+		// The rest of the interface exists so the class is concrete. W3 is
+		// about one method's place in the measured span; the others are made
+		// by fill_menuitem_from_explorer_command, which the fill callable
+		// stands in for.
+		IFACEMETHODIMP GetTitle(IShellItemArray *, LPWSTR *) override { return E_NOTIMPL; }
+		IFACEMETHODIMP GetIcon(IShellItemArray *, LPWSTR *) override { return E_NOTIMPL; }
+		IFACEMETHODIMP GetToolTip(IShellItemArray *, LPWSTR *) override { return E_NOTIMPL; }
+		IFACEMETHODIMP GetState(IShellItemArray *, BOOL, EXPCMDSTATE *) override { return E_NOTIMPL; }
+		IFACEMETHODIMP Invoke(IShellItemArray *, IBindCtx *) override { return E_NOTIMPL; }
+		IFACEMETHODIMP GetFlags(EXPCMDFLAGS *) override { return E_NOTIMPL; }
+		IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand **) override { return E_NOTIMPL; }
+	};
+
+	uint32_t fake_clock() { return g_elapsed_us; }
+
+	// What the GetState/GetTitle/GetIcon sequence costs, as one number.
+	bool fill_that_costs(bool shown)
+	{
+		g_elapsed_us += kFillCostUs;
+		return shown;
+	}
+}
+
+TEST(provider_call, the_canonical_name_read_is_inside_the_providers_cost)
+{
+	// The regression itself. Before W3 the recorded cost was kFillCostUs
+	// alone, because the read happened after health.record had already been
+	// given a number.
+	g_elapsed_us = 0;
+	CountedExplorerCommand cmd;
+	GUID canonical = GUID_NULL;
+
+	auto measured = measure_provider_call(g_elapsed_us, &fake_clock, &cmd,
+										  [] { return fill_that_costs(true); },
+										  &canonical);
+
+	CHECK(measured.shown);
+	CHECK_EQ(cmd.canonical_calls, 1);
+	CHECK_MSG(measured.cost_us == kFillCostUs + kCanonicalCostUs,
+			  "the span has to cover every synchronous call made before the "
+			  "item is published, not just the fill");
+}
+
+TEST(provider_call, activation_stays_inside_the_cost)
+{
+	// spent_before is sampled by the caller *before* it borrows from the
+	// cache, so CoCreateInstance - ~2 ms per provider even fully warm - is
+	// charged to the provider that needed it. Moving the first sample into
+	// measure_provider_call would drop it from every provider's cost, which is
+	// the same defect pointing the other way.
+	g_elapsed_us = 0;
+	const uint32_t spent_before = g_elapsed_us;
+
+	g_elapsed_us += 2000;					// the activation
+
+	CountedExplorerCommand cmd;
+	GUID canonical = GUID_NULL;
+	auto measured = measure_provider_call(spent_before, &fake_clock, &cmd,
+										  [] { return fill_that_costs(true); },
+										  &canonical);
+
+	CHECK_EQ(measured.cost_us, 2000u + kFillCostUs + kCanonicalCostUs);
+}
+
+TEST(provider_call, a_provider_that_shows_nothing_is_not_asked_its_name)
+{
+	// Hidden is a live provider declining this selection and happens
+	// constantly. Asking a handler for a name it will not be shown under is
+	// work the user waits for and nothing consumes.
+	g_elapsed_us = 0;
+	CountedExplorerCommand cmd;
+	GUID canonical = GUID_NULL;
+
+	auto measured = measure_provider_call(g_elapsed_us, &fake_clock, &cmd,
+										  [] { return fill_that_costs(false); },
+										  &canonical);
+
+	CHECK(!measured.shown);
+	CHECK_EQ(cmd.canonical_calls, 0);
+	CHECK_EQ(measured.cost_us, kFillCostUs);
+	CHECK(::IsEqualGUID(canonical, GUID_NULL));
+}
+
+TEST(provider_call, a_failed_name_read_is_still_charged_and_yields_no_identity)
+{
+	// "A pointer to a value that, when this method returns successfully,
+	// receives the command's GUID" - so on failure the out-parameter holds
+	// nothing the caller may use, and GUID_NULL is the value that says so.
+	// The time it took is still the user's.
+	g_elapsed_us = 0;
+	CountedExplorerCommand cmd;
+	cmd.canonical_hr = E_FAIL;
+	GUID canonical = provider_guid(0x11);		// deliberately not null going in
+
+	auto measured = measure_provider_call(g_elapsed_us, &fake_clock, &cmd,
+										  [] { return fill_that_costs(true); },
+										  &canonical);
+
+	CHECK(::IsEqualGUID(canonical, GUID_NULL));
+	CHECK_EQ(measured.cost_us, kFillCostUs + kCanonicalCostUs);
+}
