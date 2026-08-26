@@ -347,6 +347,18 @@ namespace Nilesoft
 						child->native_popup.materialized = false;
 					else
 						child->native_popup.materialized = true;
+
+					// The same ownership rule as the catalog path above, and
+					// the same reason it has to be written out: the item takes
+					// this reference only on the branch that stores the
+					// pointer. An ECF_ISSEPARATOR child returns Shown from an
+					// earlier branch that stores nothing, and the reference
+					// IEnumExplorerCommand::Next handed over is then still
+					// ours to drop.
+					if(!child->explorer_command_owned
+					   || child->explorer_command != child_cmd)
+						child_cmd->Release();
+
 					node->items.push_back(child.release());
 				}
 				else
