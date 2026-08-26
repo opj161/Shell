@@ -19,53 +19,33 @@ is frequently the thing that is wrong.
 
 ### Query Microsoft documentation through Microsoft Learn MCP
 
-For every narrowly defined question about a Microsoft technology in this tree —
-especially Win32, COM, Windows Shell, UI Automation, Windows Installer and MSVC —
-use the Microsoft Learn MCP tools when the client exposes them:
+Use the Microsoft Learn MCP tools for any Win32, COM, shell, UIA, MSI or MSVC
+question here. `microsoft_docs_search` is for *discovery* — its snippets are not
+evidence. `microsoft_docs_fetch` on the canonical URL is, and it is what you read
+before changing code or stating a conclusion: the full section, including
+parameter, return-value, remarks, threading and lifetime, for **every** contract
+the conclusion rests on. `microsoft_code_sample_search` illustrates usage; a
+sample never overrides the reference.
 
-1. Use `microsoft_docs_search` with the exact API, interface, message, property or
-   error name plus the edge condition being investigated. Search results are for
-   discovery; their snippets are not evidence.
-2. Use `microsoft_docs_fetch` on the canonical Learn URL before changing code or
-   reaching a conclusion. Read the full applicable section, including parameter,
-   return-value, remarks, threading, lifetime and version requirements. Fetch each
-   distinct contract on which the conclusion depends.
-3. Use `microsoft_code_sample_search` when an official example would help with
-   usage or integration. A sample illustrates a pattern; it does not override the
-   normative API or conceptual reference.
-
-Tool names can be namespaced by the client, and the server's advertised tools can
-change. Discover the available tools and use the current equivalents rather than
-assuming a tool is absent because its displayed name differs. If Microsoft Learn
-MCP is genuinely unavailable, retrieve the same canonical pages directly from
-`learn.microsoft.com`; say that the MCP route was unavailable, but do not fall
-back to model memory or third-party summaries. For WiX, Detours or any contract
-not covered by Microsoft Learn, use the maintainer's official reference instead.
-
-Microsoft documents the endpoint, tool set and dynamic-discovery requirement here:
-
-- https://learn.microsoft.com/en-us/training/support/mcp-developer-reference
-- https://learn.microsoft.com/en-us/training/support/mcp-best-practices
+Tool names are namespaced differently by different clients and the advertised set
+changes — discover them rather than concluding one is missing. If the MCP route
+is genuinely unavailable, fetch the same pages from `learn.microsoft.com` and say
+so; never fall back to memory or third-party summaries. For WiX, Detours, or
+anything Learn does not cover, use the maintainer's own reference.
 
 ### Query WiX documentation from the local official mirror
 
-For every WiX-specific question or edit, use the downloaded official WiX
-documentation in `.bin/wix-docs` as the primary WiX reference. Search the mirror
-with `rg` for the exact element, attribute, extension, command, warning or edge
-condition, then read the complete applicable page before changing authoring or
-reaching a conclusion. The schema reference is under `.bin/wix-docs/schema`;
-prefer its exact element page over tutorials or generated API pages when the
-question concerns `.wxs` authoring.
+`.bin/wix-docs` is the primary WiX reference: `rg` for the exact element,
+attribute, command or warning, then read the whole page. Prefer
+`.bin/wix-docs/schema` over tutorials or generated API pages for `.wxs`
+authoring, and cite it by repository-relative path
+(`.bin/wix-docs/schema/wxs/component.mdx`).
 
-Treat the local mirror as maintainer documentation, not as the Windows Installer
-specification. A WiX page establishes what WiX authoring means and emits; use the
-Microsoft Learn MCP workflow above for the underlying MSI, registry, COM or Win32
-contract. If both layers matter, read and cite both. Use repository-relative deep
-links such as `.bin/wix-docs/schema/wxs/component.mdx` in working notes and reports,
-plus the canonical Microsoft Learn link for the MSI contract. If the mirror lacks
-the needed WiX page, use the WiX maintainer's current official documentation and
-record that the local mirror did not cover it; do not substitute third-party
-summaries or model memory.
+It is maintainer documentation, not the Windows Installer specification: a WiX
+page says what the authoring *emits*, and the MSI, registry or COM contract
+underneath it still comes from Learn. When both matter, cite both. If the mirror
+lacks the page, use WiX's current official docs and record that it did not cover
+it.
 
 This is not ceremony. Every substantive fix in the 1.9.20 latency and hardening
 work came from a documentation page contradicting an assumption in the tree:
@@ -73,11 +53,12 @@ work came from a documentation page contradicting an assumption in the tree:
 | What the code assumed | What the documentation says |
 | --- | --- |
 | `WM_INITMENUPOPUP` could be sent with `lParam = 0xFFFFFFFF` for any popup | The low word is the opening item's position and the high word is `TRUE` only for the window menu — `0xFFFFFFFF` claims position 65535 in a window menu |
-| The whole native menu tree had to be initialised up front | It is sent "when a drop-down menu or submenu is **about to become active**", i.e. one popup at a time |
 | UI Automation could be called from the taskbar's message handler | A client that inspects its own UI from the UI thread can see "very slow performance, or even cause the application to stop responding"; use a separate MTA thread that owns no windows |
-| An interface pointer could be stored process-wide and used from any thread | "Interface pointers must be marshaled when passed between apartments" |
-| The Global Interface Table was required for any cross-apartment handoff | Microsoft recommends `CoMarshalInterThreadInterfaceInStream` when an interface is unmarshaled once; use GIT only when it must be unmarshaled repeatedly |
 | Only the binary component needed an architecture-specific code | A new code is required for *any* change of a resource's target location, and `ProgramFiles6432Folder` resolves differently per architecture — so every component under `INSTALLFOLDER` needed one |
+
+The three shapes to expect: a field whose meaning you guessed, a threading rule
+stated only in a remark, and a requirement that turns out to be wider than the
+one case you were looking at.
 
 Cite a canonical deep link to the specific API or topic page and quote the short
 passage on which the conclusion depends. A landing page, search result, MCP search
@@ -187,11 +168,11 @@ libraries the owning project lists, not a minimal guess — `src\dll\src` for
 needs `Resource.h` and `Globals.h` ahead of it, for `APP_NAME` and the CLSID
 literals, and `shlwapi.lib` for `Environment::Expand`.
 
-## Three ways an experiment can test something other than what you think
+## Ways an experiment can test something other than what you think
 
-Each of these cost real time before it was found, and each produces a result
-that looks like a finding about Windows — or, worse, like a regression in a
-change you just made.
+Each cost real time before it was found, and each produces a result that looks
+like a finding about Windows — or, worse, like a regression in the change you
+just made.
 
 **A registry value set from an agent's shell is not visible to `explorer.exe`.**
 Measured 2026-08-24: a key created here took `HKCU\SOFTWARE`'s subkey count to
@@ -246,8 +227,8 @@ presence of config-driven items (`New+`, `Terminal`, `File manage`, `Go To` in
 the stock configuration) is the cheap proof, because their absence means you are
 diffing Windows' own menu against Shell's.
 
-**A fifth, added 2026-08-25: a test that only ever calls a function the way the
-test calls it proves nothing about the way the product calls it.**
+**A test that only ever calls a function the way the test calls it proves
+nothing about the way the product calls it** (2026-08-25).
 `ConfigWatcher::start` is re-entered *by its own reload callback, on its own
 thread* — that is the shipping path, because every successful load re-points the
 watch set. `start()` began with `stop()`, which joined the calling thread;
@@ -260,8 +241,8 @@ was correct for. It was found by editing a real `shell.nss` twice and noticing
 only the first edit arrived. **When a function is re-entered from a callback it
 owns, write the test that calls it from the callback.**
 
-**A fourth, added 2026-08-25: a failure reported in different words from every
-other failure is a failure nobody can find.** The trace harness failed about one
+**A failure reported in different words from every other failure is a failure
+nobody can find** (2026-08-25). The trace harness failed about one
 run in four for three sessions and was written up twice as an unexplained
 transient, because a fixture mismatch printed the offending line and *no*
 `FAIL` and *no* scenario name — so a run said `23 scenario(s), 1 failure(s)`
@@ -272,6 +253,28 @@ sessions of folklore into a bug report on the next run; the cause was a
 documented `TrackPopupMenu` contract the harness had never met. When something
 is hard to reproduce, check first that it is reported the same way as
 everything else.
+
+**A test that builds a path from `%TEMP%` and compares it against one Windows
+handed back is also asserting that this machine has no 8.3 short names**
+(2026-08-26). Every GitHub runner's temp directory is
+`C:\Users\RUNNER~1\AppData\Local\Temp`. `Path::Full` keeps the spelling it was
+given; a shell link read through `IShellLink` answers the canonical long form —
+so two paths to one file compare unequal. Build the tree from the long form
+(`GetLongPathNameW`; the tilde is *not* a shortcut for deciding whether to call
+it). Reproduce by pointing `TEMP` at a short path, which takes a minute.
+
+The same disagreement was live in production underneath it: `ConfigShadow::save`
+compared the caller's `root` against the parser's `loaded` by string prefix,
+matched nothing, and silently wrote no shadow at all.
+
+**A green step that verifies nothing is worse than a red one** (2026-08-26).
+The CI step meant to install the ARM64 toolset tested for *any*
+directory named `arm64` under *any* MSVC `bin`. One matched, belonging to an
+unrelated toolset version, so the step reported "already present", exited 0,
+installed nothing — and the build went on failing with the identical error the
+step existed to remove. Test for the thing the error is actually about: MSB8020
+names a *platform toolset*, so the check is now the
+`MSBuild\Microsoft\VC\v170\Platforms\ARM64\PlatformToolsets\v143` directory.
 
 Then encode the invariant in `src/tests`. The suites are dependency-free and
 self-registering; see `src/tests/test.h`. Prefer testing a real invariant over a
@@ -345,7 +348,44 @@ in the test project.
 
 Report suites individually rather than the aggregate check count.
 
+[`.github/workflows/build.yml`](.github/workflows/build.yml) enforces
+`check-invariants.ps1`, three-platform builds, the unit suite on x64/x86, and
+`validate-msi-lifecycle.ps1` per package. Two things before you read a red run:
+
+- **The runner is not this machine.** Visual Studio 18, which resolves the
+  pinned `v143` toolset for Win32 and x64 but not ARM64 (the arm64 leg installs
+  that component first), and a `%TEMP%` carrying an 8.3 short name.
+- **hostprobe is not in CI and cannot be** — both modes need an interactive
+  desktop, takeover mode a per-user COM override. It is a manual pre-merge step
+  with a named owner ([`06`](docs/refactor/06-phases-and-tests.md) §3), it is the
+  gate that has caught the most, and the recipe with its mandatory cleanup is in
+  [`13`](docs/refactor/13-implementation-handoff.md) §4. Run it for anything
+  touching the menu path.
+
 ## Things that are easy to get wrong here
+
+**A `Release()` that happens only on the failure paths is usually a transfer,
+not a leak.** An `IExplorerCommand` provider is handed two references — the
+thread cache keeps one, the caller gets one — and the resolution loop released
+the caller's only on `Hidden` and `Failed`. That reads as a leak on the
+succeeding path and is not: `fill_menuitem_from_explorer_command` stores the
+pointer and sets `explorer_command_owned`, and `~menuitem_t` releases it. The
+item is the second owner.
+
+"Fixing" it into an unconditional release was a **double-release** on every shown
+verb, in objects still asked for `EnumSubCommands` and `Invoke` after
+composition — a use-after-free, not a miscount. `Include/ProviderCache.h` makes
+the handover explicit (`detach()`), keyed on what the item *actually took*, not
+on `FillResult::Shown`: an `ECF_ISSEPARATOR` command returns `Shown` from a
+branch that stores no pointer, and that path leaked for real.
+
+The suite passed throughout, because the fake knew about the cache and the
+handle and not about the third owner. What caught it was the **takeover
+harness**, failing one to five scenarios a run with a *different set each time* —
+which is what memory corruption looks like from outside, and is indistinguishable
+from the desktop flakiness `fixtures/README.md` warns about. When the harness is
+erratic rather than repeatably wrong, build the last known-green commit in a
+worktree and run both under the same conditions before blaming the machine.
 
 **Structured exception handling.** `NtUserTrackPopupMenu` and several hooks use
 `__try`/`__finally`. MSVC refuses (C2712) to compile a function that mixes SEH
@@ -386,8 +426,10 @@ a failed `ExpandEnvironmentStrings` — `release(n - 1)` underflows to `SIZE_MAX
 and hands back a **15-character string of NULs**: `length()` is 15, `c_str()[0]`
 is `'\0'`, and `empty()` is false. Every length-driven caller downstream is then
 wrong, and nothing crashes to tell you. Guard the zero case before subtracting.
-This shape was in four places at once (`Registry.cpp` ×3, `Environment.h`,
-`Windows.h`, `FuncExpression.cpp`); `rg 'release\(.*-\s*1\)'` finds them.
+
+The six sites this was found in are all guarded now, so `rg 'release\(.*-\s*1\)'`
+returns *correct* code — check the guard before concluding you have found
+something. The rule is for the next one written.
 
 **`string::c_str()` answers `nullptr` for an empty string, and a
 `std::wstring_view` built from one is undefined.** `return valid() ? m_data :
@@ -406,36 +448,31 @@ null to an empty view (`MenuIdentity::view`), or take `const wchar_t *` and chec
 Same family as `release(n - 1)` and the `MB_*`/`WC_*` flags: a silent wrong
 answer from a line that looks right.
 
-**Windows string APIs that will not terminate for you.** Two separate traps,
-both of which had been live in the tree for years:
+**`RegQueryValueEx` will not terminate a `REG_SZ` for you** — it "is NOT
+guaranteed to be null-terminated". Size from the byte count the *second* call
+reports, and drop a terminator only after checking one is there.
 
-- `RegQueryValueEx` documents that a `REG_SZ` "is NOT guaranteed to be
-  null-terminated". Size from the byte count the *second* call reports, and drop
-  a terminator only after checking one is there. `src/exe/src/Main.cpp` still
-  carries the comment from the first time this bit, when the `TreatAs` ownership
-  check could not recognise Shell's own redirect.
-- `GetMenuItemInfo` truncates silently to whatever `cch` you passed. Use the
-  documented two-call pattern (`dwTypeData = nullptr` to learn `cch`, then a
-  buffer of `cch + 1`) — `Include/MenuText.h` wraps it. A fixed `MAX_PATH`
-  buffer loses everything past 259 characters, and third-party extensions cross
-  that line routinely.
-
-**`MB_*` versus `WC_*` conversion flags.** `MultiByteToWideChar` takes `MB_*`;
-`WideCharToMultiByte` takes `WC_*`. They are different numbers, and passing an
-`MB_` flag to `WideCharToMultiByte` with `CP_UTF8` fails the call outright with
-`ERROR_INVALID_FLAGS` — it does not degrade, it returns 0 for every input. Two
-converters in `Encoding.h` did exactly this, which is why `sel.tofile()` wrote a
-zero-byte file. Neither the compiler nor `/analyze` says a word.
+Two more of this family are now caught by `check-invariants.ps1`, so they need
+watching only in review of the rule itself: an `MB_*` flag passed to
+`WideCharToMultiByte` (which fails outright with `ERROR_INVALID_FLAGS` and
+returns 0 for every input — it does not degrade), and a fixed-buffer
+`GetMenuItemInfo` read (which truncates silently; use the two-call pattern that
+`Include/MenuText.h` wraps).
 
 **`Environment::Expand` returns; it does not modify.** `Expand(value).move()` as
 a statement compiles, does the work, and throws the result away. Two call sites
 read `REG_EXPAND_SZ` values this way and handed the caller the raw `%VARIABLES%`.
 
-**Line endings.** `.gitattributes` explicitly checks text files out as CRLF,
-including source, project and Markdown files. Preserve that policy and never
-normalise files you are not otherwise changing. If a historical blob still
-produces a whole-file line-ending diff, compare with `--ignore-space-at-eol` and
-keep the functional diff scoped.
+**Line endings.** `.gitattributes` says `* text=auto eol=crlf`: the stored blob
+is LF, the checkout is CRLF. Never normalise files you are not otherwise
+changing — in particular do not run `git add --renormalize .`, which restages
+every stale-blob file in the repository at once.
+
+If a file suddenly shows as a whole-file diff you did not make, it is a blob
+committed before that attribute settled, surfacing because something
+invalidated git's stat cache. `git diff --ignore-cr-at-eol` (empty) and the
+working bytes against `git show HEAD:<path>` (identical) confirm it; then leave
+it. Fixing one is its own commit touching nothing else.
 
 **Namespaces.** `Nilesoft::Diagnostics` and `Nilesoft::Shell::Diagnostics` both
 exist. At global scope in `Main.cpp` an unqualified `Diagnostics` is ambiguous;
@@ -466,6 +503,8 @@ than implying you did.
   Windows Installer decided, which is the part that keeps being surprising.
 
 ARM64 is not one of these: the v143 ARM64 cross tools
-(`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) are installed, so
+(`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) are installed here, so
 `.\build.ps1 -Platform arm64` compiles and packages. Only the test executable
-cannot run, because the host is x64 — `build.ps1` skips it and says so.
+cannot run, because the host is x64 — `build.ps1` skips it and says so. The CI
+runner needs the same component and does not ship with it; the workflow adds it
+on that leg.

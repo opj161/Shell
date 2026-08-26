@@ -3,6 +3,12 @@
 **Assembled 2026-08-26** against `refactor/takeover-master-plan` @ `450985f`
 with the §09 remediation present as an uncommitted working tree.
 
+> **Closed out.** Every workstream in Part C is implemented and every gate in
+> Part E re-run; see [`14-post-implementation-qa.md`](14-post-implementation-qa.md)
+> for what landed, what this plan got wrong, and the two defects that were found
+> by gates it correctly insisted on re-running. Read that first if you are
+> looking at the current state rather than at the reasoning.
+
 This document merges three inputs into one executable plan:
 
 - [`10-remediation-qa-assessment-revised.md`](10-remediation-qa-assessment-revised.md)

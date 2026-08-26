@@ -9,6 +9,13 @@ and the decisions already taken — so none of it is re-derived or re-litigated.
 change and **why**, with the contract citations. This document is the **how**,
 and it assumes the plan has been read.
 
+> **Superseded for numbers, still current for method.** The implementation is
+> complete: [`14-post-implementation-qa.md`](14-post-implementation-qa.md) §1
+> carries the final measurements. Every baseline in §3 below is the *starting*
+> state and none of them still hold — the suite, the harness counts and the
+> `/analyze` figure all moved by design. §4 (running the harness), §5 (toolchain
+> traps) and §7 (settled decisions) are unchanged and still worth reading.
+
 ---
 
 ## 1. Start here
