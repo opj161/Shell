@@ -17,12 +17,14 @@ manual. This is the record of finishing it.
 
 ## 0. Verdict
 
-**All eleven code and gate workstreams (W0–W10) are complete and verified**,
-with one qualification: W6.4's CI is authored, pushed and correctly triggered,
-but this fork has never executed an Actions workflow at all, so D4 is proven on
-paper and not in practice. Enabling Actions on the fork is a click nobody but
-the maintainer can make — §6. W11 (R8) remains what it always was: work that
+**All eleven code and gate workstreams (W0–W10) are complete and verified, and
+CI is green on all four jobs.** W11 (R8) remains what it always was: work that
 needs a machine or a person this one is not.
+
+Two defects were found by gates that had never been run — one by the takeover
+harness (§4), one by CI (§8.1) — and both were in code the branch had not
+touched. That is the entire argument for W6.4 and for Part E's insistence on
+re-running everything, collected in a single session.
 
 The single most important result in this document is §4: `ac662c4` shipped a
 double-release into the menu path, the entire unit suite passed on it, and the
@@ -39,17 +41,18 @@ Every row re-measured on this tree, not quoted from a session.
 
 | Gate | `13` baseline | Final | |
 |---|---|---|---|
-| x64 build + suite | 33,102 checks / 0 fail | **33,741 / 0**, 0 warnings | ok |
-| x86 build + suite | 33,102 checks / 0 fail | **33,741 / 0**, 0 warnings | ok |
+| x64 build + suite | 33,102 checks / 0 fail | **33,748 / 0**, 0 warnings | ok |
+| x86 build + suite | 33,102 checks / 0 fail | **33,748 / 0**, 0 warnings | ok |
 | arm64 | builds + packages, tests skipped | unchanged | ok |
 | invariants | `OK (10 rules, 0 deferred)` | **`OK (11 rules, 0 deferred)`** | ok |
 | `/analyze` DLL | **6** warnings | **0**, 23 TUs | ok |
 | `/analyze` exe + CA | clean | clean | ok |
 | harness, native | 23 / 0 / 9 skipped | **23 / 0 / 10 skipped** | ok |
 | harness, takeover | 32 / 0 | **33 / 0**, three consecutive runs | ok |
-| MSI lifecycle | ok ×3 (pwsh 7 only) | **ok ×3 under Windows PowerShell 5.1** | ok |
 | `git diff --check` | 30 hits on `main...HEAD` | clean both ways | ok |
-| commits | 83 ahead of `main`, `09` uncommitted | **103 ahead**, 20 new commits | ok |
+| MSI lifecycle | ok ×3 (pwsh 7 only) | **ok ×3 under Windows PowerShell 5.1**, and in CI | ok |
+| **CI** | never run on this branch | **green: invariants + x64 + x86 + arm64** | ok |
+| commits | 83 ahead of `main`, `09` uncommitted | **110 ahead**, 27 new commits | ok |
 
 ---
 
@@ -98,7 +101,7 @@ replace yet.
 
 | # | Finding | Resolution |
 |---|---|---|
-| **F-A** | The branch had never been through CI — 13 commits unpushed, so W6.4's workflow had never executed | Pushed — but **still not executed**; §6 |
+| **F-A** | The branch had never been through CI — 13 commits unpushed, so W6.4's workflow had never executed | Pushed, Actions enabled, **green on all four jobs** — and it found §8 on the way |
 | **F-B** | `09` stale on cardinality *again* (23/32 vs a 23/33 harness), by the commit that added the scenario | `5215609` — every count in `09` now references the constants |
 | **F-C** | W3 shipped with no test; W8's fake could not stand in for one | `a965737` — `ProviderCall.h` + a real `IExplorerCommand` fake |
 | **F-D** | W8 written and green but unlanded and ungated | `ac662c4` — **and landing it exposed §4** |
@@ -107,6 +110,9 @@ replace yet.
 | **F-G1** | `ProviderCache.h` comment stated a reason that did not hold | folded into `ac662c4` |
 | **F-G2** | 20 branch-touched files carried bare LF against `eol=crlf` | normalised; §7 |
 | **F-K** | the same ownership defect, as an outright leak, in the sub-command path | `1bf2acf` |
+| **F-L** | `ConfigShadow::save()` silently wrote nothing when `root` and `loaded` disagreed on 8.3 vs long form | `fd6e951`; §8.1 |
+| **F-M** | two suites asserted that the machine's `%TEMP%` has no 8.3 alias | `fd6e951`; §8.1 |
+| **F-N** | the hosted runner image ships the pinned v143 toolset for x64/x86 only | `a4aaab9`, `61e5740`, `fb9a259`; §8.2 |
 | **F-J** | W2 stronger than Part E asked for | endorsed, no action |
 
 ### F-J — W2 is stronger than the plan required *(no action)*
@@ -345,32 +351,18 @@ All re-run on the final tree, `0adb5b1`.
 - **MSI lifecycle** — ok on all three packages under Windows PowerShell 5.1,
   the edition `build.ps1` and CI use.
 - `git diff --check` clean, working tree and `main...HEAD`.
-- **CI — pushed, but still not executed. This is the one gate that remains
-  open, and it needs the maintainer.** `eb22667` is on
-  `origin/refactor/takeover-master-plan`, and the workflow's trigger list
-  contains that branch, so the push should have created a run. It did not:
+- **CI — green, on all four jobs, for the first time in this repository's
+  history.** `invariants`, and `build` on x64, x86 and arm64:
 
   ```text
-  gh api repos/opj161/Shell/actions/workflows
-      337801049  Build  active  .github/workflows/build.yml
-  gh api repos/opj161/Shell/actions/workflows/337801049/runs
-      total_count: 0
+  invariants            success     check-invariants: OK (11 rules, 0 deferred)
+  build (release, x64)  success     33,748 checks / 0 failures · ok setup-x64.msi
+  build (release, x86)  success     33,748 checks / 0 failures · ok setup-x86.msi
+  build (release, arm64) success    packaged; suite skipped (cross-built)
   ```
 
-  **Zero runs ever** — not merely none for this branch, and none for `main`
-  either. `actions/permissions` reports `enabled: true`, but that is the
-  *permissions* setting; a forked repository additionally requires a one-time
-  manual enable in its Actions tab ("I understand my workflows, go ahead and
-  enable them"), which has no API and cannot be done from here.
-  `gh workflow run` is not an alternative: the workflow has no
-  `workflow_dispatch` trigger, and `gh` resolves the bare repo argument to the
-  `upstream` remote (`moudey/Shell`) rather than the fork, which is worth
-  knowing before reading its 403 as something else.
-
-  So D4 is **authored and pushed but still unproven**. Enable Actions on the
-  fork and read the first run; until then the invariants, the MSI gate and the
-  suite are still enforced only on a developer's machine, which is exactly the
-  assurance gap `12` called the largest either QA pass found.
+  The check count matches this machine exactly. Getting there took four runs
+  and found three real things — §8.
 
 ---
 
@@ -386,6 +378,14 @@ normalise files you are not otherwise changing — so they are left alone. They
 are not a change waiting to be committed; they are a repository wart worth one
 deliberate normalising commit, on its own, when someone decides to.
 
+**Three files carrying CRLF blobs — resolved.** Recorded here as left alone;
+the maintainer then took the decision, and `6759624` normalises exactly those
+three and nothing else. `git diff --ignore-cr-at-eol` over that commit is empty
+and the working-tree bytes are unchanged by it — only what git stores changed,
+from CRLF to LF. It is its own commit for the reason AGENTS.md gives: never
+normalise files you are not otherwise changing, and never fold it into one that
+does something else.
+
 **W11 / R8 still needs a machine or a person.** Third-party host smoke tests
 (Total Commander, Directory Opus, Everything — the `IShellExtInit`/`IContextMenu`
 path), the MSI upgrade matrix on clean VMs, and the live-Explorer re-measurement
@@ -396,3 +396,89 @@ what happens when that path is only reasoned about.
 
 The takeover harness is the closest proxy available here, and it is now the gate
 that has earned the most trust on this branch.
+
+---
+
+## 8. What CI found the moment it was allowed to run
+
+D4's whole argument was that gates enforced on one developer's machine are not
+enforced. Four runs were needed to get green, and each red one was a real
+finding rather than a CI-plumbing detail. That is the return on W6.4, collected
+immediately.
+
+### 8.1 Six test failures from an 8.3 short path — and a production defect under them
+
+The first run: **33,734 checks, 6 failures**, on all three platforms, in two
+suites nothing on this branch had touched.
+
+A GitHub Windows runner's temp directory is `C:\Users\RUNNER~1\AppData\Local\Temp`
+— an 8.3 short component in a path everything else spells long. Reproduced here
+by pointing `TEMP` at a short path: the same six assertions, same lines.
+
+The tests were the smaller half. `test_selection_path_resolver` and
+`test_parser_imports` built their trees from `%TEMP%` as given and then compared
+those paths against ones that came back out of Windows — `Path::Full`, and a
+shell link read through `IShellLink`, which answers the canonical long form.
+They now take the long form up front, so they assert what they meant to and not
+also that the machine's temp directory has no 8.3 alias.
+
+**Underneath them was a real product defect.** `ConfigShadow::save()` decides
+whether a loaded file lives under the configuration directory by comparing
+leading characters, taking `root` from the caller and `loaded` from the parser —
+different sources, under no obligation to agree on spelling. When they
+disagreed, `relative_to()` matched nothing, every file was skipped, `pending`
+came out empty and `save()` returned **false**. The shadow was then silently
+never written: a last-known-good mechanism that had quietly stopped existing,
+with a boolean nobody reads as the only sign.
+
+`save()` now puts both sides in one spelling first, via `GetLongPathNameW` read
+with its documented two-call contract — and without a tilde shortcut, which that
+page forbids outright: *"do not assume that you can skip calling
+GetLongPathName if the path does not contain a tilde (~) character."*
+
+This is the second time in this document that a gate nobody had run was hiding
+a defect in code nobody had touched.
+
+### 8.2 The hosted image ships half the pinned toolset
+
+x64 and x86 then passed and arm64 failed every project with `MSB8020: The build
+tools for Visual Studio 2022 (Platform Toolset = 'v143') cannot be found` —
+reported by Visual Studio **18**'s MSBuild, in a job that had already compiled
+x64 with `VC\Tools\MSVC\14.44.35207`, which *is* v143. The inventory the
+workflow now prints says it plainly:
+
+```text
+before   MSBuild v170: Win32=[v143] x64=[v143]
+after    MSBuild v170: ARM64=[v143] ARM64EC=[v143] Win32=[v143] x64=[v143]
+```
+
+The image carries the pinned toolset for the two platforms it expects to be
+asked for; the ARM64 half is an add-on, and
+`Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64` adds it in place.
+Retargeting the solution off v143 would have changed what ships in order to
+satisfy a runner, which is not a CI decision.
+
+### 8.3 A check that made a step pass without making anything work
+
+Worth its own line, because it is the failure mode this whole document keeps
+circling. The first attempt at the step above tested for *any* directory named
+`arm64` under *any* MSVC `bin`. One matched — belonging to an unrelated toolset
+version — so the step reported "already present", exited 0, installed nothing,
+and the build went on failing with the identical error. A green step that
+verifies nothing is worse than a red one.
+
+`MSB8020` is about the platform toolset MSBuild can resolve for a platform, so
+that is now exactly what is tested: the
+`MSBuild\Microsoft\VC\v170\Platforms\ARM64\PlatformToolsets\v143` directory.
+
+### 8.4 What CI does and does not now enforce
+
+Enforced on every push to this branch and every PR to `main`: the eleven source
+invariants, three-platform builds, the full unit suite on x64 and x86, and the
+MSI lifecycle gate per platform.
+
+Still not enforced, and still correctly documented as manual: **hostprobe**.
+Both modes need an interactive desktop, and the takeover mode needs a per-user
+COM override; `06-phases-and-tests.md` §3 names it a manual pre-merge step with
+an owner rather than pretending a job exists. Given §4, that manual step is the
+most valuable gate on the branch, and the one most worth not forgetting.
