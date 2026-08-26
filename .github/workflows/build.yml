@@ -105,7 +105,22 @@ jobs:
             }
         }
 
+        # The one thing MSB8020 is actually asking for. Measured on this image:
+        #
+        #   before   MSBuild v170: Win32=[v143] x64=[v143]
+        #   after    MSBuild v170: ARM64=[v143] ARM64EC=[v143] Win32=[v143] x64=[v143]
+        #
+        # and MSVC 14.44.35207 gained HostX64/arm64 with it. So the image ships
+        # the pinned toolset for the two platforms it expects to be asked for,
+        # and the ARM64 half is an add-on.
+        $toolset = "$root\MSBuild\Microsoft\VC\v170\Platforms\ARM64\PlatformToolsets\v143"
+
         Report 'before'
+
+        if (Test-Path -LiteralPath $toolset) {
+          Write-Host "v143 ARM64 platform toolset already present - nothing to do"
+          exit 0
+        }
 
         $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
         foreach ($id in @('Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64',
@@ -116,6 +131,11 @@ jobs:
                  'modify', '--installPath', "`"$root`"", '--add', $id,
                  '--quiet', '--norestart', '--nocache')
           Write-Host "  exit $($p.ExitCode)"
+
+          # The version-pinned id is the one that worked; the others are there
+          # in case the image moves. Stop at whichever produced the toolset,
+          # rather than running the installer three times for one outcome.
+          if (Test-Path -LiteralPath $toolset) { Write-Host "  toolset present"; break }
         }
 
         Report 'after'
