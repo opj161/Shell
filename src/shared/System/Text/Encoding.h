@@ -469,12 +469,40 @@ Note that:
 				return From(mstr, length, wstr, CP_ACP);
 			}
 
-			// Convert an UTF8 string to a wide Unicode String
+			// Decode a byte run to UTF-16. Used by File::ReadText, i.e. by the
+			// .nss file.read() function.
+			//
+			// This was `wchar_t *wstr = nullptr; From(mstr, length, &wstr, cp);
+			// return wstr;`, which leaked the raw new wchar_t[] on EVERY call
+			// and, whenever MultiByteToWideChar failed, constructed a
+			// std::wstring from nullptr - undefined behaviour, and per AGENTS.md
+			// an access violation there is invisible to catch(...) under /EHsc
+			// because it happens inside the hook's SEH region. That failure is
+			// reachable from ReadText: "if cbMultiByte is 0, the function fails"
+			// (a file that is exactly a UTF-8 BOM, or a read of zero bytes), and
+			// with MB_ERR_INVALID_CHARS - which the CP_UTF8 path sets - "The
+			// function fails ... if an invalid character is encountered", which
+			// a BOM followed by non-UTF-8 reaches because Encoding::GetType does
+			// not validate what follows a BOM.
+			// https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-multibytetowidechar
+			//
+			// Embedded NULs: returning through std::wstring(const wchar_t *)
+			// stopped at the first NUL, so file.read() of a file containing one
+			// has always truncated there. That is preserved deliberately.
+			// Unicode::From(const char *, size_t, uint32_t) resize()s to the
+			// converted length and would keep them, which is a different answer
+			// for file.read() - a product decision, not part of this fix.
+			static std::wstring FromMultiByte(const char *mstr, size_t length, uint32_t codePage)
+			{
+				std::wstring decoded = From(mstr, length, codePage);
+				if(const auto nul = decoded.find(L'\0'); nul != std::wstring::npos)
+					decoded.resize(nul);
+				return decoded;
+			}
+
 			static std::wstring FromANSI(const char *mstr, size_t length)
 			{
-				wchar_t *wstr = nullptr;
-				From(mstr, length, &wstr, CP_ACP);
-				return wstr;
+				return FromMultiByte(mstr, length, CP_ACP);
 			}
 
 			static wchar_t *FromANSI(const char *mstr)
@@ -488,12 +516,11 @@ Note that:
 				return From(utf8, length, wstr, CP_UTF8);
 			}
 
-			// Convert an UTF8 string to a wide Unicode String
+			// See FromANSI(const char *, size_t) above for the contract, the
+			// reachable failure paths and the embedded-NUL decision.
 			static std::wstring FromUTF8(const char *utf8, size_t length)
 			{
-				wchar_t *wstr = nullptr;
-				From(utf8, length, &wstr, CP_UTF8);
-				return wstr;
+				return FromMultiByte(utf8, length, CP_UTF8);
 			}
 
 			// Convert an UTF8 string to a wide Unicode String
@@ -617,35 +644,55 @@ Note that:
 					dest.push_back(err);
 			}
 
+			// Convert a wide Unicode string to UTF-8.
+			//
+			// This was a hand-rolled loop over `short w = src[i]`. wchar_t is
+			// unsigned 16-bit (range 0-65,535) and short is signed (-32,768-32,767)
+			// - https://learn.microsoft.com/en-us/cpp/cpp/data-type-ranges - so
+			// every code unit at or above U+8000 arrived negative, took the
+			// `w <= 0x7f` branch and was written as one truncated byte. The
+			// three- and four-byte branches under it were unreachable for a
+			// short, a surrogate pair was never recombined, and a null src was
+			// dereferenced. Hangul, CJK compatibility, private use and every
+			// emoji went into the file as a run of 0x00.
+			//
+			// WideCharToMultiByte is the documented conversion and has "fully
+			// conform[ed] with the Unicode 4.1 specification for UTF-8 and
+			// UTF-16" since Vista. Contract notes that matter here:
+			//   - dwFlags must be 0 or WC_ERR_INVALID_CHARS for CP_UTF8, else
+			//     ERROR_INVALID_FLAGS. 0 is deliberate: it "replaces illegal
+			//     sequences with U+FFFD ... and succeeds", so one unpaired
+			//     surrogate in a selected path cannot abandon the whole write.
+			//   - cbMultiByte == 0 returns "the required buffer size, in bytes".
+			//   - cchWideChar == 0 fails, so the empty case is answered here
+			//     rather than by the API.
+			//   - An explicit positive cchWideChar leaves the output NOT
+			//     null-terminated and excludes a terminator from the count, so
+			//     an embedded U+0000 stays one 0x00 byte and the bytes after it
+			//     are still written - which is what the old loop did.
+			// https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-widechartomultibyte
 			static void Utf16ToUtf8(std::string &dest, const wchar_t *src, const size_t length)
 			{
 				dest.clear();
-				for(size_t i = 0; i < length; i++)
+				if(!src || length == 0)
+					return;
+
+				const int wlength = static_cast<int>(length);
+				const int needed = ::WideCharToMultiByte(CP_UTF8, 0, src, wlength,
+														 nullptr, 0, nullptr, nullptr);
+				if(needed <= 0)
+					return;
+
+				dest.resize(static_cast<size_t>(needed));
+				const int written = ::WideCharToMultiByte(CP_UTF8, 0, src, wlength,
+														  &dest[0], needed, nullptr, nullptr);
+				if(written <= 0)
 				{
-					short w = src[i];
-					if(w <= 0x7f)
-						dest.push_back((char)w);
-					else if(w <= 0x7ff)
-					{
-						dest.push_back(0xc0 | ((w >> 6) & 0x1f));
-						dest.push_back(0x80 | (w & 0x3f));
-					}
-					else if(w <= 0xffff)
-					{
-						dest.push_back(0xe0 | ((w >> 12) & 0x0f));
-						dest.push_back(0x80 | ((w >> 6) & 0x3f));
-						dest.push_back(0x80 | (w & 0x3f));
-					}
-					else if(w <= 0x10ffff)
-					{
-						dest.push_back(0xf0 | ((w >> 18) & 0x07));
-						dest.push_back(0x80 | ((w >> 12) & 0x3f));
-						dest.push_back(0x80 | ((w >> 6) & 0x3f));
-						dest.push_back(0x80 | (w & 0x3f));
-					}
-					else
-						dest.push_back('?');
+					dest.clear();
+					return;
 				}
+
+				dest.resize(static_cast<size_t>(written));
 			}
 
 			// Convert a wide Unicode string to an UTF8 string

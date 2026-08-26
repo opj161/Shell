@@ -9,6 +9,8 @@
 
 #include <windows.h>
 #include <cstdint>
+#include <initializer_list>
+#include <string>
 using byte = uint8_t;
 
 #include "../shared/System/Text/Encoding.h"
@@ -173,4 +175,173 @@ TEST(encoding, utf8_conversion_of_nothing_is_nothing)
 	CHECK_EQ((int)UTF8::FromUnicode(L"", 0, &out), 0);
 	CHECK(out == nullptr);
 	CHECK_EQ((int)UTF8::FromUnicode(nullptr, 4, &out), 0);
+}
+
+// ---------------------------------------------------------------------------
+// UTF8::Utf16ToUtf8 - the sel.tofile() / sel.append() write path.
+//
+// The hand-rolled loop this replaced declared `short w = src[i]` for an
+// unsigned 16-bit wchar_t. wchar_t's range is 0-65,535 and short's is
+// -32,768-32,767 (https://learn.microsoft.com/en-us/cpp/cpp/data-type-ranges),
+// so every code unit at or above U+8000 arrived negative, took the `w <= 0x7f`
+// branch and was written as ONE TRUNCATED BYTE. The three- and four-byte
+// branches below it were unreachable for a short, and a surrogate pair was
+// never recombined - so Hangul, CJK compatibility, private use and every emoji
+// went into the file as a run of 0x00.
+//
+// Expected byte sequences are built from explicit octets rather than string
+// literals: a hex escape in C++ is greedy, so "\xEA" followed by a literal 'a'
+// would be read as one escape.
+// ---------------------------------------------------------------------------
+
+static std::string bytes(std::initializer_list<unsigned char> b)
+{
+	return std::string(reinterpret_cast<const char *>(b.begin()), b.size());
+}
+
+// U+8000 is the first code point the old loop got wrong, so this is the exact
+// boundary between the branch that worked and the branch that did not.
+TEST(encoding, utf16_to_utf8_encodes_the_first_code_point_above_the_short_boundary)
+{
+	const wchar_t src[] = { 0x8000, 0 };
+	const std::string got = UTF8::Utf16ToUtf8(src, 1);
+
+	CHECK_MSG(got == bytes({ 0xE8, 0x80, 0x80 }), "U+8000 is three UTF-8 bytes, not one truncated one");
+	CHECK_EQ((int)got.size(), 3);
+}
+
+TEST(encoding, utf16_to_utf8_encodes_hangul_and_cjk)
+{
+	const wchar_t hangul[] = { 0xAC00, 0 };            // U+AC00 HANGUL SYLLABLE GA
+	CHECK_MSG(UTF8::Utf16ToUtf8(hangul, 1) == bytes({ 0xEA, 0xB0, 0x80 }), "U+AC00");
+
+	const wchar_t cjk[] = { 0x4E2D, 0 };               // U+4E2D, below 0x8000
+	CHECK_MSG(UTF8::Utf16ToUtf8(cjk, 1) == bytes({ 0xE4, 0xB8, 0xAD }), "U+4E2D was already correct");
+}
+
+// A surrogate pair is two code units that must be recombined into one 4-byte
+// sequence. The old loop saw two negative shorts and wrote two zero bytes.
+TEST(encoding, utf16_to_utf8_recombines_a_surrogate_pair)
+{
+	const wchar_t emoji[] = { 0xD83D, 0xDE00, 0 };     // U+1F600
+	const std::string got = UTF8::Utf16ToUtf8(emoji, 2);
+
+	CHECK_MSG(got == bytes({ 0xF0, 0x9F, 0x98, 0x80 }), "U+1F600 is one four-byte sequence");
+	CHECK_EQ((int)got.size(), 4);
+}
+
+TEST(encoding, utf16_to_utf8_keeps_ascii_around_a_high_code_point)
+{
+	const wchar_t mixed[] = { L'A', 0x8000, L'B', 0 };
+	CHECK(UTF8::Utf16ToUtf8(mixed, 3) == bytes({ 'A', 0xE8, 0x80, 0x80, 'B' }));
+}
+
+// Same rule the FromUnicode path already follows: a lone surrogate must not
+// abandon the whole write. dwFlags is 0, so WideCharToMultiByte "replaces
+// illegal sequences with U+FFFD ... and succeeds".
+TEST(encoding, utf16_to_utf8_substitutes_an_unpaired_surrogate)
+{
+	const wchar_t bad[] = { L'a', 0xD800, L'b', 0 };
+	CHECK(UTF8::Utf16ToUtf8(bad, 3) == bytes({ 'a', 0xEF, 0xBF, 0xBD, 'b' }));
+}
+
+// Embedded-NUL semantics on the WRITE path, pinned deliberately: the length is
+// explicit, so a U+0000 in the middle of the argument is one 0x00 byte in the
+// file and the bytes after it are still written. This is what the old loop did
+// (w == 0 took the `w <= 0x7f` branch and pushed a 0 byte) and it is preserved.
+TEST(encoding, utf16_to_utf8_preserves_an_embedded_nul)
+{
+	const wchar_t src[] = { L'a', 0, L'b' };
+	const std::string got = UTF8::Utf16ToUtf8(src, 3);
+
+	CHECK_EQ((int)got.size(), 3);
+	CHECK_MSG(got == bytes({ 'a', 0x00, 'b' }), "an embedded NUL does not truncate the write");
+}
+
+// WideCharToMultiByte fails outright when cchWideChar is 0, so the zero case
+// has to be answered before the call rather than by it.
+TEST(encoding, utf16_to_utf8_of_nothing_is_nothing)
+{
+	CHECK(UTF8::Utf16ToUtf8(L"", 0).empty());
+	CHECK(UTF8::Utf16ToUtf8(nullptr, 0).empty());
+	CHECK(UTF8::Utf16ToUtf8(nullptr, 4).empty());
+
+	std::string dest = "stale";
+	UTF8::Utf16ToUtf8(dest, L"", 0);
+	CHECK_MSG(dest.empty(), "the out-parameter form still clears its destination");
+}
+
+// ---------------------------------------------------------------------------
+// Unicode::FromANSI / FromUTF8, the std::wstring overloads.
+//
+// These are the two File::ReadText uses. Both were written as
+//     wchar_t *wstr = nullptr; From(mstr, length, &wstr, cp); return wstr;
+// which leaks the raw new wchar_t[] on every call, and on the failure path
+// returns nullptr into a std::wstring constructor - undefined behaviour, and
+// per AGENTS.md an access violation there is invisible to catch(...) under
+// /EHsc because it happens inside the hook's SEH region.
+//
+// MultiByteToWideChar reaches that failure path on inputs File::ReadText can
+// actually hand it: "if cbMultiByte is 0, the function fails", and with
+// MB_ERR_INVALID_CHARS - which the CP_UTF8 branch sets - "The function fails
+// ... if an invalid character is encountered in the source string".
+// ---------------------------------------------------------------------------
+
+// A file that is exactly the UTF-8 BOM: GetType says UTF8BOM, ReadText strips
+// three bytes and asks for a conversion of zero.
+TEST(encoding, a_bom_only_file_decodes_to_nothing_rather_than_faulting)
+{
+	const char nothing[] = { 0 };
+	CHECK(Unicode::FromUTF8(nothing, 0).empty());
+}
+
+// A BOM followed by bytes that are not UTF-8. GetType does not validate what
+// follows the BOM, so this reaches the decoder and trips MB_ERR_INVALID_CHARS.
+TEST(encoding, malformed_utf8_decodes_to_nothing_rather_than_faulting)
+{
+	const std::string bad = bytes({ 0xFF, 0xFE, 0xFF });
+	CHECK(Unicode::FromUTF8(bad.data(), bad.size()).empty());
+
+	const std::string lone_continuation = bytes({ 'a', 0x80, 'b' });
+	CHECK(Unicode::FromUTF8(lone_continuation.data(), lone_continuation.size()).empty());
+}
+
+TEST(encoding, an_empty_ansi_read_decodes_to_nothing_rather_than_faulting)
+{
+	const char nothing[] = { 0 };
+	CHECK(Unicode::FromANSI(nothing, 0).empty());
+	CHECK(Unicode::FromANSI(nullptr, 4).empty());
+	CHECK(Unicode::FromUTF8(nullptr, 4).empty());
+}
+
+TEST(encoding, a_valid_utf8_read_still_decodes)
+{
+	const std::string utf8 = bytes({ 'A', 0xE4, 0xB8, 0xAD });
+	const std::wstring got = Unicode::FromUTF8(utf8.data(), utf8.size());
+
+	CHECK_EQ((int)got.size(), 2);
+	CHECK(got == std::wstring(L"A\x4e2d"));
+
+	const char ansi[] = { 'h', 'i' };
+	CHECK(Unicode::FromANSI(ansi, 2) == std::wstring(L"hi"));
+}
+
+// Embedded-NUL semantics on the READ path, pinned deliberately and NOT the same
+// answer as the write path. Returning through `std::wstring(const wchar_t *)`
+// stopped at the first NUL, so file.read() of a file containing one has always
+// truncated there. That behaviour is preserved rather than silently widened:
+// Unicode::From(const char*, size_t, uint32_t) resize()s to the converted
+// length and would keep the NULs, which is a different answer for
+// file.read() and is a product decision, not a bug fix.
+TEST(encoding, an_embedded_nul_still_truncates_a_decoded_read)
+{
+	const char embedded[] = { 'a', 0, 'b' };
+
+	const std::wstring utf8 = Unicode::FromUTF8(embedded, 3);
+	CHECK_EQ((int)utf8.size(), 1);
+	CHECK(utf8 == std::wstring(L"a"));
+
+	const std::wstring ansi = Unicode::FromANSI(embedded, 3);
+	CHECK_EQ((int)ansi.size(), 1);
+	CHECK(ansi == std::wstring(L"a"));
 }
