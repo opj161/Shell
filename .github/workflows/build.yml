@@ -79,26 +79,46 @@ jobs:
         $root = & $vswhere -latest -products * -property installationPath
         Write-Host "VS installation: $root"
 
-        $before = Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
-                  ForEach-Object { Get-ChildItem "$($_.FullName)\bin" -Directory -ErrorAction SilentlyContinue } |
-                  ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue -Filter arm64 }
-        if ($before) { Write-Host "arm64 cross tools already present"; exit 0 }
+        # MSB8020 is about the *platform toolset* MSBuild can find for this
+        # platform, not about a compiler binary existing somewhere, so that is
+        # what gets reported here. An earlier attempt tested for any directory
+        # called arm64 under any MSVC bin, decided the tools were present and
+        # skipped the install while the build went on failing.
+        function Report($when) {
+          Write-Host "--- $when ---"
+          Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              $hosts = Get-ChildItem $_.FullName -Recurse -Depth 2 -Directory -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Parent.Name -like 'Host*' } |
+                       ForEach-Object { "$($_.Parent.Name)/$($_.Name)" }
+              Write-Host ("  MSVC {0}: {1}" -f $_.Name, ($hosts -join ' '))
+            }
+          Get-ChildItem "$root\MSBuild\Microsoft\VC" -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              $sets = Get-ChildItem "$($_.FullName)\Platforms" -Directory -ErrorAction SilentlyContinue |
+                      ForEach-Object {
+                        $p = Get-ChildItem "$($_.FullName)\PlatformToolsets" -Directory -ErrorAction SilentlyContinue |
+                             Select-Object -ExpandProperty Name
+                        "$($_.Name)=[$($p -join ',')]"
+                      }
+              Write-Host ("  MSBuild {0}: {1}" -f $_.Name, ($sets -join ' '))
+            }
+        }
+
+        Report 'before'
 
         $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
         foreach ($id in @('Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64',
+                          'Microsoft.VisualStudio.Component.VC.v143.ARM64',
                           'Microsoft.VisualStudio.Component.VC.Tools.ARM64')) {
           Write-Host "trying --add $id"
           $p = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
                  'modify', '--installPath', "`"$root`"", '--add', $id,
                  '--quiet', '--norestart', '--nocache')
           Write-Host "  exit $($p.ExitCode)"
-          if ($p.ExitCode -eq 0) { break }
         }
 
-        Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
-          ForEach-Object { "  {0}: {1}" -f $_.Name,
-            ((Get-ChildItem "$($_.FullName)\bin\Hostx64" -Directory -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty Name) -join ', ') }
+        Report 'after'
 
     - name: Restore NuGet packages
       working-directory: ${{env.GITHUB_WORKSPACE}}
