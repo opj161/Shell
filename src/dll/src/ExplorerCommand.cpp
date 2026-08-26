@@ -626,6 +626,27 @@ namespace Nilesoft
 					},
 					&slot.canonical);
 
+				/*
+					Ownership, and the reason this is not a Release.
+
+					On the path that shows a command, the *item* takes the
+					caller's reference: fill_menuitem_from_explorer_command
+					stores the pointer and sets explorer_command_owned, and
+					menuitem_t::~menuitem_t releases it. That is why the
+					pre-W8 loop released only on Hidden and Failed - it was a
+					transfer, not a leak, and reading it as one is what put a
+					double-release into a menu whose items are still asked for
+					EnumSubCommands and Invoke afterwards.
+
+					Keyed on what the item actually took rather than on
+					FillResult::Shown, because the two are not the same: an
+					ECF_ISSEPARATOR command returns Shown from an earlier
+					branch that stores no pointer. That path used to leak the
+					reference outright, and now releases it with the handle.
+				*/
+				if(item->explorer_command_owned && item->explorer_command == cmd.get())
+					(void)cmd.detach();
+
 				auto cost = measured.cost_us;
 				health.record(step.hash, shape, cost, filled != FillResult::Failed);
 				Diagnostics::session_provider(step.hash, cost,

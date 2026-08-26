@@ -26,16 +26,32 @@
 	the cache was a `static thread_local std::vector` and three free functions
 	in an anonymous namespace inside ExplorerCommand.cpp.
 
-	**The caller's reference was leaked on the path that succeeds.**
+	**The caller's reference is transferred on the path that succeeds, and
+	reading that as a leak is how this file first got it wrong.**
 	acquire_explorer_command handed out two references and said so - "one for
 	the cache, one for the caller" - and the resolution loop released the
-	caller's half only when the provider declined or failed. A provider that
-	actually contributed an item leaked one reference per menu, on every host,
-	including Explorer's long-lived menu thread. The accounting was explicit
-	enough that the omission is visible once you look for it, which is the
-	argument for not leaving it to a `Release()` a future edit can drop again:
-	borrow() returns a scope-bound handle, and there is no longer a call for
-	anybody to forget.
+	caller's half only when the provider declined or failed. That looks exactly
+	like a leak on the succeeding path and is not one:
+	fill_menuitem_from_explorer_command stores the pointer on the menu item and
+	sets `explorer_command_owned`, and `menuitem_t::~menuitem_t` releases it.
+	The item is the second owner.
+
+	The first version of this class made `BorrowedProvider` release
+	unconditionally, which turned that transfer into a **double-release** on
+	every shown packaged verb - and the object is still asked for
+	EnumSubCommands and Invoke after composition, so it was a use-after-free,
+	not merely a miscount. It was caught by the takeover harness (which reaches
+	Shell through IShellExtInit/IContextMenu, so it also exercises
+	ThisMenuOnly) failing one to five scenarios per run, differing every run.
+	The unit tests did not catch it, because the fake models the cache and the
+	handle and nothing had taught it that a third owner exists - AGENTS.md, "a
+	test that only ever calls a function the way the test calls it".
+
+	So `borrow()` still returns a scope-bound handle, and `detach()` is how the
+	one path that gives the reference away says so. The caller keys that on
+	what the item actually took, not on FillResult::Shown: an ECF_ISSEPARATOR
+	command returns Shown from a branch that stores no pointer, and that path
+	really did leak a reference before this.
 
 	**Nothing ever released the cache itself.** The original comment chose
 	that deliberately - "a released process is a released process" - which holds
@@ -157,6 +173,28 @@ namespace Nilesoft
 					_api->release(_cmd);
 				_api = nullptr;
 				_cmd = nullptr;
+			}
+
+			/*
+				Gives the reference away instead of dropping it.
+
+				The menu item takes ownership of the caller's reference on the
+				path that stores the pointer - menuitem_t::~menuitem_t releases
+				it when `explorer_command_owned` is set - so on that path the
+				handle must stop being an owner without the object losing a
+				reference. Releasing there instead is a double-release, and
+				what the object is being used for afterwards is
+				EnumSubCommands and Invoke.
+
+				Returns the pointer so a caller cannot detach and then have
+				nothing to hand over.
+			*/
+			[[nodiscard]] IExplorerCommand *detach() noexcept
+			{
+				auto cmd = _cmd;
+				_api = nullptr;
+				_cmd = nullptr;
+				return cmd;
 			}
 
 		private:

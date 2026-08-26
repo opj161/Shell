@@ -433,6 +433,75 @@ TEST(provider_cache, an_activation_that_failed_caches_nothing)
 	CHECK_EQ(g_world.outstanding(), 0L);
 }
 
+TEST(provider_cache, a_provider_the_menu_item_took_is_handed_over_not_released)
+{
+	// The defect the first version of ProviderCache shipped with, and the one
+	// the rest of this suite could not see.
+	//
+	// On the path that shows a command, fill_menuitem_from_explorer_command
+	// stores the pointer on the menu item and sets explorer_command_owned;
+	// menuitem_t::~menuitem_t releases it. The item is a *third* owner, and
+	// the caller's reference is transferred to it rather than dropped. A
+	// BorrowedProvider that releases unconditionally therefore double-releases
+	// every shown packaged verb - and the object goes on being asked for
+	// EnumSubCommands and Invoke after composition, so it is a use-after-free
+	// rather than a miscount.
+	//
+	// Nothing here had taught the fake that the third owner exists, so nothing
+	// here failed. AGENTS.md: a test that only ever calls a function the way
+	// the test calls it proves nothing about the way the product calls it.
+	g_world.reset();
+	ProviderCache cache(fake_provider_api());
+
+	auto clsid = provider_guid(0x60);
+	IExplorerCommand *taken_by_the_item = nullptr;
+	{
+		auto borrowed = cache.borrow(clsid);
+		CHECK_EQ(g_world.find(clsid)->refs, 2L);		// cache + this scope
+
+		// What the shown path does: the item takes the caller's reference.
+		taken_by_the_item = borrowed.detach();
+		CHECK(!borrowed);
+	}
+
+	CHECK_MSG(g_world.find(clsid)->refs == 2L,
+			  "detach hands the reference over; the count must not move");
+	CHECK(taken_by_the_item != nullptr);
+
+	// The menu is torn down: ~menuitem_t releases the reference it was given.
+	fake_release(taken_by_the_item);
+	CHECK_EQ(g_world.find(clsid)->refs, 1L);			// the cache still holds one
+
+	cache.release_all();
+	CHECK_EQ(g_world.outstanding(), 0L);
+}
+
+TEST(provider_cache, a_released_cache_does_not_take_the_menus_provider_with_it)
+{
+	// ThisMenuOnly releases at the end of composition, while the menu it just
+	// composed is still standing and its items still hold their own
+	// references. The cache dropping its reference must not free the object.
+	g_world.reset();
+	ProviderCache cache(fake_provider_api());
+
+	auto clsid = provider_guid(0x61);
+	IExplorerCommand *held_by_the_item = nullptr;
+	{
+		auto borrowed = cache.borrow(clsid);
+		held_by_the_item = borrowed.detach();
+	}
+
+	cache.end_of_menu(ProviderLifetime::ThisMenuOnly);
+
+	CHECK_EQ(cache.size(), (size_t)0);
+	CHECK_MSG(g_world.find(clsid)->refs == 1L,
+			  "the item is still an owner - Invoke and EnumSubCommands come "
+			  "after composition");
+
+	fake_release(held_by_the_item);
+	CHECK_EQ(g_world.outstanding(), 0L);
+}
+
 TEST(provider_cache, a_moved_handle_names_one_reference_and_not_two)
 {
 	g_world.reset();
