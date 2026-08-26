@@ -55,6 +55,51 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
 
+    # The hosted image carries the v143 toolset that every project here pins,
+    # but only its x64/x86 halves: the first CI run this branch had built x64
+    # and x86 and failed arm64 with
+    #
+    #   MSB8020: The build tools for Visual Studio 2022 (Platform Toolset =
+    #   'v143') cannot be found.
+    #
+    # from VS 18's own MSBuild, having already compiled x64 with
+    # VC\Tools\MSVC\14.44.35207. So the toolset is present and the ARM64 cross
+    # tools are the missing component, which the installer can add in place.
+    # Retargeting the solution instead would change what ships, which is not a
+    # CI decision.
+    #
+    # Best-effort by design: if the component cannot be added, the build step
+    # below fails with the same clear MSB8020 rather than this step failing
+    # with something about the installer.
+    - name: Install v143 ARM64 cross tools
+      if: matrix.platform == 'arm64'
+      shell: pwsh
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $root = & $vswhere -latest -products * -property installationPath
+        Write-Host "VS installation: $root"
+
+        $before = Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
+                  ForEach-Object { Get-ChildItem "$($_.FullName)\bin" -Directory -ErrorAction SilentlyContinue } |
+                  ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue -Filter arm64 }
+        if ($before) { Write-Host "arm64 cross tools already present"; exit 0 }
+
+        $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+        foreach ($id in @('Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64',
+                          'Microsoft.VisualStudio.Component.VC.Tools.ARM64')) {
+          Write-Host "trying --add $id"
+          $p = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+                 'modify', '--installPath', "`"$root`"", '--add', $id,
+                 '--quiet', '--norestart', '--nocache')
+          Write-Host "  exit $($p.ExitCode)"
+          if ($p.ExitCode -eq 0) { break }
+        }
+
+        Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
+          ForEach-Object { "  {0}: {1}" -f $_.Name,
+            ((Get-ChildItem "$($_.FullName)\bin\Hostx64" -Directory -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty Name) -join ', ') }
+
     - name: Restore NuGet packages
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: nuget restore ${{env.SOLUTION_FILE_PATH}}
