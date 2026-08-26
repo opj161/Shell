@@ -25,6 +25,11 @@ namespace hostprobe
 						// native item in a by-position menu, where Shell tracks
 						// those under identifiers of its own.
 						SelectByPositionTarget,
+						// The same, one level down: into a submenu the host built,
+						// and to an item inside it. Steered by title at both levels
+						// because neither an identifier nor a position survives
+						// mirroring into a composed menu.
+						SelectNestedByPositionTarget,
 						CancelWhatever,
 							// Reads the menu back through MSAA instead of
 							// choosing anything from it. See MenuReader.h.
@@ -117,7 +122,12 @@ namespace hostprobe
 		// expectation compares what Shell replayed against what the host built
 		// rather than against a number this file made up.
 		UINT expected_position{ 0xFFFFFFFF };
-		HMENU host_root_menu{};
+
+		// The host menu the chosen item actually lives in, which is what
+		// WM_MENUCOMMAND's lParam has to name: the root for a root selection,
+		// the submenu for a nested one. It was called host_root_menu while only
+		// the root case existed, and the name was the assumption.
+		HMENU host_expected_menu{};
 
 		// What the host's own menu says at the position Shell replayed, and
 		// what it says at the position the script actually chose. Compared as
@@ -197,7 +207,7 @@ namespace hostprobe
 	// ShellItem scenarios landed. A count that lives only in prose drifts away
 	// from the thing it counts, and the drift is invisible precisely because
 	// the run still passes.
-	inline constexpr int kTakeoverScenarios = 32;
+	inline constexpr int kTakeoverScenarios = 33;
 	inline constexpr int kNativeScenarios = 23;
 	inline constexpr int kSkippedWithoutTakeover =
 		kTakeoverScenarios - kNativeScenarios;

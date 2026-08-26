@@ -97,6 +97,14 @@ namespace hostprobe
 		static Target command(UINT id) { return { id, false, true, {} }; }
 		static Target popup(UINT position) { return { position, true, true, {} }; }
 		static Target titled(std::wstring text) { return { 0, false, true, std::move(text) }; }
+
+		// A submenu named by what it says, for the same reason as titled(): in
+		// a by-position menu Shell tracks mirrored native items under
+		// identifiers of its own, and the *position* a popup is reported under
+		// is a position in Shell's composed menu rather than in the host's - so
+		// neither handle survives mirroring, and only the title does.
+		static Target titled_popup(std::wstring text) { return { 0, true, true, std::move(text) }; }
+
 		static Target none() { return {}; }
 
 		bool by_title() const { return !title.empty(); }
@@ -538,6 +546,35 @@ namespace hostprobe
 			if(found < 0)
 				return {};
 
+			return item_title_at(menu, static_cast<UINT>(found));
+		}
+
+		/*
+			The same, addressed by position rather than by identifier.
+
+			Needed because WM_MENUSELECT does not report the same kind of
+			thing for both kinds of item:
+
+				"If the selected item is a command item, this parameter
+				 contains the identifier of the menu item. If the selected
+				 item opens a drop-down menu or submenu, this parameter
+				 contains the index of the drop-down menu or submenu in the
+				 main menu."
+				https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menuselect
+
+			item_title above searches for a matching identifier, which for a
+			popup means searching for an item whose wID happens to equal a
+			*position* - it finds the wrong item or none at all. That is why
+			the first attempt at a nested by-position scenario could not steer
+			into the host submenu: the driver walked the whole composed root
+			past five popups without recognising any of them.
+		*/
+		static std::wstring item_title_at(HMENU menu, UINT position)
+		{
+			if(!menu || position >= static_cast<UINT>(::GetMenuItemCount(menu)))
+				return {};
+
+			const auto found = position;
 			MENUITEMINFOW mii{};
 			mii.cbSize = sizeof(mii);
 			mii.fMask = MIIM_STRING;
@@ -839,9 +876,25 @@ namespace hostprobe
 							std::lock_guard<std::mutex> lock(_target_title_mutex);
 							text = _target_title;
 						}
-						if(!text.empty() && !popup
-						   && item_title(owning, item).find(text) != std::wstring::npos)
-							_target_reached.store(true);
+						// Popup-ness is part of the match, not a filter against
+						// it. This was `!popup`, which is the same thing for
+						// every title target that names a command item - and
+						// made it impossible to name a submenu by title at all,
+						// which is what steering into one through a composed
+						// menu requires.
+						//
+						// And the lookup differs with it, because wParam does:
+						// an identifier for a command item, "the index of the
+						// drop-down menu or submenu" for a popup. Asking
+						// item_title for a popup searches for an item whose wID
+						// equals a position, which finds the wrong item or none.
+						if(!text.empty() && popup == _target_is_popup.load())
+						{
+							auto says = popup ? item_title_at(owning, item)
+											  : item_title(owning, item);
+							if(says.find(text) != std::wstring::npos)
+								_target_reached.store(true);
+						}
 					}
 					else if(item == _target_item.load()
 							&& popup == _target_is_popup.load())

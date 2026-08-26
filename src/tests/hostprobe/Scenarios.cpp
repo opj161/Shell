@@ -184,6 +184,22 @@ namespace hostprobe
 			return s;
 		}
 
+		// The same, one level down. Both legs are steered by title: the
+		// submenu because a popup is reported by *position* and that position
+		// is an index into whichever menu is on screen - Shell's composed one,
+		// not the host's - and the item because Shell tracks mirrored native
+		// items under identifiers of its own.
+		Probe::Script select_titled_in_submenu(const wchar_t *submenu,
+											   const wchar_t *item)
+		{
+			Probe::Script s;
+			s.root = Target::titled_popup(submenu);
+			s.open_submenu = true;
+			s.child = Target::titled(item);
+			s.keys = { Key::vk(VK_RETURN) };
+			return s;
+		}
+
 		Probe::Script cancel_whatever()
 		{
 			Probe::Script s;
@@ -618,6 +634,9 @@ namespace hostprobe
 			script = select_drivable(shell_menu.drivable_command()); break;
 		case ScriptKind::SelectByPositionTarget:
 			script = select_titled(ShellMenu::TARGET_TITLE); break;
+		case ScriptKind::SelectNestedByPositionTarget:
+			script = select_titled_in_submenu(ShellMenu::SUBMENU_TITLE,
+											  ShellMenu::NESTED_TARGET_TITLE); break;
 		case ScriptKind::CancelWhatever:  script = cancel_whatever(); break;
 		case ScriptKind::ReadComposedMenu:
 			script = read_composed_menu(
@@ -675,13 +694,30 @@ namespace hostprobe
 		// assert against recorded traces instead.
 		if(s.shape == MenuShape::ShellItem)
 		{
-			result.expected_position =
-				s.script == ScriptKind::SelectByPositionTarget
-					? shell_menu.target_position()
-					: shell_menu.drivable_position();
-			result.host_root_menu = shell_menu.menu();
-			result.expected_title = shell_menu.title_at(result.expected_position);
-			result.replayed_title = shell_menu.title_at(result.command_position);
+			// A nested selection is read against the submenu the host built,
+			// not against the root. Comparing a nested position to the root's
+			// titles is how a root-only implementation would still pass: the
+			// two menus have different lengths and different contents, so the
+			// index alone means nothing without the menu that holds it.
+			if(s.script == ScriptKind::SelectNestedByPositionTarget)
+			{
+				result.expected_position = shell_menu.nested_target_position();
+				result.host_expected_menu = shell_menu.nested_menu();
+				result.expected_title =
+					shell_menu.nested_title_at(result.expected_position);
+				result.replayed_title =
+					shell_menu.nested_title_at(result.command_position);
+			}
+			else
+			{
+				result.expected_position =
+					s.script == ScriptKind::SelectByPositionTarget
+						? shell_menu.target_position()
+						: shell_menu.drivable_position();
+				result.host_expected_menu = shell_menu.menu();
+				result.expected_title = shell_menu.title_at(result.expected_position);
+				result.replayed_title = shell_menu.title_at(result.command_position);
+			}
 		}
 
 		// The rendering verdicts, while the snapshot the driver took is still
@@ -1082,6 +1118,47 @@ namespace hostprobe
 				s.why = L"\"Menu owner receives a WM_MENUCOMMAND message instead "
 						L"of a WM_COMMAND message\", carrying \"the zero-based "
 						L"index of the item selected\"";
+				v.push_back(s);
+			}
+			{
+				/*
+					The other half of R2's requirement: "both root and nested".
+
+					Only the root was ever exercised - the live takeover trace
+					shows WM_MENUCOMMAND with menu = menu#1, the tracked root.
+					test_host_contract.cpp covers the pure function, and that
+					function merely copies sel.containing_menu, so it cannot
+					detect a ContextMenu that always reports the root. Nothing
+					end to end could.
+
+					lParam is "a handle to the menu for the item selected"
+					(https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand),
+					and for an item inside a submenu that is the submenu. The
+					host builds a real one here, with a duplicate identifier and
+					three zero identifiers inside it, and the expectation is read
+					against *that* menu's titles - so an index alone cannot pass
+					it, because the root and the submenu have different lengths
+					and different contents.
+
+					The code path looks correct by inspection: native_source.menu
+					is stored per level in ContextMenu.cpp and
+					prepare_system_items runs per materialised popup. That is the
+					point rather than an objection - this is the assertion that
+					keeps it correct, and it was proved by forcing the origin to
+					the root and watching only this scenario fail.
+				*/
+				Scenario s;
+				s.name = L"takeover.a_nested_by_position_selection_names_its_submenu";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.notify_by_pos = true;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::SelectNestedByPositionTarget;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.expectation = Expect::MenuCommandNamesTheHostPosition;
+				s.why = L"lParam is \"a handle to the menu for the item selected\" - "
+						L"for a nested item that is the submenu, not the menu that "
+						L"was tracked";
 				v.push_back(s);
 			}
 

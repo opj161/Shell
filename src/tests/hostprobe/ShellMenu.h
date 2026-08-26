@@ -151,6 +151,48 @@ namespace hostprobe
 			// replayed is the wrong one.
 			::AppendMenuW(_menu, MF_STRING, _drivable, L"Probe Duplicate Identifier");
 
+			/*
+				A real submenu of the host's, with the same hazards inside it.
+
+				R2 required the by-position menu to select "both root and nested"
+				items, and only the root was ever exercised - the live trace
+				shows WM_MENUCOMMAND with menu = the tracked root. That leaves
+				the nested case asserted by test_host_contract.cpp's pure
+				function, which merely copies sel.containing_menu and therefore
+				cannot detect a ContextMenu that always reports the root.
+
+				Which is the whole point: lParam is "a handle to the menu for the
+				item selected"
+				(https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand),
+				and for a nested item that is the submenu, not the menu that was
+				tracked. A root-only scenario passes against an implementation
+				that has never stored anything but the root.
+
+				Zero and duplicate identifiers again, because a submenu is no
+				more addressable by wID than the root is, and the target is
+				deliberately not first or last.
+
+				Appended here, before the four zero-identifier items, so that
+				`count - 3` below still names TARGET_TITLE.
+			*/
+			_nested = ::CreatePopupMenu();
+			if(!_nested)
+				return false;
+
+			::AppendMenuW(_nested, MF_STRING, _drivable, L"Probe Nested Duplicate Identifier");
+			::AppendMenuW(_nested, MF_STRING, 0, L"Probe Nested Zero A");
+			::AppendMenuW(_nested, MF_STRING, 0, NESTED_TARGET_TITLE);
+			::AppendMenuW(_nested, MF_STRING, 0, L"Probe Nested Zero C");
+			_nested_target_position = 2;
+
+			if(!::AppendMenuW(_menu, MF_POPUP | MF_STRING,
+							  reinterpret_cast<UINT_PTR>(_nested), SUBMENU_TITLE))
+			{
+				::DestroyMenu(_nested);
+				_nested = nullptr;
+				return false;
+			}
+
 			// And two with no identifier at all, which is the ordinary shape of
 			// an item in such a menu. Composition used to hand these one of
 			// *Shell's* identifiers, which made a host item look like one of
@@ -195,9 +237,23 @@ namespace hostprobe
 		// cannot disagree with itself about what it says.
 		static constexpr const wchar_t *TARGET_TITLE = L"Probe Zero Identifier B";
 
+		// The submenu the nested scenario steers into, and its destination.
+		// Named rather than positioned for the reason Target::titled_popup
+		// gives: in a composed by-position menu neither the identifier nor the
+		// position survives mirroring, and the title does.
+		static constexpr const wchar_t *SUBMENU_TITLE = L"Probe Nested Submenu";
+		static constexpr const wchar_t *NESTED_TARGET_TITLE = L"Probe Nested Zero B";
+
 		// Where the item the by-position script chooses sits in the *host's* own
 		// menu, which is what WM_MENUCOMMAND's wParam has to carry.
 		UINT target_position() const { return _target_position; }
+
+		// The same, one level down: the submenu the host built, and where the
+		// destination sits *within it*. WM_MENUCOMMAND's lParam has to name this
+		// menu and its wParam this index - not the root and not an index into
+		// the root.
+		HMENU nested_menu() const { return _nested; }
+		UINT nested_target_position() const { return _nested_target_position; }
 
 		// Where an identifier-driven script's destination sits.
 		UINT drivable_position() const { return _drivable_position; }
@@ -223,22 +279,27 @@ namespace hostprobe
 			compared equal. And this reads the *host's* real shell menu, which is
 			where long third-party titles come from.
 		*/
-		std::wstring title_at(UINT position) const
+		std::wstring title_at(UINT position) const { return title_in(_menu, position); }
+
+		// The same read against the host's submenu, for the nested scenario.
+		std::wstring nested_title_at(UINT position) const { return title_in(_nested, position); }
+
+		static std::wstring title_in(HMENU menu, UINT position)
 		{
-			if(!_menu || position >= static_cast<UINT>(::GetMenuItemCount(_menu)))
+			if(!menu || position >= static_cast<UINT>(::GetMenuItemCount(menu)))
 				return {};
 
 			MENUITEMINFOW query{};
 			query.cbSize = sizeof(query);
 			query.fMask = MIIM_STRING;
 			query.dwTypeData = nullptr;
-			if(!::GetMenuItemInfoW(_menu, position, TRUE, &query) || query.cch == 0)
+			if(!::GetMenuItemInfoW(menu, position, TRUE, &query) || query.cch == 0)
 				return {};
 
 			std::wstring buffer(static_cast<size_t>(query.cch) + 1, L'\0');
 			query.dwTypeData = buffer.data();
 			query.cch = query.cch + 1;
-			if(!::GetMenuItemInfoW(_menu, position, TRUE, &query))
+			if(!::GetMenuItemInfoW(menu, position, TRUE, &query))
 				return {};
 
 			return std::wstring(buffer.c_str());
@@ -248,8 +309,13 @@ namespace hostprobe
 		{
 			if(_menu)
 			{
+				// Destroys the attached submenu with it; _nested is only
+				// forgotten here, never destroyed separately, or the root
+				// would destroy a handle that is already gone.
 				::DestroyMenu(_menu);
 				_menu = nullptr;
+				_nested = nullptr;
+				_nested_target_position = NOT_FOUND;
 			}
 			if(_cm)
 			{
@@ -264,6 +330,7 @@ namespace hostprobe
 			_drivable = 0;
 			_drivable_position = NOT_FOUND;
 			_target_position = NOT_FOUND;
+			_nested_target_position = NOT_FOUND;
 		}
 
 	private:
@@ -345,6 +412,13 @@ namespace hostprobe
 		UINT _drivable{};
 		UINT _drivable_position{ NOT_FOUND };
 		UINT _target_position{ NOT_FOUND };
+
+		// Owned by _menu once it is attached: "DestroyMenu ... destroys the
+		// menu and frees any memory that the menu occupies", including its
+		// submenus.
+		// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroymenu
+		HMENU _nested{};
+		UINT _nested_target_position{ NOT_FOUND };
 		std::wstring _file;
 		std::wstring _why;
 	};

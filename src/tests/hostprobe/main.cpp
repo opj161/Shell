@@ -249,7 +249,7 @@ namespace
 			if(r.menu_commands == 1 && r.command_ids == 0
 			   && r.expected_position != 0xFFFFFFFF
 			   && r.command_position == r.expected_position
-			   && r.command_menu == r.host_root_menu
+			   && r.command_menu == r.host_expected_menu
 			   && !r.expected_title.empty()
 			   && r.replayed_title == r.expected_title)
 				return 0;
@@ -258,7 +258,7 @@ namespace
 					  L"WM_MENUCOMMAND (position %u, \"%s\", menu %p) and %zu "
 					  L"WM_COMMAND\n",
 					  r.expected_position, r.expected_title.c_str(),
-					  (void *)r.host_root_menu,
+					  (void *)r.host_expected_menu,
 					  r.menu_commands, r.command_position,
 					  r.replayed_title.c_str(), (void *)r.command_menu,
 					  r.command_ids);
