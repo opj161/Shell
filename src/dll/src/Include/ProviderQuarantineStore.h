@@ -72,30 +72,24 @@ namespace Nilesoft
 			// wants the next menu to see it without waiting out the interval.
 			void reload()
 			{
-				// Under the lock, like every other read of it. refresh_if_stale
-				// below already took it for exactly this, and this one did not -
-				// so a set_path_for_testing racing a menu's refresh could read
-				// the string while it was being assigned. Not reachable from a
-				// shipping path today, which is the argument for fixing it while
-				// it still is not. docs/refactor/09-remediation-plan.md R6.4.
-				std::wstring path;
-				{
-					std::lock_guard<std::mutex> lock(_mutex);
-					path = _path_override.empty() ? Quarantine::default_path() : _path_override;
-				}
+				auto loaded = Quarantine::read(current_path());
 
-				auto entries = Quarantine::load(path);
+				// Missing is a real state and loads as an empty list. Failed is
+				// not: keep whatever is cached and leave the stamp alone, so the
+				// next check tries again rather than believing this one.
+				if(!loaded.usable())
+					return;
 
 				std::vector<uint32_t> hashes;
-				hashes.reserve(entries.size());
-				for(const auto &entry : entries)
+				hashes.reserve(loaded.entries.size());
+				for(const auto &entry : loaded.entries)
 					hashes.push_back(entry.hash);
 
-				std::lock_guard<std::mutex> lock(_mutex);
-				_hashes.swap(hashes);
-				_loaded = true;
-				_checked_tick.store(::GetTickCount64(), std::memory_order_relaxed);
-				_stamp = write_time(path);
+				// The stamp comes from the same handle as the content, so a
+				// rewrite between the read and the stat cannot leave old hashes
+				// cached under a new timestamp - which would freeze this process
+				// on stale data until the *next* write.
+				commit(std::move(hashes), loaded.write_time);
 			}
 
 			void set_path_for_testing(const std::wstring &path)
@@ -118,6 +112,59 @@ namespace Nilesoft
 			// right-clicks does not stat the file for every one.
 			static constexpr uint64_t CheckIntervalMs = 2000;
 
+			/*
+				One lock scope per function, and nothing but the lock inside it.
+
+				refresh_if_stale used to open three separate lock_guard scopes,
+				two of them with a `return` inside, and reload a fourth. That is
+				correct code and the analyzer cannot follow it: six warnings,
+				C26110 "Caller failing to hold lock" and C26117 "Releasing unheld
+				lock", at what were lines 84, 98, 144, 150, 159 and 162. R6.4's
+				mutex fix added two of them and R6.5's restructuring - the half
+				that would have removed all six - was not done.
+
+				Suppressing them was never the answer. The analyzer is complaining
+				that ownership is hard to see, and a reader has the same problem:
+				each helper below takes the lock once, does one thing, and
+				returns, so both of them can tell where it is held by looking at
+				one function at a time.
+			*/
+			std::wstring current_path()
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				return _path_override.empty() ? Quarantine::default_path() : _path_override;
+			}
+
+			// Has the interval elapsed? Also the only place _checked_tick is
+			// compared, so "how recently did anyone look" has one reader.
+			bool checked_recently(uint64_t now)
+			{
+				auto last = _checked_tick.load(std::memory_order_relaxed);
+				std::lock_guard<std::mutex> lock(_mutex);
+				return _loaded && last != 0 && (now - last) < CheckIntervalMs;
+			}
+
+			// Records that the file was looked at, and answers whether it has
+			// moved since the cached copy was taken.
+			bool unchanged_since(uint64_t now, uint64_t stamp)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				_checked_tick.store(now, std::memory_order_relaxed);
+				return _loaded && stamp == _stamp;
+			}
+
+			void commit(std::vector<uint32_t> hashes, uint64_t stamp)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				_hashes.swap(hashes);
+				_loaded = true;
+				_checked_tick.store(::GetTickCount64(), std::memory_order_relaxed);
+				_stamp = stamp;
+			}
+
+			// A cheap "has it moved" probe, deliberately not the coherent read:
+			// reload() takes content and stamp from one handle, and this only
+			// decides whether to call it.
 			static uint64_t write_time(const std::wstring &path)
 			{
 				if(path.empty())
@@ -136,28 +183,11 @@ namespace Nilesoft
 			void refresh_if_stale()
 			{
 				auto now = ::GetTickCount64();
-				auto last = _checked_tick.load(std::memory_order_relaxed);
+				if(checked_recently(now))
+					return;
 
-				{
-					std::lock_guard<std::mutex> lock(_mutex);
-					if(_loaded && last != 0 && (now - last) < CheckIntervalMs)
-						return;
-				}
-
-				std::wstring path;
-				{
-					std::lock_guard<std::mutex> lock(_mutex);
-					path = _path_override.empty() ? Quarantine::default_path() : _path_override;
-				}
-
-				auto stamp = write_time(path);
-
-				{
-					std::lock_guard<std::mutex> lock(_mutex);
-					_checked_tick.store(now, std::memory_order_relaxed);
-					if(_loaded && stamp == _stamp)
-						return;		// nothing moved
-				}
+				if(unchanged_since(now, write_time(current_path())))
+					return;
 
 				reload();
 			}

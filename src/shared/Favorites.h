@@ -64,6 +64,7 @@
 #include <vector>
 
 #include <MenuIdentity.h>
+#include <StoreFile.h>
 
 namespace Nilesoft
 {
@@ -250,79 +251,63 @@ namespace Nilesoft
 
 			/*
 				A missing file is the normal case and is not a failure: nobody
-				has favourites until they use something.
+				has favourites until they use something. It is still not the
+				same thing as a file that would not open, which is why the
+				result below has three states rather than two.
 
-				FILE_FLAG_OPEN_REPARSE_POINT so a link is opened as itself
-				rather than followed - the same rule quarantine.txt is read
-				under, and for the same reason: a file that steers what a menu
-				does should not be redirectable by whatever got to the path
-				first.
+				The open itself - share modes, the reparse-point flag, the size
+				cap, the byte-order mark - is src/shared/StoreFile.h, shared
+				with quarantine.txt because both files are written by both
+				shell.dll and shell.exe.
 			*/
-			inline std::vector<Entry> load(const std::wstring &path)
+			// A read that says which of the three things happened, because two of
+			// them are not the same fact and the caller acts on the difference.
+			// src/shared/StoreFile.h.
+			struct LoadResult
 			{
-				if(path.empty())
-					return {};
-
-				auto file = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-										  OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-				if(file == INVALID_HANDLE_VALUE)
-					return {};
-
+				StoreFile::LoadState state{ StoreFile::LoadState::Failed };
 				std::vector<Entry> entries;
-				LARGE_INTEGER size{};
-				// Checked before the read, not after: this is parsed on the way
-				// to building a menu.
-				if(::GetFileSizeEx(file, &size) && size.QuadPart > 0
-				   && size.QuadPart <= 512 * 1024 && (size.QuadPart % sizeof(wchar_t)) == 0)
-				{
-					std::wstring text(static_cast<size_t>(size.QuadPart / sizeof(wchar_t)), L'\0');
-					DWORD read = 0;
-					if(::ReadFile(file, text.data(), static_cast<DWORD>(size.QuadPart), &read, nullptr)
-					   && read == size.QuadPart)
-					{
-						std::wstring_view view(text);
-						if(!view.empty() && view.front() == ByteOrderMark)
-							view.remove_prefix(1);
-						entries = parse(view);
-					}
-				}
+				uint64_t write_time{};
 
-				::CloseHandle(file);
-				return entries;
+				// An absent file is an empty list and may be written back over.
+				// A failed read may not: that is the whole distinction.
+				bool usable() const { return state != StoreFile::LoadState::Failed; }
+				bool loaded() const { return state == StoreFile::LoadState::Loaded; }
+			};
+
+			inline constexpr uint64_t MaxFileBytes = 512 * 1024;
+
+			inline LoadResult read(const std::wstring &path)
+			{
+				auto raw = StoreFile::read(path, MaxFileBytes);
+
+				LoadResult out;
+				out.state = raw.state;
+				out.write_time = raw.write_time;
+				if(raw.loaded())
+					out.entries = parse(raw.text);
+				return out;
 			}
 
+			// For callers that genuinely cannot act on the difference - a report,
+			// a listing. Anything that reads in order to write back must use
+			// read() and check usable(), or it will write a fresh list over a
+			// file it failed to read.
+			inline std::vector<Entry> load(const std::wstring &path)
+			{
+				return read(path).entries;
+			}
+
+			/*
+				Written through a temporary and renamed over the target, so the
+				destination is never a truncated or half-written file for another
+				host to read as an empty list. See src/shared/StoreFile.h for the
+				interleaving that made that destructive rather than merely
+				untidy.
+			*/
 			inline bool save(const std::wstring &path, const std::vector<Entry> &entries)
 			{
-				if(path.empty())
-					return false;
-
-				auto cut = path.find_last_of(L"\\/");
-				if(cut != std::wstring::npos)
-				{
-					auto directory = path.substr(0, cut);
-					if(!::CreateDirectoryW(directory.c_str(), nullptr)
-					   && ::GetLastError() == ERROR_PATH_NOT_FOUND)
-					{
-						auto parent = directory.find_last_of(L"\\/");
-						if(parent != std::wstring::npos)
-							::CreateDirectoryW(directory.substr(0, parent).c_str(), nullptr);
-						::CreateDirectoryW(directory.c_str(), nullptr);
-					}
-				}
-
-				auto file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-										  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-				if(file == INVALID_HANDLE_VALUE)
-					return false;
-
-				std::wstring text(1, ByteOrderMark);
-				text += serialize(entries);
-
-				auto bytes = static_cast<DWORD>(text.size() * sizeof(wchar_t));
-				DWORD written = 0;
-				auto ok = ::WriteFile(file, text.data(), bytes, &written, nullptr) && written == bytes;
-				::CloseHandle(file);
-				return ok;
+				return StoreFile::replace(path, serialize(entries));
 			}
 
 			/*

@@ -109,30 +109,82 @@ namespace Nilesoft
 				if(path.empty())
 					return false;
 
-				auto entries = Favorites::load(path);
+				/*
+					The whole transaction under one lock.
+
+					Two threads in one host - two Explorer windows, or a menu and
+					the taskbar - could interleave read-modify-write here and
+					lose one of the two increments. That is the *cheap* version
+					of the race; the expensive one is across processes and is
+					handled by Favorites::save writing through a temporary and
+					renaming (src/shared/StoreFile.h). Nothing arbitrary runs
+					inside this scope - no menu is up, no third-party code is
+					called - so holding it does not violate
+					docs/refactor/08-handoff.md section 4.
+				*/
+				std::lock_guard<std::mutex> lock(_mutex);
+
+				auto loaded = Favorites::read(path);
+
+				// A read that failed is not an empty list. Incrementing from
+				// `{}` and saving writes a one-entry file over the user's whole
+				// history - and Favorites::load used to map every failure,
+				// sharing violations included, to exactly that.
+				if(!loaded.usable())
+					return false;
+
+				auto entries = std::move(loaded.entries);
 				if(!Favorites::record_use(entries, identity))
 					return false;
 
-				auto ok = Favorites::save(path, entries);
+				if(!Favorites::save(path, entries))
+				{
+					/*
+						And a save that failed must not become process state.
 
-				std::lock_guard<std::mutex> lock(_mutex);
-				_entries.swap(entries);
-				_loaded = true;
-				_checked_tick.store(::GetTickCount64(), std::memory_order_relaxed);
-				_stamp = write_time(path);
-				return ok;
+						This swapped the unsaved entries into _entries *and*
+						refreshed _stamp, so refresh_if_stale then saw a
+						timestamp that matched and never re-read. The divergence
+						was sticky rather than transient: this process went on
+						serving a count that is not in the file, indefinitely.
+
+						Leaving both alone means the next refresh_if_stale reads
+						the file and this process agrees with it again.
+					*/
+					return false;
+				}
+
+				// Re-read rather than cache what was just written, so the
+				// content and the stamp come from one handle and describe the
+				// same file - including whatever another host wrote in the
+				// meantime. This is three file operations on a path that runs
+				// from InvokeCommand, after the menu is down and after the
+				// command has been dispatched; nothing waits on it.
+				auto after = Favorites::read(path);
+				if(after.usable())
+					commit_locked(std::move(after.entries), after.write_time);
+
+				return true;
 			}
 
 			void reload()
 			{
 				auto path = current_path();
-				auto entries = Favorites::load(path);
+				auto loaded = Favorites::read(path);
 
 				std::lock_guard<std::mutex> lock(_mutex);
-				_entries.swap(entries);
-				_loaded = true;
-				_checked_tick.store(::GetTickCount64(), std::memory_order_relaxed);
-				_stamp = write_time(path);
+
+				// Missing is a real state and loads as an empty list. Failed is
+				// not: keep whatever is cached and leave _stamp alone, so the
+				// next check tries again rather than believing this.
+				if(!loaded.usable())
+					return;
+
+				// The stamp comes from the same handle as the content, so a
+				// rewrite between the read and the stat cannot leave old
+				// entries cached under a new timestamp - which would freeze
+				// this process on stale data until the *next* write.
+				commit_locked(std::move(loaded.entries), loaded.write_time);
 			}
 
 			void set_path_for_testing(const std::wstring &path)
@@ -160,6 +212,17 @@ namespace Nilesoft
 				return _path_override.empty() ? Favorites::default_path() : _path_override;
 			}
 
+			// Every place that accepts a new list does it here, so "what it
+			// takes to become the cached answer" is one thing to read rather
+			// than three copies to compare. The caller holds _mutex.
+			void commit_locked(std::vector<Favorites::Entry> entries, uint64_t stamp)
+			{
+				_entries.swap(entries);
+				_loaded = true;
+				_checked_tick.store(::GetTickCount64(), std::memory_order_relaxed);
+				_stamp = stamp;
+			}
+
 			static uint64_t write_time(const std::wstring &path)
 			{
 				if(path.empty())
@@ -175,26 +238,36 @@ namespace Nilesoft
 				return value.QuadPart;
 			}
 
+			// One lock scope per function, and nothing but the lock inside it -
+			// the same shape ProviderQuarantineStore now uses, and for the
+			// reason written there: several lock_guard scopes with returns
+			// inside them are correct code that neither the analyzer nor a
+			// reader can follow.
+			bool checked_recently(uint64_t now)
+			{
+				auto last = _checked_tick.load(std::memory_order_relaxed);
+				std::lock_guard<std::mutex> lock(_mutex);
+				return _loaded && (now - last) < CheckIntervalMs;
+			}
+
+			bool unchanged_since(uint64_t now, uint64_t stamp)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				_checked_tick.store(now, std::memory_order_relaxed);
+				return _loaded && stamp == _stamp;
+			}
+
 			void refresh_if_stale()
 			{
 				auto now = ::GetTickCount64();
-				auto last = _checked_tick.load(std::memory_order_relaxed);
+				if(checked_recently(now))
+					return;
 
-				{
-					std::lock_guard<std::mutex> lock(_mutex);
-					if(_loaded && (now - last) < CheckIntervalMs)
-						return;
-				}
-
-				auto path = current_path();
-				auto stamp = write_time(path);
-
-				{
-					std::lock_guard<std::mutex> lock(_mutex);
-					_checked_tick.store(now, std::memory_order_relaxed);
-					if(_loaded && stamp == _stamp)
-						return;
-				}
+				// A cheap "has it moved" probe, deliberately not the coherent
+				// read: reload() takes content and stamp from one handle, and
+				// this only decides whether to call it.
+				if(unchanged_since(now, write_time(current_path())))
+					return;
 
 				reload();
 			}

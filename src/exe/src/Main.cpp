@@ -1464,7 +1464,21 @@ namespace Nilesoft
 					}
 
 					auto path = Nilesoft::Shell::Quarantine::default_path();
-					auto entries = Nilesoft::Shell::Quarantine::load(path);
+
+					// read() rather than load(), because this modifies and writes
+					// back. load() maps every failure to an empty list, so a file
+					// that would not open became "nothing is quarantined" and the
+					// save below wrote a one-entry list over it.
+					auto loaded = Nilesoft::Shell::Quarantine::read(path);
+					if(!loaded.usable())
+					{
+						::MessageBoxW(g_ui.window,
+									  L"Could not read the quarantine list, so it was "
+									  L"not changed.",
+									  L"Nilesoft Shell", MB_OK | MB_ICONERROR);
+						return;
+					}
+					auto entries = std::move(loaded.entries);
 
 					auto at = std::find_if(entries.begin(), entries.end(),
 										   [&row](const Nilesoft::Shell::Quarantine::Entry &e)
@@ -1698,7 +1712,19 @@ static int QuarantineCommand(const string &action, const string &argument)
 		return CONFIG_CHECK_UNUSABLE;
 	}
 
-	auto entries = Nilesoft::Shell::Quarantine::load(path);
+	// read() rather than load(): the add/remove paths below modify this list
+	// and write it back, and load() cannot tell a file that would not open
+	// from an empty one. Refusing is the only safe answer - writing a fresh
+	// list over a file nobody could read destroys it.
+	auto loaded = Nilesoft::Shell::Quarantine::read(path);
+	if(!loaded.usable())
+	{
+		string failed;
+		failed.append_format(L"shell.exe -quarantine: could not read %s", path.c_str());
+		write_console_line(failed.c_str());
+		return CONFIG_CHECK_UNUSABLE;
+	}
+	auto entries = std::move(loaded.entries);
 
 	auto show = [&]()
 	{

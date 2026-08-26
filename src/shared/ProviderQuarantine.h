@@ -61,6 +61,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <StoreFile.h>
 
 namespace Nilesoft
 {
@@ -304,9 +305,11 @@ namespace Nilesoft
 				Read the list.
 
 				A missing file is the normal case and is not a failure - nothing
-				is quarantined until somebody quarantines something - so this
-				answers with an empty list either way and the caller does not
-				have to tell "no file" from "no entries".
+				is quarantined until somebody quarantines something. It is not
+				the same thing as a file that would not open, though, and this
+				used to answer with an empty list either way: "the caller does
+				not have to tell 'no file' from 'no entries'". A caller that
+				writes back does have to, and both of them do.
 
 				The file is UTF-16LE with a byte-order mark, which is what
 				Notepad writes back if a person edits it. A file without the
@@ -316,80 +319,70 @@ namespace Nilesoft
 				FILE_FLAG_OPEN_REPARSE_POINT so a link is opened as itself
 				rather than followed: this path is under the user's own
 				LocalAppData, but a file that steers what Shell does should not
-				be redirectable by something that got there first.
+				be redirectable by something that got there first. That, the
+				share modes and the size cap now live in
+				src/shared/StoreFile.h, shared with favorites.txt.
 			*/
+			// A read that says which of the three things happened. Anything that
+			// reads in order to write back must use this and check usable(), or a
+			// failed read becomes a fresh list written over the user's.
+			// src/shared/StoreFile.h.
+			struct LoadResult
+			{
+				StoreFile::LoadState state{ StoreFile::LoadState::Failed };
+				std::vector<Entry> entries;
+				uint64_t write_time{};
+
+				bool usable() const { return state != StoreFile::LoadState::Failed; }
+				bool loaded() const { return state == StoreFile::LoadState::Loaded; }
+			};
+
+			// A cap, because this is parsed before a menu is built. 256 KB is a
+			// hundred times the largest plausible list.
+			inline constexpr uint64_t MaxFileBytes = 256 * 1024;
+
+			inline LoadResult read(const std::wstring &path)
+			{
+				auto raw = StoreFile::read(path, MaxFileBytes);
+
+				LoadResult out;
+				out.state = raw.state;
+				out.write_time = raw.write_time;
+				if(raw.loaded())
+					out.entries = parse(raw.text);
+				return out;
+			}
+
+			// For a caller that cannot act on the difference - a listing, a
+			// report. Never for one that writes back.
 			inline std::vector<Entry> load(const std::wstring &path)
 			{
-				if(path.empty())
-					return {};
-
-				auto file = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-										  OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-				if(file == INVALID_HANDLE_VALUE)
-					return {};
-
-				std::vector<Entry> entries;
-				LARGE_INTEGER size{};
-				// A cap, because this is parsed before a menu is built. 256 KB
-				// is a hundred times the largest plausible list.
-				if(::GetFileSizeEx(file, &size) && size.QuadPart > 0
-				   && size.QuadPart <= 256 * 1024 && (size.QuadPart % sizeof(wchar_t)) == 0)
-				{
-					std::wstring text(static_cast<size_t>(size.QuadPart / sizeof(wchar_t)), L'\0');
-					DWORD read = 0;
-					if(::ReadFile(file, text.data(), static_cast<DWORD>(size.QuadPart), &read, nullptr)
-					   && read == size.QuadPart)
-					{
-						std::wstring_view view(text);
-						if(!view.empty() && view.front() == ByteOrderMark)
-							view.remove_prefix(1);
-						entries = parse(view);
-					}
-				}
-
-				::CloseHandle(file);
-				return entries;
+				return read(path).entries;
 			}
 
-			// Writes the whole list, creating the directory if it is not there.
-			// Not atomic, and deliberately so: a torn quarantine file loses at
-			// worst one entry and reads as one fewer extension quarantined,
-			// which the user can see in `-quarantine list` and repeat. The
-			// last-known-good shadow gets a MoveFileEx swap because a torn
-			// *config* is the failure it exists to survive; this is not that.
+			/*
+				Written through a temporary and renamed over the target.
+
+				This used to say the non-atomic write was deliberate: "a torn
+				quarantine file loses at worst one entry ... the last-known-good
+				shadow gets a MoveFileEx swap because a torn *config* is the
+				failure it exists to survive; this is not that."
+
+				That reasoning is sound about a torn write and it addresses the
+				wrong risk. CREATE_ALWAYS truncates first and writes after, so
+				the destination is a zero-length file for the duration - and
+				load() mapped every failed read to an empty list, so another
+				host reading during that window did not observe a torn file, it
+				observed an empty one, and then wrote its own single entry over
+				the top. The swap is not about tearing. It is about the
+				destination never being observable in a state it was never in.
+				src/shared/StoreFile.h.
+			*/
 			inline bool save(const std::wstring &path, const std::vector<Entry> &entries)
 			{
-				if(path.empty())
-					return false;
-
-				auto cut = path.find_last_of(L"\\/");
-				if(cut != std::wstring::npos)
-				{
-					auto directory = path.substr(0, cut);
-					if(!::CreateDirectoryW(directory.c_str(), nullptr)
-					   && ::GetLastError() == ERROR_PATH_NOT_FOUND)
-					{
-						auto parent = directory.find_last_of(L"\\/");
-						if(parent != std::wstring::npos)
-							::CreateDirectoryW(directory.substr(0, parent).c_str(), nullptr);
-						::CreateDirectoryW(directory.c_str(), nullptr);
-					}
-				}
-
-				auto file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-										  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-				if(file == INVALID_HANDLE_VALUE)
-					return false;
-
-				std::wstring text(1, ByteOrderMark);
-				text += serialize(entries);
-
-				auto bytes = static_cast<DWORD>(text.size() * sizeof(wchar_t));
-				DWORD written = 0;
-				auto ok = ::WriteFile(file, text.data(), bytes, &written, nullptr) && written == bytes;
-				::CloseHandle(file);
-				return ok;
+				return StoreFile::replace(path, serialize(entries));
 			}
+
 		}
 	}
 }

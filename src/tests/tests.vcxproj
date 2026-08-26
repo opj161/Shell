@@ -101,6 +101,9 @@
 	<ClInclude Include="..\dll\src\Expression\SelectionPathResolver.h" />
 	<ClInclude Include="..\shared\LegacyConfigTransfer.h" />
 	<ClInclude Include="..\shared\ConfigShadow.h" />
+    <ClInclude Include="..\shared\StoreFile.h" />
+    <ClInclude Include="..\dll\src\Include\FavoritesStore.h" />
+    <ClInclude Include="..\dll\src\Include\ProviderQuarantineStore.h" />
     <ClInclude Include="hostprobe\Arguments.h" />
     <ClInclude Include="..\shared\DetourEnlistment.h" />
     <ClInclude Include="..\dll\src\Include\ProviderSchedule.h" />
@@ -161,6 +164,7 @@
     <ClCompile Include="test_config_watcher.cpp" />
     <ClCompile Include="test_package_catalog.cpp" />
     <ClCompile Include="test_packages_cache.cpp" />
+    <ClCompile Include="test_store_files.cpp" />
     <ClCompile Include="test_config_shadow.cpp" />
     <ClCompile Include="test_host_contract.cpp" />
     <ClCompile Include="test_diagnostics_ring.cpp" />
