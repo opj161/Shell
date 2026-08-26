@@ -26,12 +26,20 @@ $root = Split-Path -Parent $PSScriptRoot
 # level, which silently skipped src\dll\src\*.h and src\dll\src\Include\*\*.h.
 function Get-Sources
 {
-    param([string]$Dir, [string[]]$Include)
+    # A list of roots rather than one, because rule 11 has to cover both the
+    # DLL and the harness: the trap it bans was live in src\tests\hostprobe
+    # while production was already clean. A single string still binds - a rule
+    # that names one directory does not have to say so twice.
+    param([string[]]$Dir, [string[]]$Include)
 
-    $full = Join-Path $root $Dir
-    if(-not (Test-Path $full)) { return @() }
-
-    Get-ChildItem -LiteralPath $full -Recurse -File -Include $Include -ErrorAction SilentlyContinue
+    $out = @()
+    foreach($one in $Dir)
+    {
+        $full = Join-Path $root $one
+        if(-not (Test-Path $full)) { continue }
+        $out += Get-ChildItem -LiteralPath $full -Recurse -File -Include $Include -ErrorAction SilentlyContinue
+    }
+    return $out
 }
 
 # Returns the file with /* */ and // comments blanked out, so a rule matches
@@ -108,12 +116,29 @@ $rules = @(
     # Reading the borrowed root's style is required (docs/refactor/09 R2): a host
     # that set MNS_NOTIFYBYPOS is owed WM_MENUCOMMAND, and Shell cannot know it is
     # owed without asking. What must never happen is Shell *applying* the style to
-    # the menu it composed and tracks itself. So the ban moved from the token to
-    # the operation: SetMenuInfo carrying it, or the style being OR-ed into a
-    # dwStyle that is about to be set.
+    # the menu it composed and tracks itself. So the ban is on the operation, not
+    # on the token.
+    #
+    # Two things this used to miss, both found by asking what the tree actually
+    # writes rather than what a violation would look like in the abstract.
+    #
+    # This codebase never calls SetMenuInfo directly. It calls MENU::set
+    # (src\dll\src\Include\MenuItem.h), which is also how the required *read* is
+    # written - MENU::get in ContextMenu.cpp. So only the dwStyle alternative could
+    # ever have caught a real violation, and R2's own 'prove the gate' step planted
+    # a SetMenuInfo shape: the one alternative this tree would never produce.
+    #
+    # And MNS_NOTIFYBYPOS is 0x08000000. A rule that only knows the symbolic name
+    # is defeated by writing the number.
+    #
+    # Still defeated by an intermediate variable - `auto style = MNS_NOTIFYBYPOS;`
+    # then assigning that - and that is a real limit of a lexical gate rather than
+    # an oversight. The harness scenario
+    # takeover.a_by_position_host_is_told_which_position is what would catch it
+    # behaviourally.
     @{ Name  = "Shell's composed menu must not be given MNS_NOTIFYBYPOS (docs/refactor/01 section 3a)"
        Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
-       Regex = 'SetMenuInfo\s*\([^;]*MNS_NOTIFYBYPOS|dwStyle\s*(\|)?=\s*[^;]*MNS_NOTIFYBYPOS'
+       Regex = '(SetMenuInfo|MENU::set)\s*\([^;]*(MNS_NOTIFYBYPOS|0x0?8000000)|dwStyle\s*(\|)?=\s*[^;]*(MNS_NOTIFYBYPOS|0x0?8000000)'
        Why   = 'measured: with TPM_RETURNCMD a by-position menu returns 1 and sends no WM_MENUCOMMAND, so the selection is lost - see src\tests\hostprobe\fixtures\question.notifybypos_with_returncmd.trace. Reading the style off the host''s own menu with GetMenuInfo(MIM_STYLE) is required and is not this.' },
 
     @{ Name  = 'SystemParametersInfo on the menu path must not broadcast (docs/refactor/02 section 4a)'
@@ -125,6 +150,26 @@ $rules = @(
        Dir   = 'src\dll\src'; Include = @('*.cpp', '*.h')
        Regex = 'GetState\s*\([^)]*,\s*TRUE\s*,'
        Why   = 'fOkToBeSlow TRUE lets a verb handler stall the menu thread without bound' }
+,
+
+    # The third member of the 'silent wrong answer' family AGENTS.md names, and
+    # the only one that had no gate. release(n - 1) has one and the MB_*/WC_*
+    # flags have one; this did not, and the trap came back in new harness code
+    # after the project had already solved it twice.
+    #
+    # GetMenuItemInfo truncates to whatever cch it was given and reports success,
+    # so a fixed buffer does not fail, it lies. The documented pattern is two
+    # calls: dwTypeData null to learn cch, then a buffer of cch + 1.
+    # https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuiteminfow
+    #
+    # Keyed on cch being sized from a compile-time array rather than from what
+    # Windows just reported. The correct pattern always writes cch from the
+    # query's own cch, which no ARRAYSIZE/_countof/std::size/sizeof expression
+    # can produce.
+    @{ Name  = 'Menu item text must use the documented two-call GetMenuItemInfo (AGENTS.md)'
+       Dir   = @('src\dll\src', 'src\tests\hostprobe'); Include = @('*.cpp', '*.h')
+       Regex = '\bcch\s*=\s*(ARRAYSIZE|_countof|std::size|sizeof)\b'
+       Why   = 'GetMenuItemInfo truncates silently to the cch it was given; a fixed buffer loses everything past it and still returns TRUE. Third-party extension titles cross 260 characters routinely. Ask with dwTypeData = nullptr first, then read into cch + 1 - Include/MenuText.h in the DLL, hostprobe/Probe.h and hostprobe/MenuReader.h in the harness.' }
 )
 
 # Enable each of these as its phase lands; see docs/refactor/06 and 07.

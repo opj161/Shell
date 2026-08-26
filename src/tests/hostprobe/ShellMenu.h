@@ -202,23 +202,46 @@ namespace hostprobe
 		// Where an identifier-driven script's destination sits.
 		UINT drivable_position() const { return _drivable_position; }
 
-		// What the host's own menu says at `position`, so a replayed position
-		// can be checked against the item it claims to name rather than only
-		// against a number. Empty when there is nothing there.
+		/*
+			What the host's own menu says at `position`, so a replayed position
+			can be checked against the item it claims to name rather than only
+			against a number. Empty when there is nothing there.
+
+			The documented two-call pattern: ask with dwTypeData null to learn
+			cch, then read into cch + 1.
+			https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuiteminfow
+
+			This read into wchar_t[256] with a literal cch, which is the exact
+			trap AGENTS.md names and the project had already solved twice -
+			Probe.h and MenuReader.h both spell out this pattern, and the DLL has
+			Include/MenuText.h. It came back in new harness code anyway, which is
+			why invariant rule 11 now exists.
+
+			The effect was a weakened assertion rather than a visible failure,
+			which is worse: both expected_title and replayed_title truncate the
+			same way, so two different long titles sharing a 255-character prefix
+			compared equal. And this reads the *host's* real shell menu, which is
+			where long third-party titles come from.
+		*/
 		std::wstring title_at(UINT position) const
 		{
 			if(!_menu || position >= static_cast<UINT>(::GetMenuItemCount(_menu)))
 				return {};
 
-			wchar_t buffer[256]{};
-			MENUITEMINFOW mii{};
-			mii.cbSize = sizeof(mii);
-			mii.fMask = MIIM_STRING;
-			mii.dwTypeData = buffer;
-			mii.cch = ARRAYSIZE(buffer) - 1;
-			if(!::GetMenuItemInfoW(_menu, position, TRUE, &mii))
+			MENUITEMINFOW query{};
+			query.cbSize = sizeof(query);
+			query.fMask = MIIM_STRING;
+			query.dwTypeData = nullptr;
+			if(!::GetMenuItemInfoW(_menu, position, TRUE, &query) || query.cch == 0)
 				return {};
-			return buffer;
+
+			std::wstring buffer(static_cast<size_t>(query.cch) + 1, L'\0');
+			query.dwTypeData = buffer.data();
+			query.cch = query.cch + 1;
+			if(!::GetMenuItemInfoW(_menu, position, TRUE, &query))
+				return {};
+
+			return std::wstring(buffer.c_str());
 		}
 
 		void destroy()
