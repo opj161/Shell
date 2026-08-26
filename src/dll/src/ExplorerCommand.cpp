@@ -598,33 +598,6 @@ namespace Nilesoft
 
 			uint32_t refused_for_budget = 0;
 
-			// Passed over before the menu even started. Charged here, once, for
-			// the providers that really were passed over - and not for the ones
-			// the planner merely looked at.
-			//
-			// Two reasons reach this list now, and they are charged
-			// differently. Slow moves the provider one menu closer to a
-			// REPROBE_AFTER re-probe. Budget means the planner refused to
-			// schedule a Known step whose prediction no menu could satisfy; that
-			// is the same refusal the resolution loop below would have made, so
-			// it is charged the same way and counts the same way, and the
-			// provider accrues toward a forced turn instead of toward nothing.
-			for(const auto &skipped : plan.deferred)
-			{
-				if(skipped.why == ProviderDeferral::Budget)
-				{
-					health.note_budget_deferral(skipped.hash, shape);
-					Diagnostics::session_provider(skipped.hash, 0,
-												  Diagnostics::ProviderResult::DeferredBudget);
-					refused_for_budget++;
-					continue;
-				}
-
-				health.note_slow_deferral(skipped.hash, shape);
-				Diagnostics::session_provider(skipped.hash, 0,
-											  Diagnostics::ProviderResult::DeferredSlow);
-			}
-
 			for(const auto &step : plan.order)
 			{
 				// A prediction is checked against what is actually left, not
@@ -675,6 +648,41 @@ namespace Nilesoft
 				auto filled = fill_menuitem_from_explorer_command(item.get(), cmd, selection,
 																  &state_pending);
 
+				/*
+					Read here, before the cost is taken, and that is the whole
+					of W3.
+
+					GetCanonicalName is an IExplorerCommand method like the ones
+					fill_menuitem_from_explorer_command just made, answered by
+					the same third-party handler on the same thread, and made
+					before this provider's item is published - so there is no
+					basis for treating it as outside the provider's cost. The
+					interface's own remark covers it with the rest: "None of the
+					methods of this interface should communicate with network
+					resources. These methods are called on the UI thread".
+					https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand
+
+					It used to sit after health.record and session_provider, so
+					every provider's remembered cost and every reported cost
+					excluded it. The whole-menu ProviderBudget charged it either
+					way, which is what made the gap visible rather than free:
+					section 09 §2.1 reads the difference between the 36.6 ms
+					explorer.commands phase and the ~35 ms of per-provider
+					records as "Shell's own pre-paint work is ~1.1 ms ... the
+					phase is honestly attributed". Part of that gap was this.
+
+					Only on the Shown path, because that is the only path that
+					publishes an item and therefore the only one that used to
+					make the call. The out-parameter is valid only when the
+					method succeeds.
+					https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getcanonicalname
+				*/
+				if(filled == FillResult::Shown)
+				{
+					if(FAILED(cmd->GetCanonicalName(&slot.canonical)))
+						slot.canonical = GUID_NULL;
+				}
+
 				auto cost = budget.spent_us() - spent_before;
 				health.record(step.hash, shape, cost, filled != FillResult::Failed);
 				Diagnostics::session_provider(step.hash, cost,
@@ -705,14 +713,58 @@ namespace Nilesoft
 					continue;
 				}
 
-				// Read here, while the object is in hand, and kept for the
-				// publishing pass. Out-parameter is valid only when the method
-				// succeeds.
-				// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getcanonicalname
-				if(FAILED(cmd->GetCanonicalName(&slot.canonical)))
-					slot.canonical = GUID_NULL;
-
+				// slot.canonical was read above, inside the measured cost.
 				slot.item = std::move(item);
+			}
+
+			/*
+				And only now the ones that were passed over before the menu
+				started.
+
+				This ran before the resolution loop, which decided which
+				providers survive the telemetry caps. MAX_PROVIDERS and
+				PERF_EXPORT_PROVIDERS are both 32; this machine has 55 distinct
+				packaged context-menu CLSIDs, measured by walking every installed
+				package's AppxManifest.xml, and section 09 R7.5 puts a file menu
+				at 37. The cap bites here routinely.
+
+				Writing the whole deferral batch first guaranteed a slot to every
+				stable-verdict deferral - the records that say the least, because
+				a provider deferred for being slow is deferred for the same
+				reason on every menu - and evicted the tail of the resolution
+				order, which is the most expensive known providers, the unsampled
+				ones and the re-probes. Exactly what a person reads the report to
+				find.
+
+				Outcomes claim their slots first now. The deferral records are
+				unchanged in content and in count; only the order in which they
+				are offered to a fixed-size array has moved.
+			*/
+			// Passed over before the menu even started. Charged here, once, for
+			// the providers that really were passed over - and not for the ones
+			// the planner merely looked at.
+			//
+			// Two reasons reach this list now, and they are charged
+			// differently. Slow moves the provider one menu closer to a
+			// REPROBE_AFTER re-probe. Budget means the planner refused to
+			// schedule a Known step whose prediction no menu could satisfy; that
+			// is the same refusal the resolution loop below would have made, so
+			// it is charged the same way and counts the same way, and the
+			// provider accrues toward a forced turn instead of toward nothing.
+			for(const auto &skipped : plan.deferred)
+			{
+				if(skipped.why == ProviderDeferral::Budget)
+				{
+					health.note_budget_deferral(skipped.hash, shape);
+					Diagnostics::session_provider(skipped.hash, 0,
+												  Diagnostics::ProviderResult::DeferredBudget);
+					refused_for_budget++;
+					continue;
+				}
+
+				health.note_slow_deferral(skipped.hash, shape);
+				Diagnostics::session_provider(skipped.hash, 0,
+											  Diagnostics::ProviderResult::DeferredSlow);
 			}
 
 			/*

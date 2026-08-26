@@ -293,6 +293,21 @@ Three things follow, and none of them is a regression in Shell's own code:
    records sum to ≈35 ms of that — so the phase is honestly attributed. This is
    the number that misses [§06.4](06-phases-and-tests.md)'s *"pre-display added
    by Shell ≤ 15 ms p95"*.
+
+   **Two corrections to this reading, both from the closure pass.** The ~1.6 ms
+   gap between the phase and the records was not all Shell's own work:
+   `GetCanonicalName` was called on the shown path *after* each provider's cost
+   had been taken, so every provider's record excluded it while the whole-menu
+   phase charged it. W3 moves it inside the measured span, which makes "the
+   phase is honestly attributed" mean what it says.
+
+   And the provider list quoted above was read from a **truncating** record
+   set. `MAX_PROVIDERS` and `PERF_EXPORT_PROVIDERS` are both 32 against 37
+   handlers in this menu — and 55 distinct packaged context-menu CLSIDs on
+   this machine, counted 2026-08-26 — so the records were a sample, not a
+   census, and which providers survived it was decided by write order. W5
+   fixes that order; `dropped_providers` is the field that says when it
+   bit.
 3. **The policy is designed not to intervene here.**
    [ProviderHealth.h:142](../../src/dll/src/Include/ProviderHealth.h#L142):
    *"`MENU_BUDGET_US` is set just above the measured steady-state total with

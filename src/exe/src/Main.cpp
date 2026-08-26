@@ -1165,9 +1165,25 @@ static int BuildPerfReport(bool detailed, string &out)
 				9 ms with no hint that nineteen were missing. It read as an
 				explained menu when it was a 30%-visible one.
 
-				The caps were raised at the same time, so this should now be
-				rare - but a silent cap is what made it invisible, not the cap
-				itself, and the same mistake next time deserves to be loud.
+				The caps were raised at the same time - and "this should now be
+				rare" was optimistic. MAX_PROVIDERS and PERF_EXPORT_PROVIDERS
+				are both 32; this machine has **55** distinct packaged
+				context-menu CLSIDs, counted by walking every installed
+				package's AppxManifest.xml on 2026-08-26, and section 09 R7.5
+				puts a file menu at 37. So expect this line, and read a report
+				that carries it as a partial account rather than a complete one.
+
+				Which records survive the cap is a separate decision, and it was
+				wrong until W5: the whole deferral batch was written before any
+				provider was called, so stable-verdict deferrals - the records
+				that say the least - were guaranteed slots and the tail of the
+				resolution order was evicted, which is the expensive providers,
+				the unsampled ones and the re-probes. Outcomes claim slots
+				first now. See ExplorerCommand.cpp.
+
+				A silent cap is what made this invisible in the first place, not
+				the cap itself, and the same mistake next time deserves to be
+				loud.
 			*/
 			if(record.dropped_providers)
 			{
