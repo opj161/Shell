@@ -71,7 +71,7 @@ then independently reproduced/extended where noted:
 | `.\build.ps1 -Platform arm64` | builds and packages, 0 warnings (tests skipped — host is x64) |
 | `check-invariants.ps1` after the multi-platform build | **OK (10 rules, 0 deferred)** |
 | `hostprobe.exe --verify src\tests\hostprobe\fixtures` | **23 scenarios, 0 failures** (9 skipped — need `--takeover`) |
-| per-user COM override + `hostprobe.exe --takeover --verify src\tests\hostprobe\fixtures` | **32 scenarios, 0 failures**, with the `takeover:` line naming this HEAD's `src\bin\x64\shell.dll` |
+| per-user COM override + `hostprobe.exe --takeover --verify src\tests\hostprobe\fixtures` | **`kTakeoverScenarios` scenarios, 0 failures** (32 when audited; 33 since W6.3), with the `takeover:` line naming the `src\bin\x64\shell.dll` under test |
 | `shell.exe -report perf` against the live `explorer.exe` | 70 menus, 16 held — see §2.1 |
 | `-check`, `-quarantine:list`, `-favorites:list` | all behave as documented, including the `app.dir` 9-vs-10-files nuance of [§03.1b](03-config-safety.md) |
 | `validate-msi-lifecycle.ps1` over x64/x86/ARM64 | **all three OK**; emitted Component, Registry, CustomAction, RemoveFile and sequence invariants hold |
@@ -86,13 +86,25 @@ not be a reproducible statement.
 mandatory directory argument. Running the abbreviated commands previously shown
 in this table produces **`0 scenario(s), 0 failure(s)`** and exits 0. The claimed
 23/31 counts therefore did not come from the commands as recorded — and were
-also the wrong numbers: the table above is corrected to the measured **23/32**
-(9 skipped natively, not 8). The rerun used the full invocation and verified
+also the wrong numbers: the harness was 23/32 at that point (9 skipped
+natively, not 8), and the table above now names the constants instead of a
+number. The rerun used the full invocation and verified
 that the loaded DLL was this HEAD. R0 makes that class of false green
 impossible, and W6.2 makes the counts themselves enforced rather than merely
 recorded: they now live in `src/tests/hostprobe/Scenarios.h` as
 `kNativeScenarios` and `kTakeoverScenarios`, and an unfiltered run that does
 not hit them exits 120.
+
+> **The counts moved again, and this is the last time this document repeats
+> them.** W6.3 added `takeover.a_nested_by_position_selection_names_its_submenu`,
+> so the table is **23 native / 33 takeover**, with **10** skipped natively.
+> Every number in this file that named a cardinality has been replaced by a
+> reference to `kNativeScenarios` / `kTakeoverScenarios`
+> ([`Scenarios.h`](../../src/tests/hostprobe/Scenarios.h)), because a count
+> written into prose drifts away from the thing it counts and the drift is
+> invisible precisely because the run still passes — which is exactly what
+> happened here twice: 23/31 recorded against a 23/32 harness, then 23/32
+> recorded against a 23/33 one, by the very commit that added the scenario.
 
 **So the ordinary build and behavioral suites are green, but the QA surface is
 not itself green yet.** Everything below is a gap between what the documents
@@ -397,10 +409,13 @@ shell-namespace scenarios are required, use the per-user COM override recipe in
 [§08.3.7](08-handoff.md); `--shell` alone cannot redirect those activations.
 
 **Acceptance:** both malformed invocations used in the independent pass fail;
-the canonical commands run exactly 23/32 scenarios — 23 native with 9 skipped,
-32 through takeover — and the harness asserts that itself rather than leaving
-it to a reader (W6.2); a deliberately mismatched fixture still identifies its
-scenario and fails.
+the canonical commands run exactly the counts declared by `kNativeScenarios`
+and `kTakeoverScenarios` in
+[`Scenarios.h`](../../src/tests/hostprobe/Scenarios.h) — natively, that many
+scenarios with the remainder skipped; through takeover, the whole table — and
+the harness asserts that itself, exiting 120 when an unfiltered run misses,
+rather than leaving it to a reader (W6.2); a deliberately mismatched fixture
+still identifies its scenario and fails.
 
 ---
 
@@ -1041,8 +1056,8 @@ nobody.*
    numbers were taken against 22–25 providers; this machine now has 37 in a file
    menu, and the difference is the whole of finding B.
 6. **Fix the harness recipes and add cardinality to the gate.** Every command
-   must include the fixture directory, and the expected 23/32 counts are part of
-   acceptance. Record that `--shell` cannot redirect shell-namespace COM
+   must include the fixture directory, and the expected counts are part of
+   acceptance — as the `Scenarios.h` constants, not as a number copied here. Record that `--shell` cannot redirect shell-namespace COM
    scenarios without the per-user override. R0 fixes the executable.
 7. **Correct the invariant-script descriptions.** [§06.3](06-phases-and-tests.md)
    says `check-invariants.ps1` strips string literals; the script explicitly

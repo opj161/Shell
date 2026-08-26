@@ -351,3 +351,32 @@ waits. Those trade directly against the flakiness above, so they are left alone.
 What *was* removed is work no scenario asserts on: three of the four `render.*`
 cases used to open a submenu that only the fourth reads. The suite is now
 slightly faster than before the settle was added.
+
+## What the traces cannot show
+
+A fixture records the messages a scenario observed, in order. It cannot record
+whether a message was **sent** or **posted**, and it never could: `Probe::track`
+drains its own queue before the summary is printed (`hostprobe/Probe.h`), so a
+message Windows posted and one it sent leave byte-identical fixtures.
+
+That matters because `Include/HostContract.h` used to cite these traces as
+evidence that Windows posts `WM_COMMAND` and `WM_MENUCOMMAND` rather than
+sending them - a claim no file in this directory can support. The conclusion was
+right and the citation was not.
+
+It is settled by a direct probe instead. The distinction is observable without a
+harness: a sent message is delivered by the window procedure being called from
+inside `TrackPopupMenu`, a posted one waits until the caller pumps afterwards.
+Windows 11 26200 x64, MSVC 14.44.35207, three runs:
+
+| | during the tracking call | after it returned |
+| --- | --- | --- |
+| `WM_COMMAND` | 0 | 1 |
+| `WM_MENUCOMMAND` (`MNS_NOTIFYBYPOS`) | 0 | 1 |
+
+`IsMenu(lParam)` was true at delivery in every run, so the handle the
+by-position notification carries is still valid by the time a posted message
+arrives.
+
+If a future change needs to know send-versus-post again, re-run that probe.
+Do not add a scenario for it - the harness would answer confidently and wrongly.

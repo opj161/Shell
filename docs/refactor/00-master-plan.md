@@ -201,6 +201,35 @@ as one here rather than as an implementation.
 
 **Strict count: 15 implemented, 5 resolved differently, 0 partial, 0 untouched.**
 
+**Where that differs from §09 R7.1, which specified 11 / 5 / 4.** Four of the
+partials closed; the honest accounting is that they did not all close the same
+way, and a tally that does not say which is a tally a reader cannot check.
+
+- **Closed by code** — items **2**, **5** and **17**. §09 R3 gave item 2 the
+  async catalog and moved package identity and path queries onto the published
+  snapshot; §09 R2 gave item 5 the by-position replay; item 17 got the presenter
+  split and the named boundary. These are implementations, and they count as
+  implementations.
+- **Closed by reclassification** — items **9** and **11**, and this is the part
+  worth stating rather than absorbing into a number:
+  - **9** moved from *partial* to *resolved differently*. Conditional attach was
+    declined outright, and what exists instead is enlistment safety — a
+    different thing that answers the same risk. Nothing that was deferred was
+    later built; the item was re-described to match what was decided. §09 R7
+    counted it as a partial because half of the original wording was
+    unimplemented, which is true and is why it is not counted as *implemented*
+    here either.
+  - **11** moved from *partial* to *implemented* on the argument that the
+    remainder was a documentation gap, not a code gap: the two transient SPI
+    mutations were always retained deliberately, and what was missing was that
+    nobody had written down which two. §4 now enumerates them. If a reader
+    thinks "the mutations are still there" should keep this a partial, the
+    disagreement is with that argument and not with the count.
+
+`08-handoff.md` §1 rule 6 exists because a tally maintained by hand drifts from
+what it counts; a reclassification is the quietest way for that to happen, which
+is why both are named here rather than folded into the total.
+
 The two governing rules of §1 fared differently and it is worth saying so.
 **R1 held; R1a was weakened deliberately and is now stated as what it is.** R1
 drove the largest wins — the unbounded third-party call before first paint

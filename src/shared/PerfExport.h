@@ -743,17 +743,6 @@ namespace Nilesoft
 			}
 
 			/*
-				Diagnostics::ProviderResult, as the word a report prints.
-
-				The numbers are the wire format, so they are listed here rather
-				than derived: 3 and 5 are two different deferrals and must not be
-				printed with one word. "this extension is slow" asks the user to
-				quarantine it; "your menu ran out of budget before reaching it"
-				asks for a larger budget or fewer handlers, and quarantining the
-				provider would punish it for something it did not do.
-				docs/refactor/09-remediation-plan.md finding D.
-			*/
-			/*
 				Whether a block this reader has mapped is one it understands.
 
 				Exact match on all three, deliberately. The version is not a
@@ -773,6 +762,17 @@ namespace Nilesoft
 					&& header.record_size == sizeof(PerfExportRecord);
 			}
 
+			/*
+				Diagnostics::ProviderResult, as the word a report prints.
+
+				The numbers are the wire format, so they are listed here rather
+				than derived: 3 and 5 are two different deferrals and must not be
+				printed with one word. "this extension is slow" asks the user to
+				quarantine it; "your menu ran out of budget before reaching it"
+				asks for a larger budget or fewer handlers, and quarantining the
+				provider would punish it for something it did not do.
+				docs/refactor/09-remediation-plan.md finding D.
+			*/
 			inline const wchar_t *perf_export_result_name(uint32_t result)
 			{
 				switch(result)

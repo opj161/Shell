@@ -530,12 +530,38 @@ plutovg_move_to(pluto, start.x, start.y);
 				static constexpr auto start_native = 0x60000000;
 				static constexpr auto end_native = 0x6fffffff;
 
-				uint32_t sys = start_sys;
+				/*
+					The two ranges have to stay apart, and until now nothing
+					said so.
+
+					`get_sys()` used to sit here handing out `sys++` from
+					`start_sys` - which is 0x5fffffff, one below start_native.
+					Its *first* call was the last identifier below the native
+					range and its second was 0x60000000, inside it. Nothing
+					called it, so nothing had gone wrong yet; a second caller
+					would have made a Shell system identifier indistinguishable
+					from a mirrored host item's tracking identifier, and
+					complete_host_contract would have mapped it to a position in
+					a menu it never came from.
+
+					docs/refactor/12-closure-plan.md W10.6 asked for the dead
+					helper to go or for the disjointness to be asserted. Both:
+					`get_sys()` and `is_native_tracking()` are gone (neither had
+					a caller anywhere in the tree), and the assertion is what
+					makes the range boundary survive the next person who needs a
+					system identifier.
+				*/
+				static_assert(start_id < start_sys,
+							  "equals() reads [start_id, start_sys) as Shell's own");
+				static_assert(start_sys < start_native,
+							  "a system identifier must never land in the native "
+							  "tracking range");
+				static_assert(start_native < end_native, "empty native range");
+
 				uint32_t id = start_id;
 				uint32_t native = start_native;
 
 				uint32_t get_id() { return id++; }
-				uint32_t get_sys() { return sys++; }
 
 				// Zero when the range is exhausted, which no real menu reaches;
 				// the caller then leaves the host's own identifier in place.
@@ -547,11 +573,6 @@ plutovg_move_to(pluto, start.x, start.y);
 				bool equals(uint32_t ident) const
 				{
 					return(ident >= start_id && ident < start_sys);
-				}
-
-				bool is_native_tracking(uint32_t ident) const
-				{
-					return ident >= start_native && ident < end_native;
 				}
 
 			} ident;

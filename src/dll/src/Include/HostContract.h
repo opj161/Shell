@@ -39,13 +39,30 @@
 	the host as a side effect of fixing the invocation, with no second flag and
 	no host-class opt-in. What the host loses by it, Shell posts back.
 
-	Posted, not sent, and that is also measured. "The window does not receive a
-	WM_COMMAND message from the menu until the function returns" was read in the
-	plan as placing delivery before the return; it says the opposite, and the
-	traces show Windows posting both WM_COMMAND and WM_MENUCOMMAND after
-	WM_EXITMENULOOP. Sending synchronously from inside the hook would put the
-	notification in front of the host's own tracking call returning, which is a
-	sequence untouched Windows never produces.
+	Posted, not sent. "The window does not receive a WM_COMMAND message from the
+	menu until the function returns" was read in the plan as placing delivery
+	before the return; it says the opposite. Sending synchronously from inside
+	the hook would put the notification in front of the host's own tracking call
+	returning, which is a sequence untouched Windows never produces.
+
+	This used to claim the trace harness measured that, and the harness cannot:
+	Probe::track drains its own queue (src/tests/hostprobe/Probe.h) before the
+	summary is printed, so a posted message and a sent one leave identical
+	fixtures. See fixtures/README.md. It was settled instead by a direct probe,
+	which records whether the window procedure ran *inside* TrackPopupMenu or
+	only once the caller pumped its queue afterwards - Windows 11 26200 x64,
+	MSVC 14.44.35207, three runs:
+
+	    WM_COMMAND                       during-track 0   after-return 1
+	    WM_MENUCOMMAND (MNS_NOTIFYBYPOS) during-track 0   after-return 1
+	                                     IsMenu(lParam) true at delivery
+
+	So both are posted, and the handle-carrying one is posted too - despite its
+	page opening with "Sent when the user invokes a command from a menu"
+	(https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand).
+	Shell's PostMessageW is what untouched Windows does. Do not "fix" it to a
+	send on the strength of that sentence; this is the measurement that says
+	otherwise.
 
 	Everything here is pure arithmetic over flags, so it is tested directly:
 	src/tests/test_host_contract.cpp.
