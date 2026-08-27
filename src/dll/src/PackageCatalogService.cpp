@@ -63,10 +63,11 @@ namespace Nilesoft
 			The packaged-verb registrations and the package identities come out
 			of the same enumeration, and always did: this loop already asked
 			GetPackagePathByFullName for every package before reading its
-			manifest, and then threw the path away. PackageIndex went on to
+			manifest, and then threw the path away. A second index went on to
 			enumerate the same registry again, on the menu thread, to answer
 			package.exists() - which the *stock* configuration asks on every
-			single menu (src/bin/imports/terminal.nss line 8).
+			single menu (src/bin/imports/terminal.nss line 8). That index is
+			gone; this is the only walk left.
 
 			Publishing both from here is what makes that read instead of a scan.
 			docs/refactor/09-remediation-plan.md R3.

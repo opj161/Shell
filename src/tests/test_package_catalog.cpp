@@ -215,9 +215,10 @@ TEST(package_catalog, concurrent_callers_start_exactly_one_scan)
 //
 // The scan already enumerated every installed package and resolved every
 // install path in the course of finding packaged verbs, and then threw both
-// away - so PackageIndex enumerated the same registry again, on the menu
+// away - so a second index enumerated the same registry again, on the menu
 // thread, to answer package.exists(). Publishing them together is what turns
-// that scan into a read. docs/refactor/09-remediation-plan.md R3.
+// that scan into a read, and is why that index could then be deleted.
+// docs/refactor/09-remediation-plan.md R3.
 
 namespace
 {

@@ -122,7 +122,7 @@ Each of these was re-checked at this HEAD and is correct as stated.
 | # | External claim | Verified at |
 |---|---|---|
 | E-1 | `Cache.h` still owns `PackagesCache Packages`, and `clear()` clears it | [Cache.h:251](../../src/dll/src/Include/Cache.h#L251), [Cache.h:312](../../src/dll/src/Include/Cache.h#L312) |
-| E-2 | `PackageIndex::ensure_index()` can synchronously enumerate | [Packages.h:174](../../src/dll/src/Include/Packages.h#L174), [Packages.cpp](../../src/dll/src/Packages.cpp) `ensure_index` |
+| E-2 | `PackageIndex::ensure_index()` can synchronously enumerate | [Packages.h:174](../../src/dll/src/Include/Packages.h#L174), [Packages.cpp](../../src/dll/src/Packages.cpp) `ensure_index` — true at that HEAD; `PackageIndex` has since been deleted (D-01), so both anchors are past end-of-file |
 | E-3 | `FuncExpression.cpp` still reaches `cache->Packages` | [FuncExpression.cpp:231](../../src/dll/src/Expression/FuncExpression.cpp#L231) |
 | E-4 | Provider `GetState`/`GetTitle`/`GetFlags`/`GetIcon` remain synchronous on the menu thread | [ExplorerCommand.cpp:157](../../src/dll/src/ExplorerCommand.cpp#L157) onward |
 | E-5 | CoCI detour still attaches on `if(rt.loader.explorer)`, no `TakeoverRouter` | [Main.cpp:1819](../../src/dll/src/Main.cpp#L1819) |

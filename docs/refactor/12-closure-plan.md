@@ -102,7 +102,9 @@ So the codebase wrote the policy down, built the primitive, tested the primitive
 and did not wire it up. The TTL that then holds the empty snapshot is
 `DefaultTtlMs = 5 * 60 * 1000` — **ten times the 30 s the `PackageIndex` it
 replaced used**, and `PackageIndex` additionally retried immediately on failure
-([`Packages.cpp:387`](../../src/dll/src/Packages.cpp#L387)).
+([`Packages.cpp:387`](../../src/dll/src/Packages.cpp#L387) — true at that HEAD;
+`PackageIndex` has since been deleted (D-01), so the anchor is past end-of-file
+and the git history of that file is now the record).
 
 **F7 — strengthened: three distinct defects, not one.**
 

@@ -214,10 +214,13 @@ Each was reached with evidence in [`11`](11-qa-deep-pass.md) or
   `PerfExportProvider` is a separate layout. Version 8 is already correct.
 - **No naive TLS destructor for W8** — it can run after the thread's
   `CoUninitialize`.
-- **`PackageIndex` stays** for now: it is dead production code but is the tested
+- ~~**`PackageIndex` stays** for now: it is dead production code but is the tested
   implementation of identity matching and display-name resolution, and
   `RegistryPackageSource` under it is live. Deleting it is a separate decision and
-  needs W9.1 to have given `display_name` a home first.
+  needs W9.1 to have given `display_name` a home first.~~
+  **Discharged.** W9.1 shipped as `Include/DisplayNameMemo.h`, which gave
+  `display_name` its home; `PackageIndex` and `IPackageSource` were then deleted
+  (audit candidate D-01). `RegistryPackageSource` survives as a plain class.
 
 ---
 

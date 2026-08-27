@@ -133,8 +133,8 @@ TEST(packages_cache, no_snapshot_means_no_answer_and_no_scan_of_its_own)
 	CHECK(cache.all().empty());
 
 	// Four queries, four reads, and nothing else. Before R3 this path could
-	// enter ensure_index() and enumerate the package repository on the menu
-	// thread, or block on another thread's scan.
+	// build an index of its own and enumerate the package repository on the
+	// menu thread, or block on another thread's scan.
 	CHECK_EQ(g_calls, 4);
 }
 

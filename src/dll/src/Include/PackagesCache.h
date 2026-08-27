@@ -42,14 +42,14 @@ namespace Nilesoft
 			What this replaces, and why
 			---------------------------
 
-			`PackagesCache` used to hold a `PackageIndex` and a
+			`PackagesCache` used to hold a lazily built identity index and a
 			`RegistryPackageSource` of its own, as a member of the immutable
 			config CACHE. Three things followed, all of them live on a stock
 			install:
 
-			  - a menu-thread `package.*` evaluation could enter ensure_index()
-			    and enumerate the package repository (~2 ms) or block on a
-			    condition variable waiting for another thread's scan;
+			  - a menu-thread `package.*` evaluation could enter that index's
+			    build step and enumerate the package repository (~2 ms) or block
+			    on a condition variable waiting for another thread's scan;
 			  - `CACHE::clear()` called `Packages.clear()`, so every config
 			    reload threw the index away - and since the config watcher landed
 			    (docs/refactor/03-config-safety.md section 3a) a reload happens on
@@ -102,9 +102,9 @@ namespace Nilesoft
 			PackageCatalogService::instance(), a process-wide singleton with a
 			worker thread behind it, so there was nothing a test could stand in
 			front of. Every other service on this branch already has this seam -
-			ProviderHealth's clock, PackageIndex's IPackageSource,
-			ConfigWatcher's WaitForObjects, InlineDetourApi's whole table - and
-			the one class R3 rewrote from scratch is the one that did not get it.
+			ProviderHealth's clock, ConfigWatcher's WaitForObjects,
+			InlineDetourApi's whole table - and the one class R3 rewrote from
+			scratch is the one that did not get it.
 
 			A plain function pointer, like InlineDetourApi, so an instance costs
 			CACHE one pointer and needs no allocation. Null means the live
@@ -130,10 +130,12 @@ namespace Nilesoft
 			machine does not have misses on every menu, forever. Un-gated, that
 			is a full package scan per menu.
 
-			One minute, and the number is chosen rather than picked. The
-			`PackageIndex` this replaced used a 30 s TTL and additionally
-			re-scanned immediately on failure (Packages.cpp), so a miss there
-			caused a re-enumeration at least twice as often as this does. The
+			One minute, and the number is chosen rather than picked. The package
+			index this replaced - kept until the snapshot had fully taken over,
+			then deleted; docs/refactor/09-remediation-plan.md R3 and the git
+			history of Packages.cpp - used a 30 s TTL and additionally re-scanned
+			immediately on failure, so a miss there caused a re-enumeration at
+			least twice as often as this does. The
 			scan runs on the worker thread and the old snapshot keeps being
 			served throughout, so what a permanent miss costs is one background
 			scan a minute - bounded, off the menu path, and less frequent than
