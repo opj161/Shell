@@ -21,6 +21,16 @@ namespace Nilesoft
 			return Type() == ExpressionType::Assign;
 		}
 
+		// The three classes that derive from IdentExpression, and therefore the
+		// three Type() answers for which ident() is not undefined behaviour:
+		// VariableExpression (Variable), AssignExpression (Assign) and
+		// FuncExpression (Identifier). RuntimeVariable is carried because
+		// IsVariable() accepts it.
+		bool Expression::IsIdentExpression() const
+		{
+			return IsIdent() || IsVariable() || IsAssign();
+		}
+
 		bool Expression::IsLiteral() const
 		{
 			return Type() == ExpressionType::String ||

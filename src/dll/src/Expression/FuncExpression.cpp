@@ -4973,6 +4973,13 @@ namespace Nilesoft
 
 		void FuncExpression::eval_for()
 		{
+			// Same reasoning as eval_foreach below: the parser's arity and kind
+			// checks live on the `if(!_hasdot)` branch only, so a trailing dot
+			// reaches here unchecked. Arguments[0] is cast to IdentExpression
+			// before its type is known, and eval_arg(2) needs a third argument.
+			if(Arguments.size() < 3 || !Arguments[0]->IsIdentExpression())
+				return;
+
 			Expression *expr = nullptr;
 			auto ident = (IdentExpression *)Arguments[0];
 			uint32_t id = ident->Id;
@@ -5054,6 +5061,19 @@ namespace Nilesoft
 
 		void FuncExpression::eval_foreach()
 		{
+			// The parser checks arity and both operand kinds, but only on the
+			// `if(!_hasdot)` branch - a trailing dot (`icon.foreach(@a, 5).x`)
+			// skips every one of those checks and still builds this node. So the
+			// casts below have to stand on their own: ident() is an unchecked
+			// reinterpret_cast onto an IdentExpression whose first member is an
+			// 800-byte Ident, and eval_arg(2) needs a third argument to exist.
+			// Answering nothing is what the `if(id && id_array)` branch below
+			// already does for an unusable pair.
+			if(Arguments.size() < 3
+			   || !Arguments[0]->IsIdentExpression()
+			   || !Arguments[1]->IsIdentExpression())
+				return;
+
 			uint32_t id = Arguments[0]->ident()->Id;
 			auto &id_array = Arguments[1]->ident()->Id;
 

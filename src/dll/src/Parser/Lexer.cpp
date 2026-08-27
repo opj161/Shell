@@ -891,6 +891,15 @@ namespace Nilesoft
 							error_if(args.size() < 2, TokenError::IdentifierArgumentsUnexpected, ident_col);
 							error_if(!args[0]->IsVariable(), TokenError::IdentifierArgumentsUnexpected, ident_col);
 
+							// args[1] must also be checked, not only counted.
+							// ident() is an unchecked reinterpret_cast and
+							// IdentExpression's first member is an 800-byte
+							// Ident, so `foreach(@a, 5, 1)` - a NumberExpression
+							// here - read Ident::_size from past the end of a
+							// far smaller object and indexed _items_id with it.
+							// Measured 2026-08-27: the suite exited 0xC0000005.
+							error_if(!args[1]->IsIdentExpression(), TokenError::IdentifierArgumentsUnexpected, ident_col);
+
 							auto id = &args[1]->ident()->Id;
 							if(!id->equals({ IDENT_SEL, IDENT_TYPES, IDENT_PATHS, IDENT_SHORTS,
 										   IDENT_DIRS,IDENT_DIRECTORIES,IDENT_FILES, IDENT_NAMES,IDENT_EXTS,

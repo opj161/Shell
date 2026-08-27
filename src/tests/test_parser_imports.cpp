@@ -489,3 +489,70 @@ TEST(parser_malformed, a_for_with_the_wrong_arity_is_reported_not_fatal)
 
 	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
 }
+
+// The arity guards above count the arguments; they do not say what the
+// arguments are. Expression::ident() is an unchecked reinterpret_cast and
+// IdentExpression's first member is an 800-byte Ident, so a second argument
+// that is a NumberExpression made the parser read Ident::_size from past the
+// end of a far smaller object and then index _items_id with whatever it found.
+// Measured 2026-08-27 on the pre-guard tree: both of these exited 0xC0000005
+// out of the suite, and neither the arity guard nor t()'s own bounds check
+// stopped it - t() bounds against the garbage _size it just read.
+//
+// Both spellings are covered because they arrive by different routes: the
+// dotted one through verify_ident's icon/image/img/svg arms, which classify any
+// second segment as an Identifier, and the bare one through IDENT_FOREACH's own
+// check(argc == 3), which counts and does not inspect.
+TEST(parser_malformed, a_foreach_whose_list_argument_is_a_number_is_reported_not_fatal)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"foreachnum.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title='y' where=foreach(@a, 5, 1))\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+}
+
+TEST(parser_malformed, a_wildcard_foreach_whose_list_argument_is_a_number_is_reported_not_fatal)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"wildforeachnum.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title='y' image=icon.foreach(@a, 5))\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+}
+
+// The guard must reject a number without also rejecting what the language
+// actually accepts here. sel.paths is the form eval_foreach switches on
+// (id_array.back() == IDENT_PATHS), and it must still parse clean - otherwise
+// the fix above would be a silent break of a documented construct rather than
+// a guard.
+TEST(parser_malformed, a_well_formed_foreach_still_parses)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"goodforeach.nss",
+						  "menu(title='x')\r\n"
+						  "{\r\n"
+						  "\titem(title=foreach(@a, sel.paths, @a))\r\n"
+						  "}\r\n");
+
+	Parsed parsed(root);
+
+	CHECK_MSG(parsed.loaded.size() == 1, "the parse returned rather than faulting");
+	CHECK_MSG(parsed.ok, "a well-formed foreach is not a parse error");
+}

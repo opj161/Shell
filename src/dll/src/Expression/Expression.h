@@ -52,6 +52,14 @@ namespace Nilesoft
 			bool IsAssign() const;
 			bool IsLiteral() const;
 
+			// True exactly when ident() below is a legal cast on this object.
+			// ident() is an unchecked reinterpret_cast, and IdentExpression's
+			// first member is an 800-byte Ident - so calling it on, say, a
+			// NumberExpression reads Ident::_size from past the end of a much
+			// smaller allocation and then indexes _items_id with it. Ask this
+			// before ident(), not IsIdent(), which covers only one of the three.
+			bool IsIdentExpression() const;
+
 			class LiteralExpression *Literal();
 			class IdentExpression *ident();
 			class AssignExpression *assign();
