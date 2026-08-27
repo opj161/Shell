@@ -691,7 +691,7 @@ thread repeatedly and assert the reference count returns to zero.
 ### W9 — R3 policy closure *(D11, D12)*
 
 1. **`display_name`.** `PackageIndex::display_name` memoized per entry
-   (`display_resolved`, [`Packages.cpp:487`](../../src/dll/src/Packages.cpp#L487));
+   (`display_resolved`, [`Packages.cpp:487`](../../src/dll/src/Packages.cpp#L487) — true at that HEAD; `PackageIndex` was deleted by audit candidate D-01, so this anchor is past end-of-file and the git history of that file is now the record);
    `PackagesCache::display_name` constructs a fresh `RegistryPackageSource` and
    re-resolves **every call**, where resolution can load the package's
    `Resources.pri` through

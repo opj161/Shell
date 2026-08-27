@@ -175,6 +175,65 @@ $rules = @(
 # Enable each of these as its phase lands; see docs/refactor/06 and 07.
 $deferredRules = @()
 
+# Not a regex rule: it has to resolve a path and count lines, which the engine
+# above cannot do. Reported and counted the same way so a failure reads like
+# every other failure here.
+#
+# docs/refactor cites the tree by deep link with a line anchor, and those
+# citations are the evidence the whole document set rests on. Deleting code
+# silently turns them into anchors past end-of-file that still render as links -
+# D-01 created seven of them in one commit, the follow-up found and annotated
+# two, and the other five were discovered only by a QA pass a day later. That is
+# a check nobody can do by eye and a script does in fifteen lines.
+#
+# An anchor that has gone stale on purpose is not a violation. Those documents
+# are dated "verified at this HEAD" records, so re-pointing a line number would
+# falsify the record; the correct repair is to say so beside the link. Writing
+# `past end-of-file` within two lines of the anchor - markdown wraps - declares
+# it, exactly as a comment declares why a banned pattern is mentioned above.
+function Test-DocAnchors
+{
+    $count = 0
+    $docs = @(Get-ChildItem -LiteralPath (Join-Path $root 'docs\refactor') -Filter '*.md' -File -ErrorAction SilentlyContinue)
+    $agents = Join-Path $root 'AGENTS.md'
+    if(Test-Path -LiteralPath $agents) { $docs += Get-Item -LiteralPath $agents }
+
+    foreach($doc in $docs)
+    {
+        $lines = @(Get-Content -LiteralPath $doc.FullName)
+        for($i = 0; $i -lt $lines.Count; $i++)
+        {
+            foreach($m in [regex]::Matches($lines[$i], '\]\(((?:\.\./)*[^)\s#]+)#L(\d+)(?:-L?\d+)?\)'))
+            {
+                $target = Join-Path (Split-Path -Parent $doc.FullName) $m.Groups[1].Value
+                $wanted = [int]$m.Groups[2].Value
+
+                $problem = $null
+                if(-not (Test-Path -LiteralPath $target))
+                {
+                    $problem = 'names a file that does not exist'
+                }
+                else
+                {
+                    $have = @(Get-Content -LiteralPath $target).Count
+                    if($have -lt $wanted)
+                    { $problem = "points at line $wanted of a file with $have" }
+                }
+                if(-not $problem) { continue }
+
+                $window = ($lines[$i..([Math]::Min($i + 2, $lines.Count - 1))] -join ' ')
+                if($window -match 'past end-of-file') { continue }
+
+                $count++
+                Write-Host "INVARIANT VIOLATION  Documentation deep links must resolve" -ForegroundColor Red
+                Write-Host ("    {0}:{1}: {2}" -f $doc.Name, ($i + 1), $m.Value)
+                Write-Host ("    why: the link {0}. Re-point it, or - if the document is a dated record whose line numbers must not be rewritten - say `past end-of-file` beside it and it stops counting." -f $problem) -ForegroundColor DarkGray
+            }
+        }
+    }
+    return $count
+}
+
 function Test-Rules
 {
     param($Rules, [switch]$WarnOnly)
@@ -224,6 +283,7 @@ function Test-Rules
 }
 
 $failures = Test-Rules -Rules $rules
+$failures += Test-DocAnchors
 $null = Test-Rules -Rules $deferredRules -WarnOnly
 
 if($failures -gt 0)
@@ -233,5 +293,8 @@ if($failures -gt 0)
     exit 1
 }
 
-Write-Host ("check-invariants: OK ({0} rules, {1} deferred)" -f $rules.Count, $deferredRules.Count) -ForegroundColor Green
+# +1 for Test-DocAnchors, which is a rule in every sense that matters here even
+# though it is not in $rules: it fails the build and it has to be counted, or
+# the number stops describing what ran.
+Write-Host ("check-invariants: OK ({0} rules, {1} deferred)" -f ($rules.Count + 1), $deferredRules.Count) -ForegroundColor Green
 exit 0

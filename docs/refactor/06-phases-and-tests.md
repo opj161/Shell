@@ -533,12 +533,17 @@ CI at all, because the workflow triggered on `main` and PRs to `main`.
   ```
 
   This is a real gap, stated rather than disguised as a job.
-- **`scripts/check-invariants.ps1` enforces eleven rules, none deferred.** This
+- **`scripts/check-invariants.ps1` enforces twelve rules, none deferred.** This
   section said "six enforced rules, two deferred (warn-only) that turn on with
   their phase: `GetState(…, TRUE)` with Phase 1, `SPIF_SENDCHANGE` with
   Phase 3". Both of those are enforced now, as rules 9 and 10; rule 11 - the
-  two-call `GetMenuItemInfo` pattern - was added by W6.6. The script reports
-  `check-invariants: OK (11 rules, 0 deferred)`.
+  two-call `GetMenuItemInfo` pattern - was added by W6.6. Rule 12 is the only
+  one that is not a regex over sources: every `#L` deep link in `docs/refactor`
+  and `AGENTS.md` must resolve to a line that exists, unless the text beside it
+  says `past end-of-file`. Deleting code turns those citations into links that
+  still render and no longer point anywhere, and the D-01 deletion made seven
+  of them in one commit while the follow-up caught two. The script reports
+  `check-invariants: OK (12 rules, 0 deferred)`.
 
   Three things the first version got wrong, worth remembering when adding rules
   (§07 §1.1):

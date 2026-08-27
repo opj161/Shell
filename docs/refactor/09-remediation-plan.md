@@ -158,7 +158,7 @@ Larger, though, in *who pays it*: the audit treats this as a power-user path. Th
 **stock configuration** takes it on every menu —
 [`src/bin/imports/terminal.nss:8`](../../src/bin/imports/terminal.nss#L8) is
 `where=package.exists("WindowsTerminal")`, with `package.path(...)` on line 12.
-With a 30 s TTL ([Packages.h:143](../../src/dll/src/Include/Packages.h#L143)) and
+With a 30 s TTL ([Packages.h:143](../../src/dll/src/Include/Packages.h#L143) — true at that HEAD; `PackageIndex` was deleted by audit candidate D-01, so this anchor is past end-of-file and the git history of that file is now the record) and
 `CACHE::clear()` discarding the index on every config reload, a default install
 re-enumerates on the menu thread at least twice a minute of active use, and once
 after every save the config watcher picks up.

@@ -87,7 +87,7 @@ five minutes in which:
 ### The code R3 replaced refused to do this, in writing
 
 `PackageIndex::ensure_index()` has an explicit branch for it, with the reason
-recorded ([`Packages.cpp:387-390`](../../src/dll/src/Packages.cpp#L387)):
+recorded ([`Packages.cpp:387-390`](../../src/dll/src/Packages.cpp#L387) — true at that HEAD; `PackageIndex` was deleted by audit candidate D-01, so this anchor is past end-of-file and the git history of that file is now the record):
 
 ```cpp
 else
@@ -99,7 +99,7 @@ else
 ```
 
 `State::Empty` means the *next* query re-enumerates. And its TTL was **30 s**
-([`Packages.h:143`](../../src/dll/src/Include/Packages.h#L143)), not five
+([`Packages.h:143`](../../src/dll/src/Include/Packages.h#L143) — true at that HEAD; `PackageIndex` was deleted by audit candidate D-01, so this anchor is past end-of-file and the git history of that file is now the record), not five
 minutes. R3 therefore moved package queries from a source that retried
 immediately on failure onto one that caches the failure for **ten times longer**
 than the old success TTL.
@@ -442,7 +442,7 @@ defect; each is correct in the tree.
 | `ProviderBudget::remaining_us()` underflows once the budget is spent | **Clear.** `return spent >= total_us ? 0u : total_us - spent;` ([`ProviderHealth.h:455`](../../src/dll/src/Include/ProviderHealth.h#L455)) (c) |
 | `PackagesCache::Found` hands out a pointer into a snapshot the caller does not hold | **Clear.** `Found` carries the `shared_ptr` alongside the pointer, and all four call sites keep the `Found` alive for the whole use — including `exists()`, where the temporary survives to the end of the full expression (c) |
 | A tracking identifier is assigned before `_host_by_position` is known | **Clear.** `build_system_menuitems` reads `MIM_STYLE` at [`ContextMenu.cpp:4329`](../../src/dll/src/ContextMenu.cpp#L4329), inside the `native.root_scan` phase; `prepare_system_item` — which assigns tracking IDs — runs later, per level, from [`ContextMenu.cpp:1082`](../../src/dll/src/ContextMenu.cpp#L1082) (c) |
-| R3 narrowed the package set, because the new scan gates on `parse_package_full_name` | **Clear.** The old `PackageIndex` gated on the same parse ([`Packages.cpp:376-380`](../../src/dll/src/Packages.cpp#L376)); the sets are identical (c) |
+| R3 narrowed the package set, because the new scan gates on `parse_package_full_name` | **Clear.** The old `PackageIndex` gated on the same parse ([`Packages.cpp:376-380`](../../src/dll/src/Packages.cpp#L376) — true at that HEAD; `PackageIndex` was deleted by audit candidate D-01, so this anchor is past end-of-file and the git history of that file is now the record); the sets are identical (c) |
 | Nested native items carry the root handle rather than their own submenu | **Clear in code.** `native_source.menu = hMenu` is stored per level inside `enumerate_native_menu_level` ([`ContextMenu.cpp:3770`](../../src/dll/src/ContextMenu.cpp#L3770)), which is called once per materialised popup. The gap is the missing end-to-end assertion (§10 F9), not the implementation (c) |
 
 ---
