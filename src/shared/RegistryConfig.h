@@ -8,7 +8,6 @@ namespace Nilesoft
 		bool UNREGISTER{};
 		bool TREAT{};
 		bool CONTEXTMENU{};
-		bool FOLDEREXTENSIONS{};
 		bool ICONOVERLAY{};
 		bool RESTART{};
 		bool SILENT{};
@@ -194,26 +193,6 @@ namespace Nilesoft
 
 				int ret = 0;
 
-				if(reg.FOLDEREXTENSIONS)
-				{
-					if(RegisterInprocServer(dllPath, CLS_FolderExtensions, APP_COMP_NAME))
-					{
-						ret++;
-						auto key = Registry::LocalMachine.CreateSubKey(HKLM_DRIVE_FolderExtensions, false);
-						if(key)
-						{
-							ret += key.SetString(nullptr, APP_COMP_NAME);
-							ret += key.SetInt(L"DriveMask", 0xff);
-							key.Close();
-						}
-						else
-						{
-							Registry::DeleteSubKey(HKCR, L"CLSID\\" CLS_FolderExtensions);
-							ret = 0;
-						}
-					}
-				}
-				
 				if(reg.ICONOVERLAY)
 				{
 					// register COM-object for overlay icon handler
@@ -261,8 +240,23 @@ namespace Nilesoft
 			{
 				int ret = 0;
 
+				// Servicing only. No build can write either of these any more - the
+				// register branch and the -f/-force option that reached it are gone.
+				// They are still deleted because `shell.exe -register -force` did
+				// write both, until upstream ed826e1 (2024-12-03) replaced the
+				// passed-through flags with a fresh REGOP setting only CONTEXTMENU
+				// and ICONOVERLAY. A machine registered before then still carries
+				// them, so uninstall has to remove them.
+				//
+				// The HKLM line was commented out, which meant -unregister deleted
+				// the CLSID above and left Drive\shellex\FolderExtensions pointing
+				// at a server that no longer resolves. Restoring it is safe: a
+				// deletion API "report[s] success only when they delete an existing
+				// resource", so an absent key adds 0 to ret, and Unregister returns
+				// ret > 0 - it cannot turn a success into a failure.
+				// https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regdeletetreew
 				ret += Registry::DeleteSubKey(HKCR, L"CLSID\\" CLS_FolderExtensions);
-				//ret += Registry::DeleteSubKey(HKLM, HKLM_DRIVE_FolderExtensions);
+				ret += Registry::DeleteSubKey(HKLM, HKLM_DRIVE_FolderExtensions);
 
 				ret += Registry::DeleteSubKey(HKLM, HKLM_ICONOVERLAY);
 				// unregister COM-object Delete the HKCR\CLSID\{<CLSID>} key.

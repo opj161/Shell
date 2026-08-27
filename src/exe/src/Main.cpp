@@ -2392,10 +2392,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
                 {
 					reg.TREAT = true;
                 }
-				else if(op->has_name({ L"f", L"force" }))
-				{
-					reg.FOLDEREXTENSIONS=true;
-				}
                 else if(op->has_name({ L"s", L"silent" }))
                 {
 					reg.SILENT=true;
@@ -2541,7 +2537,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 			return code;
 		}
 
-		if(reg.REGISTER || reg.UNREGISTER || reg.RESTART || reg.FOLDEREXTENSIONS)
+		if(reg.REGISTER || reg.UNREGISTER || reg.RESTART)
 		{
 			// Register returns a bool, and this returned it straight out of
 			// wWinMain - so a successful registration exited with 1 and a failed
