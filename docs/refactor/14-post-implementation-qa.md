@@ -13,6 +13,11 @@ suite could not see and that only the takeover harness caught.
 [`13-implementation-handoff.md`](13-implementation-handoff.md) is the operating
 manual. This is the record of finishing it.
 
+**Followed by [`15-independent-qa-assessment.md`](15-independent-qa-assessment.md)**
+(2026-08-27), which re-measured every gate below on a later tree and found four
+defects none of them could see - two of them on the Windows 11 `TreatAs`
+registration path, which had never once worked on a machine with a stock ACL.
+
 ---
 
 ## 0. Verdict
