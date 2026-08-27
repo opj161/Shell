@@ -8,6 +8,7 @@
 #include <string>
 #include <sddl.h>
 #include "../../shared/LegacyConfigTransfer.h"
+#include "../../shared/BorrowedKeyAccess.h"
 #include "TreatAsPlan.h"
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "msi.lib")
@@ -113,6 +114,36 @@ constexpr auto TREATAS_WARNING = 25001;
 constexpr auto TREATAS_REMOVE_ERROR = 25002;
 constexpr auto ROLLBACK_REQUIRED_ERROR = 25003;
 
+// Borrowing write access to TREATAS_PARENT reports through a plain function
+// pointer, which cannot carry an MSIHANDLE. The deferred custom actions here are
+// single-threaded and set this for the duration of one borrow so the diagnostic
+// reaches the MSI log instead of nowhere.
+// https://learn.microsoft.com/windows/win32/api/msiquery/nf-msiquery-msiprocessmessage
+static MSIHANDLE g_borrow_install = 0;
+
+static void BorrowReportToInstaller(const wchar_t *message)
+{
+	::OutputDebugStringW(message);
+	if(!g_borrow_install || !message)
+		return;
+	PMSIHANDLE record = ::MsiCreateRecord(1);
+	if(!record)
+		return;
+	::MsiRecordSetStringW(record, 0, message);
+	::MsiProcessMessage(g_borrow_install, INSTALLMESSAGE_INFO, record);
+}
+
+// The custom actions run deferred and no-impersonate, i.e. as LocalSystem, and
+// LocalSystem holds ReadKey on TREATAS_PARENT and nothing more - measured on
+// Windows 11 26200 on 2026-08-27 by opening the key from a SYSTEM scheduled
+// task: CreateSubKey and Delete are both refused, ReadKey succeeds. So the
+// create and the delete below need the same borrow src/exe uses, which this
+// file previously did not have at all: install warned and skipped the redirect,
+// and uninstall returned ERROR_INSTALL_FAILURE once a redirect existed.
+//
+// SeTakeOwnershipPrivilege and SeRestorePrivilege are present but disabled in
+// that token, which is what BorrowedKeyAccess::acquire enables.
+
 class RegKey
 {
 public:
@@ -202,7 +233,7 @@ static TreatAsState QueryTreatAs(LSTATUS *error = nullptr)
 // success with created=false so rollback must not delete it.
 //
 //   https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regcreatekeyexw
-static LSTATUS CreateTreatAsIfAbsent(bool *created = nullptr)
+static LSTATUS CreateTreatAsUnborrowed(bool *created = nullptr)
 {
 	if(created)
 		*created = false;
@@ -237,7 +268,7 @@ static LSTATUS CreateTreatAsIfAbsent(bool *created = nullptr)
 	return ERROR_SUCCESS;
 }
 
-static LSTATUS RemoveTreatAsIfOurs()
+static LSTATUS RemoveTreatAsUnborrowed()
 {
 	LSTATUS error = ERROR_SUCCESS;
 	auto state = QueryTreatAs(&error);
@@ -249,6 +280,55 @@ static LSTATUS RemoveTreatAsIfOurs()
 		return error;
 
 	return ::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, KEY_WOW64_64KEY, 0);
+}
+
+// The borrow lives inside these two rather than at the four call sites, so a
+// later caller cannot forget it. Both try the plain write first: on a machine
+// whose CLSID key was already widened by some earlier install, that succeeds and
+// nothing touches the security descriptor at all.
+static LSTATUS CreateTreatAsIfAbsent(bool *created = nullptr)
+{
+	auto rc = CreateTreatAsUnborrowed(created);
+	if(rc != ERROR_ACCESS_DENIED)
+		return rc;
+
+	Nilesoft::Security::BorrowedKeyAccess borrowed(BorrowReportToInstaller);
+	if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TREATAS_PARENT, KEY_CREATE_SUB_KEY))
+		return ERROR_ACCESS_DENIED;
+
+	rc = CreateTreatAsUnborrowed(created);
+	const bool restored = borrowed.restore();
+
+	// A create that leaves the key widened is the machine-wide hole this class
+	// exists to prevent, so it is reported as a failure even though the redirect
+	// now exists. The destructor retries the restore and says so if it cannot.
+	if(rc == ERROR_SUCCESS && !restored)
+		return ERROR_NOT_ALL_ASSIGNED;
+	return rc;
+}
+
+static LSTATUS RemoveTreatAsIfOurs()
+{
+	auto rc = RemoveTreatAsUnborrowed();
+	if(rc != ERROR_ACCESS_DENIED)
+		return rc;
+
+	// DELETE is asked for on the TreatAs key itself, not on its parent: that is
+	// the object RegDeleteKeyEx needs the right on.
+	// https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regdeletekeyexw
+	Nilesoft::Security::BorrowedKeyAccess borrowed(BorrowReportToInstaller);
+	if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TREATAS_KEY, DELETE))
+		return ERROR_ACCESS_DENIED;
+
+	rc = RemoveTreatAsUnborrowed();
+	if(rc == ERROR_SUCCESS)
+	{
+		// The key is gone; there is no security descriptor left to put back.
+		borrowed.release_deleted();
+		return rc;
+	}
+	borrowed.restore();
+	return rc;
 }
 
 enum class MarkerState
@@ -811,6 +891,9 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 // https://learn.microsoft.com/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
 UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 {
+	// Route any BorrowedKeyAccess diagnostic into this install's log.
+	g_borrow_install = hInstall;
+
 	MSI msi(hInstall);
 	std::wstring data;
 	if(!msi.get(L"CustomActionData", data))
@@ -873,6 +956,9 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 
 UINT __stdcall TreatAsRollback(MSIHANDLE hInstall)
 {
+	// Route any BorrowedKeyAccess diagnostic into this install's log.
+	g_borrow_install = hInstall;
+
 	MSI msi(hInstall);
 	std::wstring data;
 	if(!msi.get(L"CustomActionData", data))
