@@ -31,7 +31,9 @@
     <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <Import Project="$(SolutionDir)shared\VC-LTL.props" Condition="Exists('$(SolutionDir)shared\VC-LTL.props')" />
+  <!-- See Shell.vcxproj: unconditional so a missing file fails the build
+       instead of silently changing which CRT this binary links. -->
+  <Import Project="$(SolutionDir)shared\VC-LTL.props" />
   
   <PropertyGroup>
     <ProjectAdditionalLinkLibraries>msi.lib;shlwapi.lib;shell32.lib;bcrypt.lib;ole32.lib</ProjectAdditionalLinkLibraries>

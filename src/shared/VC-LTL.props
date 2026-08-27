@@ -43,4 +43,31 @@ If you are not satisfied with the default search order, you can modify this file
 		<Import Project="$(VC_LTL_Root)\Config\config.props" Condition="Exists('$(VC_LTL_Root)\Config\config.props')"/>
 		<Import Project="$(VC_LTL_Root)\ltlvcrt.props" Condition="(!Exists('$(VC_LTL_Root)\Config\config.props')) And (Exists('$(VC_LTL_Root)\ltlvcrt.props'))"/>
 	</ImportGroup>
+
+	<!--
+	Shell addition, below this line. Not part of the vendor file; re-apply it if
+	this file is ever refreshed from upstream VC-LTL.
+
+	Everything above decides whether VC-LTL applies by testing whether a file
+	exists, and says nothing when it does not. That made the CRT the product
+	ships a side effect of whether src\packages happened to be restored, with
+	both halves silent: CI runs `nuget restore` and ships a build importing
+	msvcrt.dll, while build.ps1 ran no restore at all and produced a static-CRT
+	binary 361 KB larger with 13 imports instead of 14. Nothing in either log
+	said which one you had, and the difference was measured, not guessed
+	(dumpbin /imports, x64, 2026-08-27).
+
+	config.props sets SupportLTL as it is imported, so an unset SupportLTL is an
+	exact test for "the import above did not happen". Building without VC-LTL
+	stays possible - offline, or to bisect a CRT-sensitive bug - but it has to
+	be asked for, and it still says so.
+	-->
+	<Target Name="ShellVerifyVCLTLApplied" BeforeTargets="PrepareForBuild">
+		<Error Code="SHELL9000"
+			   Condition="'$(SupportLTL)'!='true' And '$(SupportLTL)'!='ucrt' And '$(ShellAllowNoVCLTL)'!='true'"
+			   Text="VC-LTL did not apply to $(MSBuildProjectName) ($(Platform)), so this build would link the static CRT and would not be what CI ships. Expected the package under $(VC_LTL_Root). Restore it with: msbuild -t:restore -p:RestorePackagesConfig=true src\Shell.sln  (build.ps1 does this for you). To build without VC-LTL deliberately, pass /p:ShellAllowNoVCLTL=true." />
+		<Warning Code="SHELL9001"
+				 Condition="'$(SupportLTL)'!='true' And '$(SupportLTL)'!='ucrt' And '$(ShellAllowNoVCLTL)'=='true'"
+				 Text="$(MSBuildProjectName) ($(Platform)) is being built without VC-LTL by request: the static CRT is linked and this binary is not what CI ships." />
+	</Target>
 </Project>

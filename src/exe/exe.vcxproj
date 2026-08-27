@@ -62,7 +62,9 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(SolutionDir)shared\VC-LTL.props" Condition="Exists('$(SolutionDir)shared\VC-LTL.props')" />
+    <!-- See Shell.vcxproj: unconditional so a missing file fails the build
+         instead of silently changing which CRT this binary links. -->
+    <Import Project="$(SolutionDir)shared\VC-LTL.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>

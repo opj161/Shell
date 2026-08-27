@@ -46,7 +46,10 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(SolutionDir)shared\VC-LTL.props" Condition="Exists('$(SolutionDir)shared\VC-LTL.props')" />
+    <!-- Unconditional on purpose: this file is checked in, and an Exists() guard
+         here would turn a broken checkout into a silent change of CRT rather
+         than a build error, which is the failure mode SHELL9000 exists to stop. -->
+    <Import Project="$(SolutionDir)shared\VC-LTL.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
