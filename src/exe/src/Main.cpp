@@ -170,44 +170,63 @@ public:
 
 		// Taking ownership needs SeTakeOwnership; handing it back to whoever had
 		// it - TrustedInstaller, a SID we are not a member of - needs SeRestore.
+		// "A process with the SE_TAKE_OWNERSHIP privilege enabled can set itself
+		// as the owner of an object. A process with the SE_RESTORE_NAME privilege
+		// enabled or with WRITE_OWNER access to the object can set any valid user
+		// or group SID as the owner" - and the owner set below is a group, not us.
+		// https://learn.microsoft.com/windows/win32/secauthz/owner-of-a-new-object
 		// Without the second one this could take ownership and never return it,
 		// which is the trap the old code fell into.
 		if(!EnablePrivilege(SE_TAKE_OWNERSHIP_NAME) || !EnablePrivilege(SE_RESTORE_NAME))
-			return false;
+			return fail(L"enable SeTakeOwnership/SeRestore", ::GetLastError());
 
-		if(ERROR_SUCCESS != ::RegOpenKeyExW(root, subkey, 0,
-											READ_CONTROL | WRITE_OWNER | reg_view, &_restore_key))
-			return false;
+		if(auto rc = ::RegOpenKeyExW(root, subkey, 0,
+									 READ_CONTROL | WRITE_OWNER | reg_view, &_restore_key);
+		   rc != ERROR_SUCCESS)
+			return fail(L"open for WRITE_OWNER", rc);
 
 		// Snapshot first. Everything below is undone from this.
-		if(ERROR_SUCCESS != ::GetSecurityInfo(_restore_key, SE_REGISTRY_KEY,
-											  OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-											  &_saved_owner, nullptr, &_saved_dacl, nullptr, &_saved))
-			return false;
+		if(auto rc = ::GetSecurityInfo(_restore_key, SE_REGISTRY_KEY,
+									   OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+									   &_saved_owner, nullptr, &_saved_dacl, nullptr, &_saved);
+		   rc != ERROR_SUCCESS)
+			return fail(L"snapshot owner and DACL", rc);
 
 		PSID admins {};
 		SID_IDENTIFIER_AUTHORITY sia { SECURITY_NT_AUTHORITY };
 		if(!::AllocateAndInitializeSid(&sia, 2, SECURITY_BUILTIN_DOMAIN_RID,
 									   DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &admins))
-			return false;
+			return fail(L"build the Administrators SID", ::GetLastError());
 
-		if(ERROR_SUCCESS != ::SetSecurityInfo(_restore_key, SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION,
-											  admins, nullptr, nullptr, nullptr))
+		if(auto rc = ::SetSecurityInfo(_restore_key, SE_REGISTRY_KEY, OWNER_SECURITY_INFORMATION,
+									   admins, nullptr, nullptr, nullptr);
+		   rc != ERROR_SUCCESS)
 		{
 			::FreeSid(admins);
-			return false;
+			return fail(L"take ownership", rc);
 		}
 		_owner_taken = true;
 
 		// Keep the original WRITE_OWNER handle alive. If the work-handle reopen
 		// fails, it is still the path that can restore the original owner.
-		if(ERROR_SUCCESS != ::RegOpenKeyExW(root, subkey, 0,
-											READ_CONTROL | WRITE_DAC | temporary_rights | reg_view,
-											&_work_key))
+		//
+		// This asks for READ_CONTROL | WRITE_DAC and NOT for temporary_rights,
+		// which is the whole point of the borrow: ownership buys exactly one
+		// thing - "An object's owner implicitly has WRITE_DAC access to the
+		// object" - and nothing object-specific. On a stock machine the DACL
+		// still reads Administrators: ReadKey at this instant, so asking for
+		// KEY_CREATE_SUB_KEY here was refused with ERROR_ACCESS_DENIED, acquire
+		// returned false, restore() gave ownership straight back, and the whole
+		// mechanism failed silently on exactly the machines it exists for. The
+		// caller opens its own handle once the ACE below is in place.
+		// https://learn.microsoft.com/windows/win32/secauthz/owner-of-a-new-object
+		if(auto rc = ::RegOpenKeyExW(root, subkey, 0,
+									 READ_CONTROL | WRITE_DAC | reg_view, &_work_key);
+		   rc != ERROR_SUCCESS)
 		{
 			::FreeSid(admins);
 			restore();
-			return false;
+			return fail(L"open for WRITE_DAC", rc);
 		}
 
 		// Exactly what the one write needs, to one principal, inherited by
@@ -222,19 +241,24 @@ public:
 
 		PACL widened {};
 		bool ok = false;
-		if(ERROR_SUCCESS == ::SetEntriesInAclW(1, &ea, _saved_dacl, &widened))
+		DWORD rc = ::SetEntriesInAclW(1, &ea, _saved_dacl, &widened);
+		if(rc == ERROR_SUCCESS)
 		{
-			ok = ERROR_SUCCESS == ::SetSecurityInfo(_work_key, SE_REGISTRY_KEY,
-													DACL_SECURITY_INFORMATION,
-													nullptr, nullptr, widened, nullptr);
+			rc = ::SetSecurityInfo(_work_key, SE_REGISTRY_KEY,
+								   DACL_SECURITY_INFORMATION,
+								   nullptr, nullptr, widened, nullptr);
+			ok = rc == ERROR_SUCCESS;
 			_dacl_changed = ok;
 			::LocalFree(widened);
 		}
 
 		::FreeSid(admins);
 		if(!ok)
+		{
 			restore();
-		return ok;
+			return fail(L"widen the DACL", rc);
+		}
+		return true;
 	}
 
 	// Puts the DACL back before the owner: restoring the owner first can cost us
@@ -317,6 +341,19 @@ public:
 	}
 
 private:
+	// Every acquire failure says which step and which Win32 error, because the
+	// alternative is what shipped: one caller-side warning with no step in it,
+	// for eight distinct failures, on a path no test can reach.
+	static bool fail(const wchar_t *step, DWORD error)
+	{
+		wchar_t detail[192]{};
+		::swprintf_s(detail, L"BorrowedKeyAccess could not %s: error %lu",
+					 step, static_cast<unsigned long>(error));
+		if(_log)
+			_log->error(detail);
+		return false;
+	}
+
 	void log_restore_phase(const wchar_t *phase, DWORD security_error, DWORD last_error) const
 	{
 		wchar_t detail[192]{};
@@ -442,6 +479,20 @@ static LSTATUS RemoveTreatAsIfOurs()
 	return ::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TreatAsKey, KEY_WOW64_64KEY, 0);
 }
 
+// One warning at the call site said only that the redirect "was not applied",
+// for every one of the ways this can fail - so the machine where it did fail
+// (2026-08-27, stock TrustedInstaller ACL) gave the reader nothing to act on.
+static bool report_treatas(const wchar_t *what, TreatAsState state, DWORD error)
+{
+	static constexpr const wchar_t *names[] = { L"absent", L"ours", L"foreign", L"inaccessible" };
+	wchar_t detail[192]{};
+	::swprintf_s(detail, L"TreatAs redirect: %s (state %s, error %lu)",
+				 what, names[static_cast<int>(state)], static_cast<unsigned long>(error));
+	if(_log)
+		_log->error(detail);
+	return false;
+}
+
 bool disable_modern(bool register_redirect)
 {
 	auto state = QueryTreatAs();
@@ -450,19 +501,25 @@ bool disable_modern(bool register_redirect)
 		if(state == TreatAsState::ours)
 			return true;
 		if(state != TreatAsState::absent)
-			return false;
+			return report_treatas(L"another handler owns it, leaving it alone", state, 0);
 
 		auto rc = CreateTreatAsIfAbsent();
 		if(rc != ERROR_ACCESS_DENIED)
-			return rc == ERROR_SUCCESS;
+			return rc == ERROR_SUCCESS ? true : report_treatas(L"create failed", state, rc);
 
+		// Expected on a stock machine: {86ca1aa0-...} is owned by
+		// NT SERVICE\TrustedInstaller and Administrators hold ReadKey.
 		BorrowedKeyAccess borrowed;
 		if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TreatAsParent, KEY_CREATE_SUB_KEY))
-			return false;
+			return report_treatas(L"could not borrow write access", state, ERROR_ACCESS_DENIED);
 
 		rc = CreateTreatAsIfAbsent();
 		const bool restored = borrowed.restore();
-		return restored && rc == ERROR_SUCCESS;
+		if(rc != ERROR_SUCCESS)
+			return report_treatas(L"create failed even with borrowed access", state, rc);
+		if(!restored)
+			return report_treatas(L"created, but owner or DACL was not restored", state, 0);
+		return true;
 	}
 
 	if(state == TreatAsState::absent || state == TreatAsState::foreign)
