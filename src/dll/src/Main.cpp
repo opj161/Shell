@@ -202,7 +202,6 @@ struct RuntimeState
 	Initializer initializer;
 	LoaderState loader;
 
-	WindowsHook taskbar_mouse;
 	IATHook ntuser_popup_hook;
 	std::vector<IATHook> popup_hooks;
 	Detours<decltype(::CoCreateInstance)> co_create_instance_hook;
@@ -226,7 +225,6 @@ inline const Windows::Version* Ver() { return &Windows::Version::Instance(); }
 #define ver Ver()
 #define _initializer (Runtime().initializer)
 #define _loader (Runtime().loader)
-#define _taskbar_mouse (Runtime().taskbar_mouse)
 #define iathook_NtUserTrackPopupMenuEx (Runtime().ntuser_popup_hook)
 #define iathook_TrackPopupMenu (Runtime().popup_hooks)
 #define _CoCreateInstance (Runtime().co_create_instance_hook)
@@ -711,7 +709,6 @@ void log_breaker_opened() noexcept
 			   Nilesoft::Shell::TakeoverBreaker::THRESHOLD);
 }
 
-LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
 LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 __inline auto is_registered(bool force_refresh = false) -> bool
@@ -732,41 +729,21 @@ struct taskbar_t
 		return msg;
 	}
 
-	static bool hook(HWND hTaskbar, UINT_PTR id)
-	{
-		Window window = Window::Find(Windows::WC_Composition_DesktopWindowContentBridge, hTaskbar);
-		if(window && !window.is_prop(UxSubclass))
-		{
-			auto &rt = Runtime();
-			std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
-			if(!rt.taskbar_windows.contains(window))
-			{
-				if(window.subclass(TaskbarSubclassProc, id, hTaskbar))
-				{
-					window.prop(UxSubclass, CONTEXTMENUSUBCLASS);
-					rt.taskbar_windows[window] = window;
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	static void try_hook(HWND hTaskbar, UINT_PTR id, int time = 500)
-	{
-		if(hTaskbar)
-		{
-			::SetTimer(hTaskbar, id, time, [](HWND hWnd, UINT, UINT_PTR id, DWORD)
-			{
-				static int atttempt = 0;
-				if(hook(hWnd, id))
-					atttempt = 50;
-				if(atttempt++ >= 50)
-					::KillTimer(hWnd, id);
-			});
-		}
-	}
-
+	// The only taskbar interception mechanism, and the only writer of UxSubclass
+	// on a taskbar: the prop holds the ORIGINAL WNDPROC, which is what unhook
+	// restores and what TaskbarProc calls through. A second, never-called
+	// mechanism used to store the CONTEXTMENUSUBCLASS sentinel in the same prop
+	// while unhook restored whatever it found - so had it ever run, it would
+	// have installed a constant as the taskbar's window procedure. It is gone;
+	// the prop now has exactly one meaning, which is what lets
+	// ContextMenu.cpp's `0 == GetPropW(hwnd.owner, UxSubclass)` gate read as
+	// "this window is not one we intercept".
+	//
+	// GWLP_WNDPROC subclassing requires that unhandled messages reach the
+	// previous procedure - "An application must pass any messages not processed
+	// by the new window procedure to the previous window procedure" - which
+	// TaskbarProc does through the prop.
+	// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowlongptrw
 	static void hook_all()
 	{
 		::EnumWindows([](HWND hWnd, LPARAM)->BOOL {
@@ -818,19 +795,6 @@ struct taskbar_t
 				break;
 			}
 		}
-	}
-	static void unhook_all()
-	{
-		auto &rt = Runtime();
-		std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
-		for(auto &window : rt.taskbar_windows)
-		{
-			window.second.set_long(GWLP_WNDPROC, window.second.prop(UxSubclass));
-			window.second.remove_prop(UxSubclass);
-			rt.taskbar_windows.erase(window.first);
-			break;
-		}
-		rt.taskbar_windows.clear();
 	}
 
 	// No UI Automation call is made on this thread; see TaskbarUiaWorker.
@@ -1668,136 +1632,6 @@ LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 	}
 
 	return wndproc(hWnd, uMsg, wParam, lParam);
-}
-
-LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, [[maybe_unused]] UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
-{
-	if(uMsg == WM_CONTEXTMENU)
-	{
-		auto hTaskbar = reinterpret_cast<HWND>(dwRefData);
-		auto pt = Point::CursorPos();
-		if(taskbar_t::is_allowed_area(hTaskbar, pt))
-		{
-			if(ShowTaskbarContextMenu(hTaskbar, pt, wParam == 0 && lParam == 0? WM_RBUTTONDOWN : WM_CONTEXTMENU))
-				return 0;			
-		}
-	}
-	else if(uMsg == WM_MOUSEACTIVATE)
-	{
-		auto lret = ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
-		auto msg = HIWORD(lParam);
-
-		if(/*msg != WM_LBUTTONDOWN && */msg != WM_RBUTTONDOWN)
-			return lret;
-
-		auto hTaskbar = reinterpret_cast<HWND>(dwRefData);
-		auto pt = Point::CursorPos();
-
-		if(taskbar_t::is_allowed_area(hTaskbar, pt))
-		{
-			int disabled_taskbar = 0;
-			if(RegistryConfig::get(L"\\disable", L"taskbar", disabled_taskbar) && disabled_taskbar == 1)
-				return lret;
-
-			if(msg == WM_RBUTTONDOWN)
-			{
-				Keyboard kb;
-				if(auto count = kb.get_keys_excloude_contextmenu(); count > 0)
-				{
-					if(kb.key_ctrl())
-					{
-						if(count == 2 && kb.key_win())
-							return lret;
-
-						if(count == 1 && !_initializer.has_error())
-						{
-							if(!_initializer.Status.Loaded)
-								_initializer.OnState();
-						}
-					}
-				}
-			}
-
-			if(_initializer.has_error())
-			{
-				if(msg != WM_RBUTTONDOWN)
-					return lret;
-
-				_initializer.OnState();
-
-				if(_initializer.has_error())
-					return lret;
-			}
-			else
-			{
-				if(_initializer.Status.Disabled)
-					return lret;
-			}
-
-			if(!is_registered())
-			{
-				_taskbar_mouse.unhook();
-				taskbar_t::unhook(hWnd);
-			//	for(auto &window : _window_taskbar)
-			//		window.second.remove_prop(UxSubclass);
-				return lret;
-			}
-
-			if(msg == WM_RBUTTONDOWN)
-			{
-				_taskbar_mouse.hook(WH_MOUSE, [](int nCode, WPARAM wParam, LPARAM lParam)->LRESULT
-				{
-					//auto lret = _taskbar_mouse.callnext(nCode, wParam, lParam);
-					if(nCode == HC_ACTION && wParam == WM_RBUTTONUP)
-					{
-						auto mh = reinterpret_cast<MOUSEHOOKSTRUCT *>(lParam);
-						Window window = ::GetParent(mh->hwnd);
-						if(window.is_prop(UxSubclass))
-						{
-							_taskbar_mouse.unhook();
-							::SetFocus(window);
-							ShowTaskbarContextMenu(window, mh->pt, WM_CONTEXTMENU);
-							return 1;
-						}
-					}
-					return _taskbar_mouse.callnext(nCode, wParam, lParam);
-				}, hWnd);
-				
-				return MA_ACTIVATEANDEAT;
-			}
-
-			//if(msg != WM_RBUTTONDOWN)
-			//	::SetFocus(hWnd);
-
-			/*
-			if(msg == WM_RBUTTONDOWN)
-			{
-				::SetFocus(hWnd);
-				//ShowTaskbarContextMenu(hWnd, pt, WM_RBUTTONDOWN);
-				SendMessageW(hWnd, WM_CONTEXTMENU, 0, 0);
-			}
-			*/
-		}
-		return lret;
-	}
-	else if(uMsg == WM_SETTINGCHANGE || uMsg == WM_DISPLAYCHANGE)
-	{
-		// Cached hit-test answers describe a layout that has just changed.
-		taskbar_t::invalidate_hit_cache();
-
-		if(uMsg == WM_SETTINGCHANGE && SPI_SETWORKAREA == wParam && ::GetSystemMetrics(SM_CMONITORS) > 1)
-		{
-			taskbar_t::hook_all(1000);
-		}
-	}
-	else if(uMsg == WM_DESTROY)
-	{
-		taskbar_t::invalidate_hit_cache();
-		taskbar_t::unhook(hWnd);
-		taskbar_t::hook_all(1000);
-	}
-
-	return ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
 void BootstrapOnce()
