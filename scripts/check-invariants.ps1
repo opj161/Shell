@@ -166,6 +166,28 @@ $rules = @(
     # Windows just reported. The correct pattern always writes cch from the
     # query's own cch, which no ARRAYSIZE/_countof/std::size/sizeof expression
     # can produce.
+    # Nothing in this tree creates a cursor - there is no CreateCursor,
+    # CreateIconIndirect or CopyCursor anywhere in it - so every HCURSOR here
+    # came from LoadCursor and is shared. DestroyCursor is explicit:
+    #
+    #   "Do not use this function to destroy a shared cursor. A shared cursor is
+    #    valid as long as the module from which it was loaded remains in memory.
+    #    The following functions obtain a shared cursor: LoadCursor [...]"
+    #   https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroycursor
+    #
+    # and LoadCursor really does hand back the shared one rather than a copy:
+    # "loads the cursor resource only if it has not been loaded; otherwise, it
+    # retrieves the handle to the existing resource"
+    # https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadcursorw
+    #
+    # ContextMenu::Uninitialize ran once per menu and destroyed the process-wide
+    # IDC_ARROW on every right-click. If a cursor is ever genuinely created here,
+    # this rule is the thing to revisit - not the call.
+    @{ Name  = 'A shared cursor must not be destroyed (AGENTS.md)'
+       Dir   = @('src\dll\src', 'src\exe\src', 'src\shared'); Include = @('*.cpp', '*.h')
+       Regex = 'DestroyCursor\s*\('
+       Why   = 'every HCURSOR in this tree comes from LoadCursor, which returns a shared system cursor; DestroyCursor documents that it must not be used on one. Drop the handle instead.' },
+
     # The fourth member of the 'silent wrong answer' family, and the most
     # expensive so far: an out-parameter written by one argument and read by
     # another in the same call.

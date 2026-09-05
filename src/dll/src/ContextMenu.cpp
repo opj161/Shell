@@ -4401,11 +4401,30 @@ namespace Nilesoft
 					font.handle = nullptr;
 				}
 
-				if(hCursor)
-				{
-					::DestroyCursor(hCursor);
-					hCursor = nullptr;
-				}
+				/*
+					Dropped, never destroyed.
+
+					hCursor comes from LoadCursorW(nullptr, IDC_ARROW), and
+					DestroyCursor is explicit that it must not be used here:
+					"Do not use this function to destroy a shared cursor. A
+					shared cursor is valid as long as the module from which it
+					was loaded remains in memory. The following functions obtain
+					a shared cursor: LoadCursor [...]"
+					https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroycursor
+
+					And it is genuinely shared rather than a copy per call:
+					"The LoadCursor function loads the cursor resource only if
+					it has not been loaded; otherwise, it retrieves the handle to
+					the existing resource."
+					https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadcursorw
+
+					So this was the process-wide IDC_ARROW, and Uninitialize
+					runs once per menu - every right-click asked USER32 to
+					destroy the standard arrow that every window in the host
+					shares, including the WM_SETCURSOR handler above which sets
+					it again on the next menu.
+				*/
+				hCursor = nullptr;
 
 				if(_showdelay[0] != UINT32_MAX && _showdelay[1] != UINT32_MAX && _showdelay[0] != _showdelay[1])
 				{
