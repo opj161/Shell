@@ -605,6 +605,9 @@ namespace Nilesoft
 				const ExplorerCommandRegistration *reg{};
 				std::unique_ptr<menuitem_t> item;
 				GUID canonical{};
+				// Carried so the composition pass can report a contribution without
+				// hashing the CLSID a second time.
+				uint32_t hash{};
 			};
 
 			std::vector<ProviderCandidate> candidates;
@@ -617,10 +620,30 @@ namespace Nilesoft
 				if(!explorer_command_matches_any(reg, selection_shape_for_manifest))
 					continue;
 
-				ExplorerCommandIdentity by_clsid;
-				by_clsid.clsid = reg.clsid;
-				if(explorer_command_already_represented(by_clsid, accepted))
-					continue;
+				/*
+					There used to be a CLSID pre-check here, meant to skip a
+					provider the classic menu had already contributed before
+					paying to activate it. It could not fire, and reading it as
+					a working guard is how the cost below went unnoticed.
+
+					`accepted` is seeded from native items with their hash and
+					type only, so every entry's clsid and canonical are
+					GUID_NULL, and the candidate carried no hash. All three
+					rules in explorer_command_already_represented need either a
+					usable GUID on both sides or a non-zero hash, so no native
+					item could ever match. explorer_clsid is set in exactly one
+					place - on items this function itself adds - so there is no
+					arrangement of a real menu in which it would have matched
+					either.
+
+					It cannot be repaired in place: the identity that actually
+					collides is the title hash, and the title comes from
+					GetTitle, which is one of the calls the check exists to
+					avoid. What replaces it is ProviderTiming::shown, which
+					remembers whether this provider's item has *ever* reached a
+					menu and sorts it accordingly - see the ordering in
+					Include/ProviderSchedule.h.
+				*/
 
 				// The same CLSID registered twice is one handler, and asking it
 				// twice costs the menu twice for one item. Previously this fell
@@ -669,6 +692,40 @@ namespace Nilesoft
 				ProviderTiming timing;
 				if(health.classify(hash, shape, &timing))
 				{
+					/*
+						The repaired form of the dead pre-check above: skip a
+						provider whose item this menu already has, without
+						activating it.
+
+						The identity is remembered from the last time this
+						provider answered (ProviderTiming::produced_hash), and it
+						is tested against the native items of the menu being
+						built right now - so this only fires when the verb is
+						already there and the user sees the same menu either way.
+						That is what makes it safe where skipping a *declining*
+						provider would not be: nothing can go missing.
+
+						Bounded rather than trusted forever, so a handler that
+						renames its verb is noticed within
+						DUPLICATE_REFRESH_AFTER menus. record() clears the
+						counter, so the refresh is the answer itself.
+					*/
+					if(timing.produced_hash != 0
+					   && static_cast<uint32_t>(timing.duplicate_skips) + 1
+							  < DUPLICATE_REFRESH_AFTER)
+					{
+						ExplorerCommandIdentity produced;
+						produced.hash = timing.produced_hash;
+						produced.type = timing.produced_type;
+						if(explorer_command_already_represented(produced, accepted))
+						{
+							health.note_duplicate_skip(hash, shape);
+							Diagnostics::session_provider(
+								hash, 0, Diagnostics::ProviderResult::Duplicate);
+							continue;
+						}
+					}
+
 					candidate.has_timing = true;
 					candidate.samples = timing.samples;
 					candidate.best_us = timing.best_us;
@@ -708,6 +765,7 @@ namespace Nilesoft
 
 				PlannedProvider entry;
 				entry.reg = &reg;
+				entry.hash = hash;
 				planned.push_back(std::move(entry));
 			}
 
@@ -813,10 +871,10 @@ namespace Nilesoft
 					(void)cmd.detach();
 
 				auto cost = measured.cost_us;
-				// Two different questions: the call worked (Hidden counts), and
-				// the provider put something in the menu (only Shown counts).
-				health.record(step.hash, shape, cost, filled != FillResult::Failed,
-							  filled == FillResult::Shown);
+				// Only whether the call worked; Hidden counts as working. Whether
+				// the item reached the menu is a different question and a later
+				// one - note_contributed, in the composition pass below.
+				health.record(step.hash, shape, cost, filled != FillResult::Failed);
 				// Hidden is its own word now. Reporting it as Ok made the two
 				// outcomes a reader most needs to separate - the verb reached
 				// the menu, the verb declined - print the same line.
@@ -826,6 +884,14 @@ namespace Nilesoft
 					: filled == FillResult::Hidden ? Diagnostics::ProviderResult::Hidden
 					: state_pending				 ? Diagnostics::ProviderResult::Pending
 												 : Diagnostics::ProviderResult::Ok);
+
+				// What it produced, so the next menu can recognise it as one the
+				// classic menu already carries without paying to activate it.
+				// Recorded here rather than after the identity check below,
+				// because being discarded as a duplicate is precisely the case
+				// this exists to remember.
+				if(filled == FillResult::Shown)
+					health.note_identity(step.hash, shape, item->hash, item->type);
 
 				// The handler's own title, for the report's name directory.
 				// This is the one place it exists: GetTitle takes the selection
@@ -1021,6 +1087,12 @@ namespace Nilesoft
 				root->items.insert(root->items.begin() + static_cast<ptrdiff_t>(insert_at),
 								   item.release());
 				insert_at++;
+
+				// Here, and only here, has this provider actually contributed.
+				// Every `continue` above is a provider that answered, produced a
+				// title, cost the menu its activation and four calls, and added
+				// nothing - which is what the whole budget was going on.
+				health.note_contributed(slot.hash, shape);
 			}
 		}
 

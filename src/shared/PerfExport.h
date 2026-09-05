@@ -130,6 +130,10 @@ namespace Nilesoft
 			//    which is also what a verb that reached the menu reports, so the
 			//    report could not distinguish a composed menu from a handler
 			//    that had nothing to offer. Layout unchanged, meaning added.
+			// 10: a new ProviderResult value 7 means "duplicate" - the provider
+			//    was not activated at all, because the item it would have produced
+			//    is already in this menu. It calls for no remedy, which is why it
+			//    is not one of the deferrals. Layout unchanged, meaning added.
 			//
 			//    The reader refuses a version it does not recognise (see
 			//    perf_export_header_understood below), so until Explorer restarts
@@ -137,7 +141,7 @@ namespace Nilesoft
 			//    That is the existing contract rather than a new cost, and it is
 			//    the reason the number is bumped instead of the old word being
 			//    quietly redefined.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 9;
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 10;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -788,6 +792,7 @@ namespace Nilesoft
 					case 4: return L"quarantined";
 					case 5: return L"deferred(budget)";
 					case 6: return L"hidden";
+					case 7: return L"duplicate";
 					default: return L"ok";
 				}
 			}

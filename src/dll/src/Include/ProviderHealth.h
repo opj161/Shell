@@ -142,8 +142,16 @@ namespace Nilesoft
 			uint16_t budget_deferrals{};
 
 			/*
-				Menus where this provider actually put an item in the menu, as
-				opposed to answering and declining.
+				Menus where this provider's item actually reached the menu, as
+				opposed to the provider merely answering.
+
+				Two ways to answer and contribute nothing, and this counts
+				neither. A handler can decline the selection; or it can produce
+				a title that a native item already carries, in which case the
+				identity check in the composition pass drops it after the whole
+				cost has been paid. Measured over twelve Explorer menus: three
+				to six providers resolved per menu at 33-46 ms, and zero or one
+				items added.
 
 				Measured 2026-09-05 across twelve consecutive Explorer menus,
 				and only visible once ProviderResult::Hidden existed to separate
@@ -166,6 +174,34 @@ namespace Nilesoft
 				item sets this for good.
 			*/
 			uint16_t shown{};
+
+			/*
+				The menu identity this provider last produced, and how many
+				menus in a row it has been skipped for already being there.
+
+				This is what the dead CLSID pre-check in append_explorer_commands
+				needed and did not have. A packaged verb is discarded when a
+				native item already carries the same title, and on this machine
+				that is nearly all of them - three to six providers resolved per
+				menu at 33-46 ms, zero or one items added. The identity that
+				collides is the title hash, which comes from GetTitle, which is
+				one of the calls the check exists to avoid; so it has to be
+				remembered from the last time the provider answered.
+
+				Skipping on this is safe in a way that skipping a *declining*
+				provider is not, and the difference is the whole argument: the
+				decision is made against the native items of the menu being
+				built right now, so it only ever fires when the verb is already
+				in that menu. The user sees the same menu either way. A stale
+				identity cannot hide anything either - if it no longer matches
+				any native item, nothing is skipped.
+
+				`duplicate_skips` bounds it anyway, so a remembered identity is
+				refreshed rather than trusted forever.
+			*/
+			uint32_t produced_hash{};
+			uint32_t produced_type{};
+			uint16_t duplicate_skips{};
 		};
 
 		/*
@@ -253,6 +289,22 @@ namespace Nilesoft
 			of the two, so it gets the wider margin rather than the narrower.
 		*/
 		inline constexpr uint16_t MIN_ANSWERS_BEFORE_DEPRIORITISING = 3;
+
+		/*
+			How many consecutive menus a provider may be skipped as a duplicate
+			before it is resolved once to refresh the identity that is skipping
+			it.
+
+			Smaller than BUDGET_REPROBE_AFTER rather than larger, even though
+			the skip is the safer of the two: a budget deferral costs the user
+			an item, so the refresh interval trades against a visible loss and
+			twenty is already generous. A duplicate skip costs nothing at all -
+			the verb is in the menu either way - so the only thing the interval
+			buys is confidence that the remembered title still describes the
+			handler, and paying one provider's cost every ten menus for that is
+			cheap.
+		*/
+		inline constexpr uint16_t DUPLICATE_REFRESH_AFTER = 10;
 
 		/*
 			Process-lifetime, shared across menu threads, guarded by one lock.
@@ -353,13 +405,69 @@ namespace Nilesoft
 				}
 			}
 
-			// `produced_item` is what separates a provider that contributed to
-			// the menu from one that answered and had nothing to offer. It is
-			// not the same question as `succeeded`: a handler that declines has
-			// succeeded, and about half of them decline any given selection.
+			/*
+				This provider's item reached the menu.
+
+				Separate from record(), and called from the composition pass
+				rather than the resolution pass, because those are two different
+				questions and only the second one is the one worth remembering.
+				A provider can answer, produce a title, and still contribute
+				nothing: if a native item already carries the same title the
+				identity check drops it. Measured 2026-09-05 over twelve
+				Explorer menus - between three and six providers resolved per
+				menu at 33-46 ms, and *zero or one* items added. Everything else
+				was paid for in full and then discarded.
+
+				So "shown" is counted here, where an item is actually inserted,
+				and not at FillResult::Shown, which only means the handler had
+				something to say.
+			*/
+			void note_contributed(uint32_t clsid_hash, SelectionShape shape)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(auto *timing = find(clsid_hash, shape))
+				{
+					// Saturating, and never reset: "has it ever", not "how
+					// recently". One contribution promotes the provider for the
+					// life of the process, which is what makes the
+					// deprioritisation safe to act on at all.
+					if(timing->shown < UINT16_MAX)
+						timing->shown++;
+				}
+			}
+
+			// The menu identity this provider produced, remembered so the next
+			// menu can tell - without activating anything - whether the classic
+			// menu already carries the same item. Recorded whether or not the
+			// item was then accepted: being discarded as a duplicate is exactly
+			// the case this is for.
+			void note_identity(uint32_t clsid_hash, SelectionShape shape,
+							   uint32_t produced_hash, uint32_t produced_type)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(auto *timing = find(clsid_hash, shape))
+				{
+					timing->produced_hash = produced_hash;
+					timing->produced_type = produced_type;
+				}
+			}
+
+			// Skipped because the item it would have produced is already in this
+			// menu. Not a deferral: nothing was refused a turn and nothing is
+			// missing from the menu, so neither since_probe nor budget_deferrals
+			// moves. Only the refresh interval does.
+			void note_duplicate_skip(uint32_t clsid_hash, SelectionShape shape)
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				if(auto *timing = find(clsid_hash, shape))
+				{
+					if(timing->duplicate_skips < UINT16_MAX)
+						timing->duplicate_skips++;
+				}
+			}
+
 			void record(uint32_t clsid_hash, SelectionShape shape,
-						uint32_t microseconds, bool succeeded,
-						bool produced_item = false)
+						uint32_t microseconds, bool succeeded)
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				auto *timing = find(clsid_hash, shape);
@@ -383,18 +491,17 @@ namespace Nilesoft
 				timing->since_probe = 0;
 
 				// It answered, so it is not being starved, whatever the answer
-				// was. Both streaks end here.
+				// was. Every streak ends here, including the duplicate-skip
+				// interval - this call is the refresh it was counting towards.
 				timing->budget_deferrals = 0;
+				timing->duplicate_skips = 0;
 
 				if(!succeeded && timing->failures < UINT16_MAX)
 					timing->failures++;
 
-				// Saturating, and never reset: this is "has it ever", not "how
-				// recently". One shown item promotes the provider for the life
-				// of the process, which is the property that makes the
-				// deprioritisation safe to act on at all.
-				if(produced_item && timing->shown < UINT16_MAX)
-					timing->shown++;
+				// `shown` is deliberately not touched here. It is a fact about
+				// composition, not about the call, and note_contributed above
+				// is where composition reports it.
 			}
 
 			/*

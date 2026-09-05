@@ -880,9 +880,29 @@ TEST(perf_export, the_reader_copies_the_directory_out_of_the_block)
 // the report could not distinguish a composed menu from a handler with nothing
 // to offer, which is the distinction somebody reads it for.
 
+// Version 10 adds value 7, "duplicate": the provider was never activated,
+// because the item it would have produced is already in the menu. Unlike every
+// other way a provider can be left out, this one costs the user nothing.
+
 TEST(perf_export, the_version_is_the_one_this_meaning_belongs_to)
 {
-	CHECK_EQ(PERF_EXPORT_VERSION, 9u);
+	CHECK_EQ(PERF_EXPORT_VERSION, 10u);
+}
+
+TEST(perf_export, a_skipped_duplicate_is_not_a_deferral)
+{
+	CHECK(std::wstring(perf_export_result_name(7)) == L"duplicate");
+
+	// The distinction the two deferral words were split apart to make: a
+	// deferral means the user lost an item and something should be done about
+	// it. A duplicate means the verb is in the menu already, so neither remedy
+	// the Reliability Center offers applies.
+	CHECK(!perf_export_result_is_slow_deferral(7));
+	CHECK(!perf_export_result_is_budget_deferral(7));
+
+	// And it is its own word, not a re-use of any existing one.
+	for(uint32_t v : { 0u, 1u, 2u, 3u, 4u, 5u, 6u })
+		CHECK(std::wstring(perf_export_result_name(7)) != std::wstring(perf_export_result_name(v)));
 }
 
 TEST(perf_export, a_declined_handler_does_not_print_as_a_shown_one)

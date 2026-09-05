@@ -286,7 +286,11 @@ namespace hostprobe
 
 		static std::wstring title_in(HMENU menu, UINT position)
 		{
-			if(!menu || position >= static_cast<UINT>(::GetMenuItemCount(menu)))
+			// In int, not UINT: GetMenuItemCount "returns -1" on failure and
+			// static_cast<UINT>(-1) admits every position.
+			// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuitemcount
+			const auto count = menu ? ::GetMenuItemCount(menu) : -1;
+			if(count <= 0 || static_cast<long long>(position) >= count)
 				return {};
 
 			MENUITEMINFOW query{};

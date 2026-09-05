@@ -144,6 +144,19 @@ namespace Nilesoft
 					the block rather than calling 6 by a name it does not have.
 				*/
 				Hidden,
+
+				/*
+					Skipped without being activated, because the item it would have
+					produced is already in this menu as a native item.
+
+					Its own word rather than silence, and rather than one of the
+					deferrals. A deferral means the user lost an item; this means the
+					user lost nothing and the menu saved a provider's whole cost - so
+					it calls for no remedy at all, and offering quarantine for it
+					would be exactly the confusion DeferredSlow and DeferredBudget
+					were split apart to avoid.
+				*/
+				Duplicate,
 			};
 
 			struct PhaseRecord

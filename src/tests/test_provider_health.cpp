@@ -542,3 +542,95 @@ TEST(provider_health, any_answer_ends_the_budget_deferral_streak)
 	CHECK(health.lookup(A, ONE, &timing));
 	CHECK_EQ(timing.budget_deferrals, 0);
 }
+
+// ---- what a provider produced, and skipping the duplicate ----------------
+//
+// Measured 2026-09-05: three to six providers resolved per Explorer menu at
+// 33-46 ms, and zero or one items added - the rest discarded because a native
+// item already carried the same title. Remembering the identity is what lets
+// the next menu recognise that before paying to activate anything.
+
+TEST(provider_health, the_identity_a_provider_produced_is_remembered)
+{
+	ProviderHealth health;
+	health.record(A, ONE, FAST_US, true);
+	health.note_identity(A, ONE, 0xDEADBEEF, 1);
+
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.produced_hash, 0xDEADBEEFu);
+	CHECK_EQ(timing.produced_type, 1u);
+}
+
+TEST(provider_health, an_unseen_provider_has_no_identity_to_skip_on)
+{
+	// produced_hash 0 is what the caller tests, so it must stay 0 until the
+	// provider has actually answered. Otherwise the very first menu would skip
+	// on an identity nobody has measured.
+	ProviderHealth health;
+	health.record(A, ONE, FAST_US, true);
+
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.produced_hash, 0u);
+}
+
+TEST(provider_health, a_duplicate_skip_costs_the_provider_no_turn)
+{
+	// The distinction from a deferral, and the reason it is a separate counter:
+	// nothing was refused and nothing is missing from the menu, so neither the
+	// slow-provider accounting nor the budget accounting may move.
+	ProviderHealth health;
+	health.record(A, ONE, FAST_US, true);
+	health.note_duplicate_skip(A, ONE);
+	health.note_duplicate_skip(A, ONE);
+
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.duplicate_skips, 2);
+	CHECK_EQ(timing.since_probe, 0);
+	CHECK_EQ(timing.budget_deferrals, 0);
+	CHECK_EQ(timing.deferrals, 0);
+}
+
+TEST(provider_health, answering_refreshes_the_duplicate_interval)
+{
+	// The bound on trusting a remembered title: after DUPLICATE_REFRESH_AFTER
+	// skips the caller resolves the provider once, and that answer restarts the
+	// interval rather than leaving it saturated.
+	ProviderHealth health;
+	health.record(A, ONE, FAST_US, true);
+	for(int i = 0; i < DUPLICATE_REFRESH_AFTER; i++)
+		health.note_duplicate_skip(A, ONE);
+
+	health.record(A, ONE, FAST_US, true);
+
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.duplicate_skips, 0);
+}
+
+TEST(provider_health, contributing_is_counted_apart_from_answering)
+{
+	// record() is the call; note_contributed() is the composition. A provider
+	// that answers on every menu and never reaches one keeps shown == 0, which
+	// is what the scheduler sorts on.
+	ProviderHealth health;
+	health.record(A, ONE, FAST_US, true);
+	health.record(A, ONE, FAST_US, true);
+
+	ProviderTiming timing;
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.shown, 0);
+
+	health.note_contributed(A, ONE);
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.shown, 1);
+
+	// Never reset: one contribution promotes the provider for the life of the
+	// process, which is what makes the deprioritisation safe.
+	health.record(A, ONE, FAST_US, true);
+	CHECK(health.lookup(A, ONE, &timing));
+	CHECK_EQ(timing.shown, 1);
+}
+
