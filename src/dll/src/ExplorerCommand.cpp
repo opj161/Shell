@@ -146,8 +146,59 @@ namespace Nilesoft
 				// item and was recorded as having succeeded. The rule is in
 				// Include/ExplorerCommandState.h so it can be tested without a
 				// handler. docs/refactor/09-remediation-plan.md finding P.
-				auto classified = classify_command_state(cmd->GetState(selection, FALSE, &state),
-														 state);
+				/*
+					The call and the read are sequenced, and they have to be.
+
+					This was one expression:
+
+					    classify_command_state(cmd->GetState(selection, FALSE, &state), state)
+
+					GetState writes `state` through the `[out] pCmdState`
+					pointer it is given
+					(https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getstate),
+					and the second argument reads the same variable. There is no
+					order to rely on:
+
+					  "In C++17 and later, the function expression is evaluated
+					   before any argument expressions or default arguments. The
+					   argument expressions are evaluated in an indeterminate
+					   sequence."
+					  https://learn.microsoft.com/cpp/cpp/function-call-operator-parens
+
+					  "Function-call operator. The function-call expression and
+					   all arguments to a function [...] are evaluated and all
+					   side effects completed prior to entry to the function.
+					   There is no specified order of evaluation among the
+					   arguments or the function-call expression."
+					  https://learn.microsoft.com/cpp/cpp/semantics-of-expressions
+
+					So this is not undefined behaviour - it is unspecified
+					order, and unspecified is all it takes. MSVC materialises
+					arguments right to left: `state` was copied while it still
+					held the ECS_ENABLED initialiser above, and the write landed
+					afterwards, too late to be seen. ECS_ENABLED is 0 and
+					ECS_HIDDEN is 0x2
+					(https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/ne-shobjidl_core-_expcmdstate),
+					so the flags word classify_command_state tested was always
+					zero and `state & ECS_HIDDEN` was always false.
+
+					classify_command_state therefore never received a state word
+					from a handler at all - only the initialiser - so ECS_HIDDEN
+					could not be observed on any menu, by any handler, ever.
+					Every packaged verb that answered "not for this selection"
+					went on to GetTitle and, if it had one, into the menu:
+					"Resize with Image Resizer" on a .txt, "Edit in Notepad" on
+					a folder, "Edit with Paint" in a third-party host.
+
+					Measured 2026-09-05 with cl 19.44 /std:c++20: for
+					`f(writer(&v), v)` the writer runs first and the callee still
+					sees the old `v`. The unit suite could not catch it, because
+					classify_command_state is correct and is tested by being
+					handed both values explicitly - AGENTS.md, "a test that only
+					ever calls a function the way the test calls it".
+				*/
+				const auto hr_state = cmd->GetState(selection, FALSE, &state);
+				auto classified = classify_command_state(hr_state, state);
 				state = classified.state;
 
 				switch(classified.verdict)
@@ -436,6 +487,57 @@ namespace Nilesoft
 			}
 
 			auto selection = ensure_selection_array();
+
+			/*
+				What the handlers are about to be asked about, as opposed to what
+				Shell measured for itself.
+
+				These are two different objects. Selected.Items is parsed from the
+				view's own GetSelection; Selected.ItemArray is whatever the capture
+				or the view handed over, and it is the one every IExplorerCommand
+				call takes. Nothing had ever compared them, and a divergence there
+				is indistinguishable from a handler answering wrongly - which is
+				exactly the shape of the open question this is here to settle:
+				handlers that answer ECS_HIDDEN for a .txt when asked directly are
+				recorded as shown when Shell asks them.
+
+				One phase, and the sign carries the verdict: the item count when
+				the array's first item is the same path Selected.Items[0]
+				carries, the negated count when it is not, and 0 when there is
+				no array to ask. So `n=1` is the ordinary healthy reading and
+				anything negative is the divergence.
+
+				Structurally the two cannot disagree today - both routes parse
+				Items from the very array they store - but `if(!ItemArray && ...)`
+				in the IShellBrowser path is exactly the shape that would let
+				them, by keeping one route's array while the other re-parses its
+				own items. One phase a menu is worth knowing that stayed true.
+			*/
+			{
+				Diagnostics::MenuPerfScope perf(L"explorer.commands.selection");
+				long verdict = 0;
+				DWORD counted = 0;
+				if(selection && SUCCEEDED(selection->GetCount(&counted)))
+				{
+					verdict = static_cast<long>(counted);
+					IShellItem *first = nullptr;
+					if(!Selected.Items.empty() && Selected.Items[0]
+					   && SUCCEEDED(selection->GetItemAt(0, &first)) && first)
+					{
+						LPWSTR path = nullptr;
+						// SIGDN_FILESYSPATH is the form Selections stores.
+						// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellitem-getdisplayname
+						if(SUCCEEDED(first->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path)
+						{
+							if(!Selected.Items[0]->Path.equals(path, true))
+								verdict = -verdict;
+							::CoTaskMemFree(path);
+						}
+						first->Release();
+					}
+				}
+				perf.annotate(verdict);
+			}
 
 			// O(1). Queues a refresh if the catalog is past its TTL and serves
 			// the previous one meanwhile; only the very first menu in a process

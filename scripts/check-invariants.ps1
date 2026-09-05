@@ -1,4 +1,4 @@
-# Fails the build when a defect or pattern the refactor removed comes back.
+﻿# Fails the build when a defect or pattern the refactor removed comes back.
 #
 #   powershell -NoProfile -File scripts\check-invariants.ps1
 #
@@ -166,6 +166,29 @@ $rules = @(
     # Windows just reported. The correct pattern always writes cch from the
     # query's own cch, which no ARRAYSIZE/_countof/std::size/sizeof expression
     # can produce.
+    # The fourth member of the 'silent wrong answer' family, and the most
+    # expensive so far: an out-parameter written by one argument and read by
+    # another in the same call.
+    #
+    #     classify_command_state(cmd->GetState(sel, FALSE, &state), state)
+    #
+    # "The argument expressions are evaluated in an indeterminate sequence"
+    # (https://learn.microsoft.com/cpp/cpp/function-call-operator-parens) and
+    # "There is no specified order of evaluation among the arguments"
+    # (https://learn.microsoft.com/cpp/cpp/semantics-of-expressions). MSVC
+    # materialises right to left, so `state` was read while it still held its
+    # initialiser and the handler's answer was thrown away. ECS_ENABLED is 0,
+    # so every packaged verb read as "not hidden" and ECS_HIDDEN was never
+    # once observed - measured live 2026-09-05, and invisible to the suite
+    # because the callee is correct and is tested by being handed both values.
+    #
+    # Keyed narrowly: an inner call taking `&name` sitting in an argument list
+    # that also passes bare `name`. Sequence the call into its own statement.
+    @{ Name  = 'An out-parameter must not be written and read in one argument list (AGENTS.md)'
+       Dir   = @('src\dll\src', 'src\exe\src', 'src\shared', 'src\tests\hostprobe'); Include = @('*.cpp', '*.h')
+       Regex = '[\w:>.\-]+\s*\(\s*[^;()]*[\w:>.\-]+\s*\([^;()]*&(\w+)\s*\)\s*,\s*\1\s*[,)]'
+       Why   = 'the argument that reads the variable may be evaluated before the call that writes it - MSVC evaluates right to left, so the read wins and the out-parameter is silently discarded. Give the inner call its own statement and pass the result.' },
+
     @{ Name  = 'Menu item text must use the documented two-call GetMenuItemInfo (AGENTS.md)'
        Dir   = @('src\dll\src', 'src\tests\hostprobe'); Include = @('*.cpp', '*.h')
        Regex = '\bcch\s*=\s*(ARRAYSIZE|_countof|std::size|sizeof)\b'
