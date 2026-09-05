@@ -247,16 +247,22 @@ bool disable_modern(bool register_redirect)
 
 	if(state == TreatAsState::absent || state == TreatAsState::foreign)
 		return true;
+
+	// Every give-up below says which one it was. The install branch above was
+	// given that treatment when the borrow was fixed and this branch was not,
+	// which left the *removal* path - the one that fails outright on a stock
+	// machine, and the reason the installer could not uninstall - reporting
+	// nothing at all.
 	if(state != TreatAsState::ours)
-		return false;
+		return report_treatas(L"cannot read it, so leaving it alone", state, 0);
 
 	auto rc = RemoveTreatAsIfOurs();
 	if(rc != ERROR_ACCESS_DENIED)
-		return rc == ERROR_SUCCESS;
+		return rc == ERROR_SUCCESS ? true : report_treatas(L"remove failed", state, rc);
 
 	BorrowedKeyAccess borrowed(borrow_report);
 	if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TreatAsKey, DELETE))
-		return false;
+		return report_treatas(L"could not borrow delete access", state, ERROR_ACCESS_DENIED);
 
 	rc = RemoveTreatAsIfOurs();
 	if(rc == ERROR_SUCCESS)
@@ -265,7 +271,7 @@ bool disable_modern(bool register_redirect)
 		return true;
 	}
 	borrowed.restore();
-	return false;
+	return report_treatas(L"remove failed even with borrowed access", state, rc);
 }
 
 //printf("Please wait shell we'll process your command \n");
@@ -768,6 +774,62 @@ static int BuildPerfReport(bool detailed, string &out)
 			// Every session here was declined or failed before the menu was
 			// composed. A row of zeroes would read as a fast menu.
 			report.append(L"    pre-display  no menu of Shell's own was displayed\r\n");
+		}
+
+		/*
+			The host's own share, beside Shell's, because the line above on its
+			own is the reason this was misdiagnosed for a whole investigation.
+
+			`pre-display` measures the hook being entered to the menu being
+			shown. The user's stopwatch starts earlier - at the right-click -
+			and between the two the host builds the classic menu: it runs every
+			registered IContextMenu handler and all of the shell's own legacy
+			verb machinery. None of that is Shell's, and none of it was visible,
+			so a slow menu had only Shell's numbers to be blamed on.
+
+			Measured on the development machine 2026-09-05, thirteen menus:
+			pre-display 61 ms median against 312 ms median before the hook was
+			even reached. Confirmed independently by building the same menu from
+			outside Explorer (267-347 ms), and shown to be nearly independent of
+			file type - an extension with nothing registered for it still cost
+			276-315 ms.
+
+			So this line is the first question a reader should be able to
+			answer: is the menu slow because of Shell, or because of what the
+			host does before Shell is called? Printed whenever any session
+			carries it; a host that calls TrackPopupMenu from outside message
+			dispatch records -1 and is skipped rather than averaged in.
+		*/
+		{
+			uint64_t host_total = 0;
+			uint32_t host_n = 0, host_worst = 0;
+			for(uint32_t r = 0; r < written; r++)
+			{
+				for(uint32_t phase = 0; phase < records[r].phase_count
+					&& phase < PERF_EXPORT_PHASES; phase++)
+				{
+					if(0 != ::wcscmp(records[r].phases[phase].name, L"host.input_to_hook"))
+						continue;
+					if(records[r].phases[phase].count < 0)
+						break;			// not measurable for this session
+					auto ms = static_cast<uint32_t>(records[r].phases[phase].count);
+					host_total += ms;
+					if(ms > host_worst)
+						host_worst = ms;
+					host_n++;
+					break;
+				}
+			}
+
+			if(host_n)
+			{
+				report.append_format(
+					L"    host menu    avg %u ms   worst %u ms   n=%u   "
+					L"(before Shell is called - the host's own handlers)\r\n",
+					static_cast<unsigned>(host_total / host_n),
+					static_cast<unsigned>(host_worst),
+					static_cast<unsigned>(host_n));
+			}
 		}
 
 		// Decisions, but only the ones that happened - a row of zeroes for the

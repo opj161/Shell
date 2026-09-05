@@ -1108,6 +1108,49 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	// than as of bootstrap. Plain data only - this is an SEH function.
 	refresh_interception_status();
 
+	/*
+		How long the host took to get here, which is the half of the latency
+		no report has ever shown.
+
+		Every phase below measures from this point on. But the user's stopwatch
+		starts at the right-click, and between the click and this hook the host
+		builds the classic menu: it instantiates every registered IContextMenu
+		handler and calls QueryContextMenu on each. On this machine that is
+		twenty distinct CLSIDs. None of it is Shell's, and until now none of it
+		was visible either - so a menu that felt slow could be blamed on the
+		only numbers that existed, which were Shell's.
+
+		GetMessageTime "specifies the elapsed time, in milliseconds, from the
+		time the system was started to the time the message was created (that
+		is, placed in the thread's message queue)" for "the last message
+		retrieved by the GetMessage function"
+		(https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessagetime),
+		and GetTickCount is the same origin and unit
+		(https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-winuser-gettickcount).
+		Inside this hook the thread is still dispatching the message the
+		right-click produced, so the difference is input-to-hook.
+
+		Two things make it honest rather than a plausible-looking number.
+		The documented subtraction is the one to use - "To calculate time
+		delays between messages, subtract the time of the first message from
+		the time of the second message (ignoring overflow)" - so it is done in
+		int32 and allowed to wrap. And a host that calls TrackPopupMenu from
+		somewhere other than message dispatch leaves GetMessageTime describing
+		an unrelated message; a delta outside a plausible window is reported as
+		-1 rather than as a measurement, because "we cannot tell" and "it was
+		fast" must not print the same.
+	*/
+	{
+		const auto msg_time = static_cast<int32_t>(::GetMessageTime());
+		const auto now_time = static_cast<int32_t>(::GetTickCount());
+		const auto delta = now_time - msg_time;		// wraps correctly in int32
+		perf::session_phase(L"host.input_to_hook",
+							(delta >= 0 && delta < 10000)
+								? static_cast<uint32_t>(delta) * 1000u
+								: 0u,
+							(delta >= 0 && delta < 10000) ? delta : -1);
+	}
+
 	// SEH function: cannot hold an object that requires unwinding.
 	auto perf_pre_display = perf::menu_perf_begin();
 
