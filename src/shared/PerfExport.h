@@ -125,6 +125,11 @@ namespace Nilesoft
 			//    that could not be acted on. The layout is unchanged; the
 			//    *meaning* of a field is, which is exactly what a version is
 			//    for. docs/refactor/09-remediation-plan.md R1.2.
+			// 9: a new ProviderResult value 6 means "hidden" - the handler
+			//    answered and declined this selection. It was reported as `ok`,
+			//    which is also what a verb that reached the menu reports, so the
+			//    report could not distinguish a composed menu from a handler
+			//    that had nothing to offer. Layout unchanged, meaning added.
 			//
 			//    The reader refuses a version it does not recognise (see
 			//    perf_export_header_understood below), so until Explorer restarts
@@ -132,7 +137,7 @@ namespace Nilesoft
 			//    That is the existing contract rather than a new cost, and it is
 			//    the reason the number is bumped instead of the old word being
 			//    quietly redefined.
-			inline constexpr uint32_t PERF_EXPORT_VERSION = 8;
+			inline constexpr uint32_t PERF_EXPORT_VERSION = 9;
 
 			// Caps. Deliberately smaller than the in-process ring: this is a
 			// window onto recent activity, not an archive, and every byte here
@@ -782,6 +787,7 @@ namespace Nilesoft
 					case 3: return L"deferred(slow)";
 					case 4: return L"quarantined";
 					case 5: return L"deferred(budget)";
+					case 6: return L"hidden";
 					default: return L"ok";
 				}
 			}

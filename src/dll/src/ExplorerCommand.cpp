@@ -380,7 +380,8 @@ namespace Nilesoft
 			if(Selected.Window.id == WINDOW_TASKBAR || Selected.Window.id == WINDOW_SYSMENU)
 				return;
 
-			std::vector<ExplorerCommandKind> kinds;
+			ExplorerCommandSelection selection_shape_for_manifest;
+			auto &kinds = selection_shape_for_manifest.kinds;
 			if(Selected.Background)
 				kinds.push_back(ExplorerCommandKind::DirectoryBackground);
 			if(Selected.count.FILE)
@@ -391,6 +392,48 @@ namespace Nilesoft
 				kinds.push_back(ExplorerCommandKind::Drive);
 			if(kinds.empty())
 				return;
+
+			/*
+				The extensions a dotted ItemType is matched against.
+
+				Only the files: PathItem::Extension is set on the File branch of
+				Selections and left empty everywhere else, so a directory
+				contributes nothing here and cannot make an extension-scoped
+				verb match. Distinct values only - a hundred .txt files ask the
+				same question once.
+
+				`Extension` already carries the leading dot (Selections.cpp
+				stores `Name.find_last(L'.')`), which is the form the manifest
+				uses, so neither side needs normalising. It is empty for a file
+				with no extension, and an empty string must not be pushed: it
+				would compare equal to nothing a manifest can write, but it
+				would also make `extensions` non-empty for no reason. Note that
+				string::c_str() answers nullptr for an empty string, so the
+				emptiness check comes before the construction, never after.
+			*/
+			auto &extensions = selection_shape_for_manifest.extensions;
+			if(Selected.count.FILE)
+			{
+				extensions.reserve(Selected.Items.size());
+				for(auto path_item : Selected.Items)
+				{
+					if(!path_item || !path_item->IsFile() || path_item->Extension.empty())
+						continue;
+
+					std::wstring ext(path_item->Extension.c_str());
+					bool seen = false;
+					for(const auto &have : extensions)
+					{
+						if(explorer_command_ieq(have, ext))
+						{
+							seen = true;
+							break;
+						}
+					}
+					if(!seen)
+						extensions.push_back(std::move(ext));
+				}
+			}
 
 			auto selection = ensure_selection_array();
 
@@ -469,7 +512,7 @@ namespace Nilesoft
 
 			for(const auto &reg : regs)
 			{
-				if(!explorer_command_matches_any(reg, kinds))
+				if(!explorer_command_matches_any(reg, selection_shape_for_manifest))
 					continue;
 
 				ExplorerCommandIdentity by_clsid;
@@ -661,8 +704,13 @@ namespace Nilesoft
 
 				auto cost = measured.cost_us;
 				health.record(step.hash, shape, cost, filled != FillResult::Failed);
+				// Hidden is its own word now. Reporting it as Ok made the two
+				// outcomes a reader most needs to separate - the verb reached
+				// the menu, the verb declined - print the same line.
+				// Include/Diagnostics/DiagnosticsRing.h, ProviderResult::Hidden.
 				Diagnostics::session_provider(step.hash, cost,
 					filled == FillResult::Failed ? Diagnostics::ProviderResult::Failed
+					: filled == FillResult::Hidden ? Diagnostics::ProviderResult::Hidden
 					: state_pending				 ? Diagnostics::ProviderResult::Pending
 												 : Diagnostics::ProviderResult::Ok);
 
@@ -789,6 +837,48 @@ namespace Nilesoft
 				Selected.loader.contextmenuhandler ? ProviderLifetime::ThisMenuOnly
 												   : ProviderLifetime::AcrossMenus);
 
+			/*
+				Where the block goes, before anything is published into it.
+
+				These items used to be appended at the very end of `root->items`,
+				which put every one of them *after* the host's trailing
+				Properties group - and nothing moved them afterwards. They carry
+				Position::Auto, and a configuration rule cannot name them: the
+				stock rules key on canonical ids (id.copy_as_path, id.send_to)
+				and on name patterns, and a packaged verb has neither.
+
+				The visible effect was worse than "one item in the wrong place",
+				because *which* verbs land here changes on every right-click. A
+				verb that also exists as a native item is dropped by the identity
+				check below and is never seen twice; a verb with no native twin
+				is not, and appears alone under Properties. Which of them get
+				that far is decided by the whole-menu budget, so two openings of
+				the same menu can show none, one or two stragglers, and a
+				different pair each time. Measured 2026-09-05 against a live
+				explorer.exe: one background menu resolved only PowerRename and
+				showed exactly it below Properties; the next resolved PowerRename,
+				NanaZip and "Open with Code", and showed the first two below
+				Properties while the third was deduplicated against the native
+				item and stayed in place.
+
+				So the block goes before the last separator instead. That is the
+				boundary of the trailing group in every native menu measured
+				here - a file menu ends "... Cut Copy | Create shortcut Delete |
+				Properties", a folder background menu ends "... WizTree |
+				Properties" - and it keeps the host's own last group last, which
+				is the part of the menu a user navigates by. A menu with no
+				separator at all keeps the previous behaviour and appends.
+			*/
+			size_t insert_at = root->items.size();
+			for(size_t i = root->items.size(); i-- > 0;)
+			{
+				if(root->items[i] && root->items[i]->is_separator())
+				{
+					insert_at = i;
+					break;
+				}
+			}
+
 			// Registration order, for both what is shown and which of two
 			// providers claiming the same identity wins it.
 			for(auto &slot : planned)
@@ -811,7 +901,13 @@ namespace Nilesoft
 				else
 					item->native_popup.materialized = true;
 				accepted.push_back(identity);
-				root->items.push_back(item.release());
+
+				// Registration order is preserved inside the block by advancing
+				// the cursor, rather than every item claiming the same index and
+				// arriving reversed.
+				root->items.insert(root->items.begin() + static_cast<ptrdiff_t>(insert_at),
+								   item.release());
+				insert_at++;
 			}
 		}
 

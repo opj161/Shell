@@ -5,30 +5,90 @@
 
 using namespace Nilesoft::Shell;
 
+// A selection to match registrations against. The extension list is the half
+// that did not exist before: a dotted ItemType had nothing to be compared
+// with, so every one of them matched every file.
+static ExplorerCommandSelection sel(std::initializer_list<ExplorerCommandKind> kinds,
+									std::initializer_list<const wchar_t *> extensions = {})
+{
+	ExplorerCommandSelection s;
+	for(auto k : kinds)
+		s.kinds.push_back(k);
+	for(auto e : extensions)
+		s.extensions.push_back(e);
+	return s;
+}
+
 TEST(explorer_command, star_matches_files_only)
 {
-	CHECK(explorer_command_type_matches(L"*", ExplorerCommandKind::File));
-	CHECK(!explorer_command_type_matches(L"*", ExplorerCommandKind::Directory));
-	CHECK(!explorer_command_type_matches(L"*", ExplorerCommandKind::DirectoryBackground));
-	CHECK(!explorer_command_type_matches(L"*", ExplorerCommandKind::Drive));
+	CHECK(explorer_command_type_matches(L"*", sel({ ExplorerCommandKind::File })));
+	CHECK(!explorer_command_type_matches(L"*", sel({ ExplorerCommandKind::Directory })));
+	CHECK(!explorer_command_type_matches(L"*", sel({ ExplorerCommandKind::DirectoryBackground })));
+	CHECK(!explorer_command_type_matches(L"*", sel({ ExplorerCommandKind::Drive })));
+
+	// "*" is every file, so it must not start depending on the extension list.
+	CHECK(explorer_command_type_matches(L"*", sel({ ExplorerCommandKind::File }, { L".png" })));
 }
 
 TEST(explorer_command, directory_and_drive_types)
 {
-	CHECK(explorer_command_type_matches(L"Directory", ExplorerCommandKind::Directory));
-	CHECK(explorer_command_type_matches(L"Directory\\Background", ExplorerCommandKind::DirectoryBackground));
-	CHECK(explorer_command_type_matches(L"Directory/Background", ExplorerCommandKind::DirectoryBackground));
-	CHECK(explorer_command_type_matches(L"Drive", ExplorerCommandKind::Drive));
-	CHECK(!explorer_command_type_matches(L"Directory", ExplorerCommandKind::File));
+	CHECK(explorer_command_type_matches(L"Directory", sel({ ExplorerCommandKind::Directory })));
+	CHECK(explorer_command_type_matches(L"Directory\\Background", sel({ ExplorerCommandKind::DirectoryBackground })));
+	CHECK(explorer_command_type_matches(L"Directory/Background", sel({ ExplorerCommandKind::DirectoryBackground })));
+	CHECK(explorer_command_type_matches(L"Drive", sel({ ExplorerCommandKind::Drive })));
+	CHECK(!explorer_command_type_matches(L"Directory", sel({ ExplorerCommandKind::File })));
 }
 
-TEST(explorer_command, leading_dot_type_matches_files)
+TEST(explorer_command, leading_dot_type_matches_that_extension_only)
 {
 	// desktop4:ItemType/@Type "must begin with a period or be the wildcard *"
 	// https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-desktop4-itemtype
-	CHECK(explorer_command_type_matches(L".zip", ExplorerCommandKind::File));
-	CHECK(explorer_command_type_matches(L".7z", ExplorerCommandKind::File));
-	CHECK(!explorer_command_type_matches(L".zip", ExplorerCommandKind::Directory));
+	//
+	// The dotted form names one extension. This file used to assert the
+	// opposite - that .zip matched any file at all - which is the defect that
+	// put "Create with Designer" on a .md, and is why the assertions below
+	// replace rather than extend it. AGENTS.md: a test that only ever calls a
+	// function the way the test calls it.
+	auto zip = sel({ ExplorerCommandKind::File }, { L".zip" });
+	CHECK(explorer_command_type_matches(L".zip", zip));
+	CHECK(!explorer_command_type_matches(L".7z", zip));
+	CHECK(!explorer_command_type_matches(L".png", zip));
+
+	// Extensions are compared case-insensitively, in both directions.
+	CHECK(explorer_command_type_matches(L".ZIP", zip));
+	CHECK(explorer_command_type_matches(L".zip", sel({ ExplorerCommandKind::File }, { L".ZIP" })));
+
+	// A file with no extension carries none, which matches no dotted type.
+	CHECK(!explorer_command_type_matches(L".zip", sel({ ExplorerCommandKind::File })));
+
+	// A directory never matches a dotted type, whatever else is selected.
+	CHECK(!explorer_command_type_matches(L".zip", sel({ ExplorerCommandKind::Directory }, { L".zip" })));
+}
+
+TEST(explorer_command, mixed_selection_matches_if_any_file_does)
+{
+	// The handler's own GetState takes the whole IShellItemArray and is the
+	// authority on a mixed selection, so this filter must not be stricter than
+	// the registration.
+	auto mixed = sel({ ExplorerCommandKind::File }, { L".txt", L".png" });
+	CHECK(explorer_command_type_matches(L".png", mixed));
+	CHECK(explorer_command_type_matches(L".txt", mixed));
+	CHECK(!explorer_command_type_matches(L".pdf", mixed));
+}
+
+TEST(explorer_command, an_image_verb_stays_off_a_document)
+{
+	// The reported case, as a rule: Photos registers CreateWithDesigner for
+	// image extensions only and answers GetState ECS_ENABLED for anything, so
+	// the manifest is the only gate there is.
+	ExplorerCommandRegistration designer;
+	designer.clsid = GUID{};
+	designer.types = { L".png", L".jpg", L".bmp", L".webp" };
+
+	CHECK(!explorer_command_matches_any(designer, sel({ ExplorerCommandKind::File }, { L".md" })));
+	CHECK(!explorer_command_matches_any(designer, sel({ ExplorerCommandKind::File }, { L".json" })));
+	CHECK(!explorer_command_matches_any(designer, sel({ ExplorerCommandKind::Directory })));
+	CHECK(explorer_command_matches_any(designer, sel({ ExplorerCommandKind::File }, { L".png" })));
 }
 
 TEST(explorer_command, parse_guid_accepts_braced_and_plain)
@@ -63,10 +123,10 @@ TEST(explorer_command, parse_nanazip_style_manifest)
 		return;
 	CHECK_EQ(regs.size(), size_t(1));
 	CHECK_EQ(regs[0].types.size(), size_t(3));
-	std::vector<ExplorerCommandKind> files{ ExplorerCommandKind::File };
-	std::vector<ExplorerCommandKind> dirs{ ExplorerCommandKind::Directory };
-	std::vector<ExplorerCommandKind> drives{ ExplorerCommandKind::Drive };
-	std::vector<ExplorerCommandKind> bg{ ExplorerCommandKind::DirectoryBackground };
+	auto files = sel({ ExplorerCommandKind::File });
+	auto dirs = sel({ ExplorerCommandKind::Directory });
+	auto drives = sel({ ExplorerCommandKind::Drive });
+	auto bg = sel({ ExplorerCommandKind::DirectoryBackground });
 	CHECK(explorer_command_matches_any(regs[0], files));
 	CHECK(explorer_command_matches_any(regs[0], dirs));
 	CHECK(explorer_command_matches_any(regs[0], drives));
@@ -88,8 +148,8 @@ TEST(explorer_command, type_attribute_is_not_itemtype_suffix)
 	if(!parsed || regs.empty())
 		return;
 	CHECK_EQ(regs[0].types.size(), size_t(1));
-	std::vector<ExplorerCommandKind> dirs{ ExplorerCommandKind::Directory };
-	std::vector<ExplorerCommandKind> files{ ExplorerCommandKind::File };
+	auto dirs = sel({ ExplorerCommandKind::Directory });
+	auto files = sel({ ExplorerCommandKind::File });
 	CHECK(explorer_command_matches_any(regs[0], dirs));
 	CHECK(!explorer_command_matches_any(regs[0], files));
 }
@@ -108,7 +168,7 @@ TEST(explorer_command, pretty_printed_type_with_spaces)
 	CHECK(parsed);
 	if(!parsed || regs.empty())
 		return;
-	std::vector<ExplorerCommandKind> files{ ExplorerCommandKind::File };
+	auto files = sel({ ExplorerCommandKind::File });
 	CHECK(explorer_command_matches_any(regs[0], files));
 }
 

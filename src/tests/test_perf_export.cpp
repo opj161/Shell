@@ -873,10 +873,30 @@ TEST(perf_export, the_reader_copies_the_directory_out_of_the_block)
 // to quarantine an extension whose only fault was its neighbours', so the
 // number is bumped rather than the old word quietly redefined.
 // docs/refactor/09-remediation-plan.md R1.2.
+//
+// Version 9 is the same shape of change once more: value 6 was added for
+// "hidden", the handler that answered and declined this selection. It had been
+// reported as "ok" - the same word a verb that reached the menu reports - so
+// the report could not distinguish a composed menu from a handler with nothing
+// to offer, which is the distinction somebody reads it for.
 
 TEST(perf_export, the_version_is_the_one_this_meaning_belongs_to)
 {
-	CHECK_EQ(PERF_EXPORT_VERSION, 8u);
+	CHECK_EQ(PERF_EXPORT_VERSION, 9u);
+}
+
+TEST(perf_export, a_declined_handler_does_not_print_as_a_shown_one)
+{
+	// The two outcomes a reader most needs to separate. Half the handlers on a
+	// normal machine decline any given selection, so "ok" for both made the
+	// common case unreadable.
+	CHECK(std::wstring(perf_export_result_name(6)) == L"hidden");
+	CHECK(std::wstring(perf_export_result_name(6)) != std::wstring(perf_export_result_name(0)));
+
+	// Declining is not a deferral: nothing was refused a turn, and neither
+	// remedy the Reliability Center offers applies to it.
+	CHECK(!perf_export_result_is_slow_deferral(6));
+	CHECK(!perf_export_result_is_budget_deferral(6));
 }
 
 TEST(perf_export, the_two_deferrals_print_as_different_words)

@@ -45,51 +45,113 @@ namespace Nilesoft
 			Drive
 		};
 
-		inline bool explorer_command_type_matches(
-			std::wstring_view type, ExplorerCommandKind kind) noexcept
+		inline bool explorer_command_ieq(std::wstring_view a, std::wstring_view b) noexcept
 		{
-			auto ieq = [](std::wstring_view a, std::wstring_view b) noexcept
+			if(a.size() != b.size())
+				return false;
+			for(size_t i = 0; i < a.size(); i++)
 			{
-				if(a.size() != b.size())
-					return false;
-				for(size_t i = 0; i < a.size(); i++)
-				{
-					auto ca = a[i];
-					auto cb = b[i];
-					if(ca >= L'A' && ca <= L'Z') ca = static_cast<wchar_t>(ca - L'A' + L'a');
-					if(cb >= L'A' && cb <= L'Z') cb = static_cast<wchar_t>(cb - L'A' + L'a');
-					if(ca != cb) return false;
-				}
-				return true;
-			};
+				auto ca = a[i];
+				auto cb = b[i];
+				if(ca >= L'A' && ca <= L'Z') ca = static_cast<wchar_t>(ca - L'A' + L'a');
+				if(cb >= L'A' && cb <= L'Z') cb = static_cast<wchar_t>(cb - L'A' + L'a');
+				if(ca != cb) return false;
+			}
+			return true;
+		}
 
-			// "*" is files. A leading-dot Type is a file extension.
+		/*
+			The selection, reduced to the two things a manifest can be asked
+			about it: which kinds of thing it holds, and - for the files in it -
+			which extensions.
+
+			The extensions are the half that did not exist. `Type` "must begin
+			with a period or be the wildcard `*`"
+			(https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-desktop4-itemtype),
+			and the dotted form names *one* extension - but the match function
+			took only an ExplorerCommandKind, so the extension it had just
+			parsed had nothing to be compared against and every dotted
+			registration answered "yes" for every file.
+
+			That is invisible for a handler that filters itself and loud for one
+			that does not. Measured on this machine 2026-09-05: Photos'
+			CreateWithDesigner and AShellEdit register image extensions only and
+			answer GetState with ECS_ENABLED for a folder, a .md, a .json and a
+			.png alike - they rely on Explorer honouring the manifest, which is
+			the only gate the platform offers them. So "Create with Designer"
+			appeared on every file. Paint, Acrobat and the Office hub register
+			extension lists too and do filter themselves, which is why only
+			these two were ever seen.
+
+			Multi-selection is deliberately permissive: a registration matches
+			when *any* selected file carries the extension. The handler's own
+			GetState takes the whole IShellItemArray and is the authority on a
+			mixed selection; this filter exists only to avoid activating
+			handlers that cannot possibly apply, so it must never be stricter
+			than the registration or it would hide a verb the handler would
+			have shown.
+		*/
+		struct ExplorerCommandSelection
+		{
+			std::vector<ExplorerCommandKind> kinds;
+
+			// Leading dot, as the manifest writes it and as PathItem::Extension
+			// already stores it. Empty when the selection holds no files, and
+			// also when its files have no extension - which is not the same as
+			// "matches anything", and is why a dotted Type matches neither.
+			std::vector<std::wstring> extensions;
+
+			bool has(ExplorerCommandKind kind) const noexcept
+			{
+				for(auto k : kinds)
+				{
+					if(k == kind)
+						return true;
+				}
+				return false;
+			}
+
+			bool has_extension(std::wstring_view ext) const noexcept
+			{
+				for(const auto &have : extensions)
+				{
+					if(explorer_command_ieq(have, ext))
+						return true;
+				}
+				return false;
+			}
+		};
+
+		inline bool explorer_command_type_matches(
+			std::wstring_view type, const ExplorerCommandSelection &selection) noexcept
+		{
+			// "*" is every file. A leading-dot Type is one file extension, and
+			// is only a match when the selection actually contains it.
 			// https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-desktop4-itemtype
 			// https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/integrate-packaged-app-with-file-explorer
 			if(type == L"*")
-				return kind == ExplorerCommandKind::File;
+				return selection.has(ExplorerCommandKind::File);
 			if(!type.empty() && type.front() == L'.')
-				return kind == ExplorerCommandKind::File;
-			if(ieq(type, L"Directory"))
-				return kind == ExplorerCommandKind::Directory;
-			if(ieq(type, L"Directory\\Background") || ieq(type, L"Directory/Background"))
-				return kind == ExplorerCommandKind::DirectoryBackground;
-			if(ieq(type, L"Drive"))
-				return kind == ExplorerCommandKind::Drive;
+				return selection.has(ExplorerCommandKind::File)
+					&& selection.has_extension(type);
+			if(explorer_command_ieq(type, L"Directory"))
+				return selection.has(ExplorerCommandKind::Directory);
+			if(explorer_command_ieq(type, L"Directory\\Background")
+			   || explorer_command_ieq(type, L"Directory/Background"))
+				return selection.has(ExplorerCommandKind::DirectoryBackground);
+			if(explorer_command_ieq(type, L"Drive"))
+				return selection.has(ExplorerCommandKind::Drive);
 			return false;
 		}
 
 		inline bool explorer_command_matches_any(
 			const ExplorerCommandRegistration &reg,
-			const std::vector<ExplorerCommandKind> &kinds) noexcept
+			const ExplorerCommandSelection &selection) noexcept
 		{
 			for(const auto &type : reg.types)
 			{
-				for(auto kind : kinds)
-				{
-					if(explorer_command_type_matches(type, kind))
-						return true;
-				}
+				if(explorer_command_type_matches(type, selection))
+					return true;
 			}
 			return false;
 		}

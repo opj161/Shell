@@ -124,6 +124,26 @@ namespace Nilesoft
 				// Quarantined under a reader that still called 4 by its old
 				// name.
 				DeferredBudget,
+
+				/*
+					The provider answered, and declined this selection.
+
+					FillResult::Hidden used to be reported as Ok, because the
+					call site asked only whether the call had *failed*. Half the
+					handlers on a normal machine decline any given selection -
+					the comment on CommandStateVerdict::Hidden says so - which
+					made Ok the answer for both "this verb is in the menu" and
+					"this verb looked and had nothing to offer", and those are
+					the two states a reader of the report most needs to tell
+					apart. It is what made "Resize with Image Resizer  Ok" on a
+					.json unreadable: equally consistent with the verb being
+					shown and with it being correctly dropped.
+
+					Appended for the same reason DeferredBudget was, and
+					PERF_EXPORT_VERSION moves with it so an older reader refuses
+					the block rather than calling 6 by a name it does not have.
+				*/
+				Hidden,
 			};
 
 			struct PhaseRecord
