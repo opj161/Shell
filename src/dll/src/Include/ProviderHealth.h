@@ -140,6 +140,32 @@ namespace Nilesoft
 			// In-process only. PerfExportProvider is a separate layout, so this
 			// does not touch PERF_EXPORT_VERSION.
 			uint16_t budget_deferrals{};
+
+			/*
+				Menus where this provider actually put an item in the menu, as
+				opposed to answering and declining.
+
+				Measured 2026-09-05 across twelve consecutive Explorer menus,
+				and only visible once ProviderResult::Hidden existed to separate
+				"declined" from "shown": 38.2% of the whole provider budget -
+				17.8 ms of every menu - went to six handlers that declined every
+				single time. Five OneDrive commands and Adobe's notification
+				client, none of which has ever produced a title on this machine.
+				They decline through the empty-title branch rather than
+				ECS_HIDDEN, so each pays for GetState *and* GetTitle on every
+				right-click, forever, while genuinely useful verbs behind them
+				were refused for budget.
+
+				Counted rather than flagged, because "has never once shown
+				anything" is the only form of this that is safe to act on. A
+				provider that declines *this* selection is the ordinary case and
+				says nothing about the next one - Image Resizer declines a .txt
+				and accepts a .png at the same SelectionShape - so a memory of
+				"it declined" would demote a working handler. A memory of "it
+				has never, in this process, produced an item" cannot: one shown
+				item sets this for good.
+			*/
+			uint16_t shown{};
 		};
 
 		/*
@@ -208,6 +234,25 @@ namespace Nilesoft
 			20 is roughly "within one sitting" rather than "eventually".
 		*/
 		inline constexpr uint16_t BUDGET_REPROBE_AFTER = 20;
+
+		/*
+			How many answers a provider gets before "it has never shown
+			anything" is allowed to cost it its place in the queue.
+
+			This is a *sort key*, never an exclusion - see the ordering in
+			Include/ProviderSchedule.h - so the price of being wrong is one
+			place further down a queue, not disappearance. Three keeps it from
+			acting on the first menu in a process, where a handler may decline
+			for reasons that have nothing to do with the selection, and is
+			reached within a few right-clicks for the handlers this is about,
+			which have declined every menu since the machine booted.
+
+			Deliberately larger than MIN_SAMPLES_TO_JUDGE. That threshold guards
+			a judgement that removes a provider from the menu; this one guards a
+			judgement that reorders it, but it is the more selection-dependent
+			of the two, so it gets the wider margin rather than the narrower.
+		*/
+		inline constexpr uint16_t MIN_ANSWERS_BEFORE_DEPRIORITISING = 3;
 
 		/*
 			Process-lifetime, shared across menu threads, guarded by one lock.
@@ -308,8 +353,13 @@ namespace Nilesoft
 				}
 			}
 
+			// `produced_item` is what separates a provider that contributed to
+			// the menu from one that answered and had nothing to offer. It is
+			// not the same question as `succeeded`: a handler that declines has
+			// succeeded, and about half of them decline any given selection.
 			void record(uint32_t clsid_hash, SelectionShape shape,
-						uint32_t microseconds, bool succeeded)
+						uint32_t microseconds, bool succeeded,
+						bool produced_item = false)
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
 				auto *timing = find(clsid_hash, shape);
@@ -338,6 +388,13 @@ namespace Nilesoft
 
 				if(!succeeded && timing->failures < UINT16_MAX)
 					timing->failures++;
+
+				// Saturating, and never reset: this is "has it ever", not "how
+				// recently". One shown item promotes the provider for the life
+				// of the process, which is the property that makes the
+				// deprioritisation safe to act on at all.
+				if(produced_item && timing->shown < UINT16_MAX)
+					timing->shown++;
 			}
 
 			/*

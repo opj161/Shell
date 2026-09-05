@@ -131,6 +131,13 @@ namespace Nilesoft
 			// the other way a provider stops being called, and computed by the
 			// caller for the same reason.
 			bool budget_reprobe_due{};
+
+			// It has answered at least MIN_ANSWERS_BEFORE_DEPRIORITISING times
+			// and has never once put an item in the menu. A sort key only - see
+			// the ordering below - because "has nothing to offer so far" is a
+			// weaker statement than "is slow", and the remedy has to be
+			// correspondingly weaker. Include/ProviderHealth.h, ProviderTiming::shown.
+			bool never_shown{};
 		};
 
 		struct ProviderPlan
@@ -235,11 +242,36 @@ namespace Nilesoft
 					unknown.push_back(&c);
 			}
 
-			// Cheapest first, ties by registration order so the plan is
-			// deterministic for a given set of timings.
+			/*
+				Providers that have contributed an item first, then cheapest,
+				then registration order so the plan stays deterministic.
+
+				The first key is new, and it is the answer to a measurement the
+				report could not make until Hidden stopped being reported as Ok:
+				38.2% of the whole budget - 17.8 ms of every menu - went to six
+				handlers that answered and declined on all twelve menus sampled,
+				and have never produced a title on this machine at all. Ordering
+				by cost alone made that *worse* rather than better, because they
+				are individually cheap (3.6-4.1 ms), so cheapest-first put every
+				one of them ahead of the verbs a user actually sees, and the
+				refusals landed on the tail that had something to offer.
+
+				A sort key rather than a deferral, deliberately. Declining is a
+				statement about this selection, not about the handler: Image
+				Resizer declines a .txt and accepts a .png at the same shape. So
+				a demoted provider is still planned, still called whenever the
+				budget reaches it, and is promoted permanently by a single shown
+				item (ProviderTiming::shown never resets). And when the budget
+				does not reach it, note_budget_deferral accrues exactly as
+				before, so BUDGET_REPROBE_AFTER still forces its turn within
+				twenty menus - the sort cannot starve anything the existing
+				machinery would not already have rescued.
+			*/
 			std::stable_sort(known.begin(), known.end(),
 							 [](const ProviderCandidate *a, const ProviderCandidate *b)
 							 {
+								 if(a->never_shown != b->never_shown)
+									 return !a->never_shown;
 								 auto ea = provider_estimate_us(*a);
 								 auto eb = provider_estimate_us(*b);
 								 if(ea != eb)

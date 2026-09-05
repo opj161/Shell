@@ -694,6 +694,14 @@ namespace Nilesoft
 					candidate.budget_reprobe_due =
 						static_cast<uint32_t>(timing.budget_deferrals) + 1
 							>= BUDGET_REPROBE_AFTER;
+
+					// Has answered, repeatedly, and has never once contributed
+					// an item. Sorts behind the providers that have, and is
+					// promoted permanently by a single shown item. Never an
+					// exclusion - Include/ProviderSchedule.h has why.
+					candidate.never_shown =
+						timing.shown == 0
+						&& timing.samples >= MIN_ANSWERS_BEFORE_DEPRIORITISING;
 				}
 
 				candidates.push_back(candidate);
@@ -805,7 +813,10 @@ namespace Nilesoft
 					(void)cmd.detach();
 
 				auto cost = measured.cost_us;
-				health.record(step.hash, shape, cost, filled != FillResult::Failed);
+				// Two different questions: the call worked (Hidden counts), and
+				// the provider put something in the menu (only Shown counts).
+				health.record(step.hash, shape, cost, filled != FillResult::Failed,
+							  filled == FillResult::Shown);
 				// Hidden is its own word now. Reporting it as Ok made the two
 				// outcomes a reader most needs to separate - the verb reached
 				// the menu, the verb declined - print the same line.

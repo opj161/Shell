@@ -43,6 +43,18 @@ namespace
 		return c;
 	}
 
+	// A provider that has answered repeatedly and never contributed an item.
+	// Measured on this machine: six such handlers took 38.2% of the whole menu
+	// budget - 17.8 ms per menu - and, being individually cheap, cheapest-first
+	// put every one of them ahead of the verbs a user actually sees.
+	ProviderCandidate never_shown(uint32_t ordinal, uint32_t us)
+	{
+		auto c = known(ordinal, us);
+		c.samples = MIN_ANSWERS_BEFORE_DEPRIORITISING;
+		c.never_shown = true;
+		return c;
+	}
+
 	ProviderCandidate slow(uint32_t ordinal, uint32_t us, bool due)
 	{
 		auto c = known(ordinal, us);
@@ -198,6 +210,58 @@ TEST(provider_schedule, a_runtime_overrun_can_no_longer_starve_the_cheap_tail)
 	CHECK_EQ(resolved[1], 2u);
 	CHECK_EQ(resolved[2], 3u);
 	CHECK_EQ(resolved[3], 0u);
+}
+
+TEST(provider_schedule, a_handler_that_never_contributes_sorts_behind_ones_that_do)
+{
+	// The cheap-but-useless handlers are cheapest, so cost alone puts them
+	// first. Contribution outranks cost: the 9 ms verb that shows something
+	// beats the 1 ms one that never has.
+	std::vector<ProviderCandidate> c{ never_shown(0, 1000), known(1, 9000), never_shown(2, 2000) };
+	auto o = ordinals(plan_providers(c, 0));
+
+	CHECK_EQ(o.size(), (size_t)3);
+	CHECK_EQ(o[0], 1u);
+	// Among the demoted, cheapest-first still applies.
+	CHECK_EQ(o[1], 0u);
+	CHECK_EQ(o[2], 2u);
+}
+
+TEST(provider_schedule, a_demoted_handler_is_still_planned_and_never_deferred_for_it)
+{
+	// The whole safety property. Declining is a statement about this selection,
+	// not about the handler, so the remedy is a place in the queue and never a
+	// removal from it.
+	std::vector<ProviderCandidate> c{ never_shown(0, 1000), never_shown(1, 1000) };
+	auto plan = plan_providers(c, 0);
+
+	CHECK_EQ(plan.order.size(), (size_t)2);
+	CHECK_EQ(plan.deferred.size(), (size_t)0);
+}
+
+TEST(provider_schedule, one_shown_item_restores_a_handlers_place)
+{
+	auto restored = never_shown(0, 1000);
+	restored.never_shown = false;          // ProviderTiming::shown went to 1
+
+	std::vector<ProviderCandidate> c{ known(1, 9000), restored };
+	auto o = ordinals(plan_providers(c, 0));
+
+	CHECK_EQ(o[0], 0u);                    // cheapest again, because it counts again
+	CHECK_EQ(o[1], 1u);
+}
+
+TEST(provider_schedule, demotion_does_not_reach_the_unknown)
+{
+	// never_shown is a key on the known set only. An unsampled provider has not
+	// earned a verdict, so the exploration guarantee is untouched.
+	std::vector<ProviderCandidate> c{ never_shown(0, 1000), unknown(1) };
+	auto o = ordinals(plan_providers(c, 0));
+
+	CHECK_EQ(o.size(), (size_t)2);
+	bool has_unknown = false;
+	for(auto v : o) { if(v == 1u) has_unknown = true; }
+	CHECK(has_unknown);
 }
 
 TEST(provider_schedule, known_providers_are_ordered_cheapest_first)
