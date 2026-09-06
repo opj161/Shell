@@ -240,6 +240,26 @@ $rules = @(
        Regex = '[\w:>.\-]+\s*\(\s*[^;()]*[\w:>.\-]+\s*\([^;()]*&(\w+)\s*\)\s*,\s*\1\s*[,)]'
        Why   = 'the argument that reads the variable may be evaluated before the call that writes it - MSVC evaluates right to left, so the read wins and the out-parameter is silently discarded. Give the inner call its own statement and pass the result.' },
 
+    # Two of these were live at once, and only one of them looked like a bug.
+    #
+    # DwmGetCompositionTimingInfo fills DWM_TIMING_INFO only "when this function
+    # returns successfully"; fix_ugly_flicker zeroed the structure, discarded the
+    # HRESULT and divided by qpcRefreshPeriod - an integer divide by zero on
+    # explorer.exe's UI thread, inside WM_NCCALCSIZE, under no SEH frame.
+    #
+    # SPI_GET* is the read half of a read-modify-restore of a *system* setting.
+    # SPI_GETMENUSHOWDELAY's failure left the sentinel that makes the restore
+    # decline to act, so the override stayed applied for the life of the host.
+    #
+    # Keyed on statement position, which is exactly where the result is thrown
+    # away: wrapped in if(), FAILED(), or assigned, the call does not match. The
+    # SPI_GETSELECTIONFADE site was fail-safe through its initialiser and was
+    # still given the check, so this rule has no exceptions to remember.
+    @{ Name  = 'A Win32 read whose failure is not safe must not discard its result (AGENTS.md)'
+       Dir   = @('src\dll\src', 'src\exe\src', 'src\shared', 'src\tests\hostprobe'); Include = @('*.cpp', '*.h')
+       Regex = '(?m)^[ \t]*::?(SystemParametersInfo(W|A|ForDpi)?\s*\(\s*SPI_GET|DwmGetCompositionTimingInfo\s*\()'
+       Why   = 'the out-parameter is then read as though it had been written. DwmGetCompositionTimingInfo leaves DWM_TIMING_INFO untouched on failure and a zero refresh period divides by zero on the host UI thread; an SPI_GET that fails leaves the read-modify-restore pair without a value to put back, so the override is never taken off. Test the return, or wrap it in FAILED().' },
+
     @{ Name  = 'Menu item text must use the documented two-call GetMenuItemInfo (AGENTS.md)'
        Dir   = @('src\dll\src', 'src\tests\hostprobe'); Include = @('*.cpp', '*.h')
        Regex = '\bcch\s*=\s*(ARRAYSIZE|_countof|std::size|sizeof)\b'

@@ -86,6 +86,7 @@
     <ClInclude Include="..\dll\src\Include\ConfigLifecycle.h" />
     <ClInclude Include="..\dll\src\Include\HostContract.h" />
     <ClInclude Include="..\dll\src\Include\ProviderHealth.h" />
+    <ClInclude Include="..\dll\src\Include\VerticalBlank.h" />
     <ClInclude Include="..\dll\src\Include\IconResource.h" />
     <ClInclude Include="..\dll\src\Include\Mnemonics.h" />
     <ClInclude Include="..\dll\src\Include\Diagnostics\DiagnosticsRing.h" />
@@ -177,6 +178,7 @@
     <ClCompile Include="test_hostprobe_args.cpp" />
     <ClCompile Include="test_detour_enlistment.cpp" />
     <ClCompile Include="test_provider_schedule.cpp" />
+    <ClCompile Include="test_vertical_blank.cpp" />
     <ClCompile Include="test_explorer_command_state.cpp" />
   </ItemGroup>
   <!-- The shipping expression engine, linked into the test binary so expression

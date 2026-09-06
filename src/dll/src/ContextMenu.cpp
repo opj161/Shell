@@ -7,6 +7,7 @@
 #include "Include/Mnemonics.h"
 #include "Include/TypeAhead.h"
 #include "Include/MenuColumns.h"
+#include "Include/VerticalBlank.h"
 #include "RegistryConfig.h"
 
 using namespace Nilesoft::Diagnostics;
@@ -2812,23 +2813,47 @@ namespace Nilesoft
 			//New-Item -Path "HKCU:\Software\Control Panel\Desktop" -Name MenuShowDelay -Force -Value 200
 			if(_context.eval_number(sets->showdelay, obj))
 			{
-				::SystemParametersInfoW(SPI_GETMENUSHOWDELAY, 0, &_showdelay[0], 0);
-				_showdelay[1] = obj;
+				/*
+					Read what the system has before overriding it, and give up
+					if that read fails.
 
-				if(_showdelay[1] > 4000)
-					_showdelay[1] = 4000;
+					SystemParametersInfoW "returns a nonzero value if the
+					function succeeds" and does not touch pvParam otherwise
+					https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
 
-				if(_showdelay[1] != _showdelay[0])
+					The result was discarded, straight into `_showdelay[0]`,
+					which is the value Uninitialize replays. A failed read left
+					it at its UINT32_MAX initialiser - and the restore declines
+					to act on UINT32_MAX, precisely so it cannot put a sentinel
+					into a system setting. So the override was applied and never
+					taken back: the host's menu show delay stayed changed for as
+					long as the process lived. Same family as the DwmGetComposition-
+					TimingInfo read in fix_ugly_flicker - an out-parameter used
+					without asking whether it was written.
+				*/
+				uint32_t configured = obj;
+				if(!::SystemParametersInfoW(SPI_GETMENUSHOWDELAY, 0, &_showdelay[0], 0))
+					_showdelay[0] = UINT32_MAX;
+
+				if(_showdelay[0] != UINT32_MAX)
 				{
-					// fWinIni = 0: change this process's view of the setting and
-					// nothing else. It "can be zero if you do not want to update
-					// the user profile or broadcast the WM_SETTINGCHANGE message";
-					// SPIF_SENDCHANGE (== SPIF_SENDWININICHANGE, WinUser.h) does
-					// broadcast it "to all top-level windows", running every one of
-					// their window procedures - and init_cfg() runs per menu, so
-					// that was two desktop-wide broadcasts per right-click.
-					// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
-					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[1], nullptr, 0);
+					_showdelay[1] = configured;
+
+					if(_showdelay[1] > 4000)
+						_showdelay[1] = 4000;
+
+					if(_showdelay[1] != _showdelay[0])
+					{
+						// fWinIni = 0: change this process's view of the setting and
+						// nothing else. It "can be zero if you do not want to update
+						// the user profile or broadcast the WM_SETTINGCHANGE message";
+						// SPIF_SENDCHANGE (== SPIF_SENDWININICHANGE, WinUser.h) does
+						// broadcast it "to all top-level windows", running every one of
+						// their window procedures - and init_cfg() runs per menu, so
+						// that was two desktop-wide broadcasts per right-click.
+						// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
+						::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[1], nullptr, 0);
+					}
 				}
 			}
 
@@ -5193,9 +5218,21 @@ namespace Nilesoft
 			the point: the cost lands after the phase everybody was measuring.
 			Right-click to pixels is roughly 23 ms with it and 16 ms without.
 
-			It also calls timeBeginPeriod, which raises the *system* timer
-			resolution for the whole of explorer.exe while it is held. That is
-			the part with a blast radius beyond this menu.
+			It also calls timeBeginPeriod while it waits. That used to be
+			written up here as raising the *system* timer resolution, which was
+			the pre-2020 contract and is no longer true:
+
+			  "Prior to Windows 10, version 2004, this function affects a
+			   global Windows setting. For all processes Windows uses the
+			   lowest value (that is, highest resolution) requested by any
+			   process. Starting with Windows 10, version 2004, this function
+			   no longer affects global timer resolution."
+			  https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod
+
+			So the blast radius is the host process, not the machine - which is
+			a weaker argument for deleting the wait than the one this comment
+			used to make. It is now also only requested when there is actually
+			a vertical blank to sleep to, rather than on every menu.
 
 			Not deleted, and the reason is a limit rather than a preference:
 			what it buys is a visual artefact during window creation. A
@@ -5248,51 +5285,71 @@ namespace Nilesoft
 			if(!enabled)
 				return;
 
-			LARGE_INTEGER freq, now0, now1;
-			::QueryPerformanceFrequency(&freq); // hz
+			/*
+				Ask DWM where the vertical blank falls, and believe the answer
+				only if it said it had one.
 
-			// this absurd code makes Sleep() more accurate
-			// - without it, Sleep() is not even +-10ms accurate
-			// - with it, Sleep is around +-1.5 ms accurate
-			TIMECAPS tc;
+				DWM_TIMING_INFO "receives the current composition timing
+				information" only "when this function returns successfully"
+				https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmgetcompositiontiminginfo
 
-			::timeGetDevCaps(&tc, sizeof(tc));
-			int ms_granularity = tc.wPeriodMin;
-			::timeBeginPeriod(ms_granularity); // begin accurate Sleep() !
+				This used to be called with the HRESULT discarded, over a
+				structure that had just been zeroed - so a failed call left
+				qpcRefreshPeriod at 0 and the arithmetic below divided by it.
+				An integer divide by zero here is on explorer.exe's UI thread,
+				inside WM_NCCALCSIZE, under no SEH frame; it terminates the
+				host. Include/VerticalBlank.h has the whole account and the
+				tests.
 
-			::QueryPerformanceCounter(&now0);
-
-			// ask DWM where the vertical blank falls
-			DWM_TIMING_INFO dti;
-			::memset(&dti, 0, sizeof(dti));
+				hwnd must be NULL: "Starting with Windows 8.1, this parameter
+				must be set to NULL. If this parameter is not set to NULL,
+				DwmGetCompositionTimingInfo returns E_INVALIDARG."
+			*/
+			DWM_TIMING_INFO dti{};
 			dti.cbSize = sizeof(dti);
+			if(FAILED(::DwmGetCompositionTimingInfo(nullptr, &dti)))
+				return;
 
-			::DwmGetCompositionTimingInfo(NULL, &dti);
-			::QueryPerformanceCounter(&now1);
+			LARGE_INTEGER freq{}, now{};
+			if(!::QueryPerformanceFrequency(&freq) || !::QueryPerformanceCounter(&now))
+				return;
 
-			// - DWM told us about SOME vertical blank
-			//   - past or future, possibly many frames away
-			// - convert that into the NEXT vertical blank
-			__int64 period = (__int64)dti.qpcRefreshPeriod;
-			__int64 dt = (__int64)dti.qpcVBlank - (__int64)now1.QuadPart;
-			__int64 w, m;
+			// Read after the DWM call, so that call's own cost is inside the
+			// answer rather than added to the sleep.
+			auto wait_ms = vblank_wait_ms(static_cast<long long>(dti.qpcVBlank),
+										  static_cast<long long>(dti.qpcRefreshPeriod),
+										  now.QuadPart, freq.QuadPart);
+			if(wait_ms <= 0)
+				return;
 
-			if(dt >= 0)
-				w = dt / period;
-			else // dt < 0
-			{
-				// reach back to previous period - so m represents consistent position within phase
-				w = -1 + dt / period;
-			}
+			/*
+				Only now raise the timer resolution. Sleep is not even +-10 ms
+				accurate at the default resolution and this whole wait is one
+				refresh period, so it needs the finer timer - but nothing above
+				sleeps, and asking for it before knowing whether there is
+				anything to wait for raised it on every menu that had nothing
+				to do.
 
-			// uncomment this to see worst-case behavior
-			// dt += (sint_64_t)(0.5 * period);
-			m = dt - (period * w);
-			assert(m >= 0);
-			assert(m < period);
-			double m_ms = 1000.0 * m / (double)freq.QuadPart;
-			::Sleep((int)round(m_ms));
-			::timeEndPeriod(ms_granularity);
+				Every timeBeginPeriod must be "matched with a call to
+				timeEndPeriod, specifying the same minimum resolution in both
+				calls", so a request that was refused is not matched, and one
+				that was granted is matched with the value that was granted.
+				https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod
+
+				timeGetDevCaps used to be called with its result discarded over
+				an uninitialised TIMECAPS, which on failure asked for whatever
+				was on the stack.
+			*/
+			TIMECAPS tc{};
+			UINT granularity = 0;
+			if(::timeGetDevCaps(&tc, sizeof(tc)) == TIMERR_NOERROR
+			   && ::timeBeginPeriod(tc.wPeriodMin) == TIMERR_NOERROR)
+				granularity = tc.wPeriodMin;
+
+			::Sleep(static_cast<DWORD>(wait_ms));
+
+			if(granularity)
+				::timeEndPeriod(granularity);
 		}
 		int bbb = 0;
 		int ixi = 0;
@@ -5748,9 +5805,16 @@ namespace Nilesoft
 						}
 					}
 
+					// Already fail-safe through the initialiser - a failed read
+					// leaves 0 and the break below declines to touch anything -
+					// but said out loud, because every other SPI_GET in this
+					// file is a read-modify-restore where discarding the result
+					// leaves a system setting changed. The gate in
+					// scripts/check-invariants.ps1 cannot tell the two apart,
+					// and a rule with an exception nobody can see is worse than
+					// one extra operator here.
 					int pvParam{};
-					::SystemParametersInfoW(SPI_GETSELECTIONFADE, 0, &pvParam, 0);
-					if(!pvParam)
+					if(!::SystemParametersInfoW(SPI_GETSELECTIONFADE, 0, &pvParam, 0) || !pvParam)
 					{
 						// Fade out animation is disabled system-wide
 						break;
