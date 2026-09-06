@@ -24,6 +24,11 @@ $root = Split-Path -Parent $PSScriptRoot
 # Files are listed by recursive search from a root directory. PowerShell's `**`
 # is not a recursive glob - 'src\dll\src\**\*.h' resolves exactly one directory
 # level, which silently skipped src\dll\src\*.h and src\dll\src\Include\*\*.h.
+#
+# Memoized on the (Dir, Include) pair: fifteen rules share four root sets
+# between them, and the walk was repeated for every one of them.
+$sourceCache = @{}
+
 function Get-Sources
 {
     # A list of roots rather than one, because rule 11 has to cover both the
@@ -32,13 +37,37 @@ function Get-Sources
     # that names one directory does not have to say so twice.
     param([string[]]$Dir, [string[]]$Include)
 
+    if($sourceCache.ContainsKey("$Dir|$Include")) { return $sourceCache["$Dir|$Include"] }
+
     $out = @()
     foreach($one in $Dir)
     {
         $full = Join-Path $root $one
         if(-not (Test-Path $full)) { continue }
-        $out += Get-ChildItem -LiteralPath $full -Recurse -File -Include $Include -ErrorAction SilentlyContinue
+
+        # The filter is applied here rather than by -Include, and the difference
+        # is not cosmetic. `Get-ChildItem -LiteralPath <dir> -Recurse -File
+        # -Include '*.cpp','*.h'` answers differently depending on the host:
+        # pwsh 7 returns the 174 sources, Windows PowerShell 5.1 returns 259 -
+        # the same sources plus Shell.def, the .vcxitems and .props files, and
+        # 44 files under obj\, including vc143.pdb, Scenarios.obj and Shell.ttf.
+        #
+        # build.ps1 and .github/workflows/build.yml both launch `powershell`, so
+        # 5.1 is the host these rules actually run under, and every one of them
+        # was being matched - case-insensitively - against build output and a
+        # font. That is a false-positive waiting to happen, and it was the whole
+        # of the six minutes this script took there against ten seconds under
+        # pwsh (measured 2026-09-06). obj\ is excluded by name for the same
+        # reason: a generated file is not a place an invariant can be violated.
+        $out += Get-ChildItem -LiteralPath $full -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                $name = $_.Name
+                $_.FullName -notmatch '\\(obj|bin|packages)\\' -and
+                @($Include | Where-Object { $name -like $_ }).Count -gt 0
+            }
     }
+
+    $sourceCache["$Dir|$Include"] = $out
     return $out
 }
 
@@ -236,6 +265,39 @@ $deferredRules = @()
 # falsify the record; the correct repair is to say so beside the link. Writing
 # `past end-of-file` within two lines of the anchor - markdown wraps - declares
 # it, exactly as a comment declares why a banned pattern is mentioned above.
+#
+# Line counts are memoized, and that is not a micro-optimisation. The anchors
+# cluster on a handful of files - ContextMenu.cpp is cited dozens of times - and
+# this used to `@(Get-Content $target).Count` for every single link, re-reading
+# 187 KB and materialising five thousand PSObjects each time.
+#
+# Measured 2026-09-06 on the same tree: 358 s under Windows PowerShell 5.1
+# against 10 s under pwsh 7. build.ps1 and the CI workflow both launch
+# `powershell`, so the six minutes were being paid on every local build and
+# every CI run, and they look exactly like the rules being slow - which they are
+# not, every one of them scans the whole tree in under 30 ms. Same trap as the
+# missing -NoProfile that AGENTS.md records, one layer down.
+$lineCountCache = @{}
+
+function Get-FileLineCount
+{
+    param([string]$Path)
+
+    if($lineCountCache.ContainsKey($Path)) { return $lineCountCache[$Path] }
+
+    $text = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+    if($null -eq $text) { $lineCountCache[$Path] = 0; return 0 }
+
+    # What @(Get-Content).Count answers: one entry per newline-terminated line,
+    # plus a last line if the file does not end with one. Counted off the raw
+    # text so nothing is split into objects.
+    $count = ([regex]::Matches($text, "`n")).Count
+    if($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $count++ }
+
+    $lineCountCache[$Path] = $count
+    return $count
+}
+
 function Test-DocAnchors
 {
     $count = 0
@@ -260,7 +322,7 @@ function Test-DocAnchors
                 }
                 else
                 {
-                    $have = @(Get-Content -LiteralPath $target).Count
+                    $have = Get-FileLineCount -Path $target
                     if($have -lt $wanted)
                     { $problem = "points at line $wanted of a file with $have" }
                 }
