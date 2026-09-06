@@ -309,19 +309,32 @@ between runs of a cold probe process. Measure the lever in situ with
   built from paths (so no marshaling and no UI-thread cost). If an answer
   changes, clear the memo so the next menu includes it. Worst case is losing a
   verb for exactly one menu, and only when the state actually changed.
-- **The flicker wait.** Costs 8–16 ms *and* calls `timeBeginPeriod`, raising the
-  system timer resolution for all of explorer.exe. Its own comment says nobody
-  could judge whether it works, and the user reports flicker **with it enabled**.
-  A/B it: `HKCU\SOFTWARE\Nilesoft\Shell` → `flicker` = `0`, written from a
-  scheduled task so Explorer sees it. If the flicker is unchanged, delete it.
+- **The flicker wait.** Costs 8–16 ms and calls `timeBeginPeriod` while it
+  waits. This said "raising the system timer resolution for all of
+  explorer.exe"; **corrected 2026-09-06** — that was the contract before
+  Windows 10 2004, and
+  [timeBeginPeriod](https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod)
+  now says it "no longer affects global timer resolution". The blast radius is
+  the host process. Its own comment says nobody could judge whether the wait
+  works, and the user reports flicker **with it enabled**. A/B it:
+  `HKCU\SOFTWARE\Nilesoft\Shell` → `flicker` = `0`, written from a scheduled
+  task so Explorer sees it. If the flicker is unchanged, delete it.
 - **The spinner.** Four `dllhost` COM surrogates were observed launching during
   menu use, each hosting a packaged verb handler (Windows Terminal, PowerToys
   New+, PowerToys PowerRename, VS Code). `CoCreateInstance` on a
   `com:SurrogateServer` handler starts a process on the UI thread — measured at
   60.7 ms cold against ~4 ms warm. `ProviderCache` is thread-local by design, so
   this repeats on each menu thread rather than once per process.
-- **`FileConverterExtension`** costs ~8 ms warm and adds **zero** items, which is
-  the user's — it is supposed to appear. Worth its own investigation.
+- **`FileConverterExtension`** was recorded here as costing ~8 ms warm and
+  adding **zero** items. **Corrected 2026-09-06: that reading was taken on a
+  `.txt`**, where adding nothing is what it should do. Measured on a `.png` it
+  adds a fourteen-entry submenu and costs **266.6 ms cold, 43.6 ms warm** — the
+  most expensive handler on this machine, 7.5× the next one warm. It is a
+  *managed* extension (`InprocServer32 = mscoree.dll`, `RuntimeVersion
+  v4.0.30319`, `CodeBase file:///C:/Program Files/File Converter/…`), which is
+  where the cold cost goes. Its child titles carry one U+200B ZERO WIDTH SPACE
+  per position — `To Gif␋`, `To Gif (low quality)␋␋`, `To Png␋␋␋` — invisible to
+  a reader and distinct to `MenuItemInfo::normalize`. See section 11.
 - **The icon overlay** (doc 16 §5) and **Total Commander** (doc 16 §2, §7) are
   unchanged.
 
@@ -344,9 +357,168 @@ environment — note `vswhere` reports nothing on this machine and the only
 | `handlercost.cpp` | per classic handler: cold, warm, items added |
 | `perfread.cpp` | every host's perf block, **unelevated** |
 
-`shell.exe -report perf` is manifested `requireAdministrator`, so it cannot be
-run from an unelevated agent shell at all; reading the block is a
-`FILE_MAP_READ` of a `Local\` section and needs no privilege, which is what
-`perfread.cpp` does. Worth fixing separately — the elevation requirement is
-inherited from the executable's other verbs and makes the instrument unavailable
-in the situation it was built for.
+`shell.exe -report perf` could not be run from an unelevated agent shell, so
+reading the block directly — a `FILE_MAP_READ` of a `Local\` section, which
+needs no privilege — is what `perfread.cpp` does.
+
+**Corrected 2026-09-06: that was not the product.** This section previously said
+the executable is manifested `requireAdministrator` and called it worth fixing.
+It is manifested **`asInvoker`** — in the source `manifest.xml` and in the
+RT_MANIFEST resource of the installed binary, both read back to check. The
+elevation came from a per-user compatibility layer on this machine alone:
+
+```
+HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers
+    C:\Program Files\Nilesoft Shell\shell.exe = ~ RUNASADMIN
+```
+
+`ShellExecute` on such a path answers `ERROR_ELEVATION_REQUIRED` whatever the
+manifest says. There is nothing to fix in the executable; deleting that value
+restores the unelevated report. Worth knowing which way round it is before
+somebody edits the manifest to solve it.
+
+---
+
+## 11 — The second pass, 2026-09-06
+
+Re-reading the open list against the documentation found one defect that
+terminates the host, one that leaves a system setting changed, and three claims
+in this document that were wrong. The corrections are inline in the sections
+they belong to; this is what the pass produced.
+
+### 11.1 The flicker wait could divide by zero in explorer.exe
+
+`fix_ugly_flicker` called `DwmGetCompositionTimingInfo` with the HRESULT
+discarded, over a `DWM_TIMING_INFO` it had just zeroed. The structure
+"receives the current composition timing information" only "when this function
+returns successfully"
+([DwmGetCompositionTimingInfo](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmgetcompositiontiminginfo)),
+so a failed call left `qpcRefreshPeriod` at 0 — and three lines later:
+
+```cpp
+w = -1 + dt / period;      // period == 0
+```
+
+An integer divide by zero, on explorer.exe's UI thread, inside `WM_NCCALCSIZE`,
+with no SEH frame over it — and `catch(...)` under `/EHsc` could not have caught
+it if there were one. The `assert(m < period)` below it is compiled out of
+Release and could never have said so.
+
+Three smaller members of the same family were in the same function:
+`timeGetDevCaps` was called with its result discarded over an uninitialised
+`TIMECAPS`, `timeBeginPeriod`'s result was discarded while `timeEndPeriod` was
+called unconditionally — the two must be "matched … specifying the same minimum
+resolution in both calls"
+([timeBeginPeriod](https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod))
+— and the wait's arithmetic used `-1 + dt / period` as a floor, which it is for
+every negative `dt` except an exact multiple of the period, where it sleeps a
+whole frame for nothing.
+
+The arithmetic now lives in `Include/VerticalBlank.h` as a function of four
+integers, because **every input that breaks it is one a running desktop never
+produces**. `src/tests/test_vertical_blank.cpp` drives the zeroed structure, the
+zero frequency, the negative period, the exact-multiple floor and the bound.
+The timer resolution is now also raised only when there is actually a blank to
+sleep to, rather than on every menu.
+
+### 11.2 A failed system-setting read left the override applied
+
+`SPI_GETMENUSHOWDELAY` was read with its result discarded, straight into
+`_showdelay[0]` — the value `Uninitialize` replays. `SystemParametersInfoW`
+"returns a nonzero value if the function succeeds" and does not touch `pvParam`
+otherwise, so a failed read left the `UINT32_MAX` initialiser; the restore
+declines to act on `UINT32_MAX`, exactly so it cannot write a sentinel into a
+system setting. The override was therefore applied and never taken back, for the
+life of the host process.
+
+Both of these are the shape AGENTS.md already names — an out-parameter used
+without asking whether it was written — and both are now gated, rule 15. The
+`SPI_GETSELECTIONFADE` site was already fail-safe through its initialiser and
+was given the check anyway, so the rule has no exception for a reader to
+remember.
+
+### 11.3 What the `.png` measurement changed
+
+Sections 7 and 8 were measured on a `.txt`. On a `.png` the same host work is
+**610–745 ms warm**, not 277–344, and `CMF_DEFAULTONLY` on the same item is
+17–21 ms. So the ratio holds and the absolute figure is a property of the file
+type, not only of the machine.
+
+`handlercost.exe` sums every handler registered under `*`,
+`AllFilesystemObjects`, the extension, the ProgID and the folder classes at
+**84 ms warm** on that same `.png`. The composite is 610–745 ms. **So the
+registered `shellex\ContextMenuHandlers` are an eighth of what the host spends**;
+the rest is the shell's own verb machinery — `Open With` resolution, `Send to`
+enumeration, packaged verbs, per-ProgID `shell\` verbs. Section 8's conclusion
+that extensions dominate is unchanged; the assumption that they are all in the
+handler list is not.
+
+### 11.4 The lever Shell already has, and what it is actually worth
+
+`CoCreateInstanceHook` fails an activation whose CLSID a configured rule names,
+returning `E_NOINTERFACE` **without calling through** — for `IID_IContextMenu`,
+`IContextMenu2`, `IContextMenu3` and `IExplorerCommand` (`Main.cpp`,
+`Include/ComActivationPolicy.h`). A `remove(clsid=…)` rule therefore has the
+potential to remove both a handler's items and its whole cost, in configuration,
+with no code change.
+
+**Unverified**: nobody has confirmed that Explorer's own shell-extension
+activation reaches the detour. That is one experiment, and it is the next thing
+to run:
+
+```
+// imports/modify.nss - a handler that adds nothing to any menu here
+remove(clsid='{90AA3A4E-1CBA-4233-B8BB-535773D48449}')
+```
+
+then read `host.input_to_hook` for the same file type before and after.
+`ConfigWatcher` picks the edit up within a couple of seconds — no deploy and no
+Explorer restart — but the file is under `%ProgramFiles%`, so the write itself
+needs elevation.
+
+**And do not oversell it.** The handlers on this machine that add *zero* items
+to a `.png` menu — `{90AA3A4E-…}`, `EPP`, `{a2a9545d-…}`, `{474C98EE-…}`,
+`{B482AE79-…}`, `Open With EncryptionMenu` — total **~10.6 ms warm** between
+them, against a 610–745 ms host cost. They are worth 165 ms *cold*, which is the
+first right-click after a restart. So: a real lever on cold start, a small one on
+the steady state, and section 8's caution against dividing applies to it exactly.
+
+### 11.5 FileConverterExtension: it works, and it is the most expensive thing here
+
+Section 9's entry was wrong (corrected there). What is true:
+
+| | |
+|---|---|
+| registration | `HKLM\SOFTWARE\Classes\*\shellex\ContextMenuHandlers\FileConverterExtension` → `{af9b72b5-f4e4-44b0-a3d9-b55b748efe90}` |
+| server | `mscoree.dll`, `RuntimeVersion v4.0.30319`, `CodeBase file:///C:/Program Files/File Converter/FileConverterExtension.DLL` — a **managed** in-process handler |
+| on a `.txt` | 0 items, ~8 ms — correct, it converts nothing there |
+| on a `.png` | a **14-entry submenu**, 266.6 ms cold, **43.6 ms warm** |
+
+43.6 ms warm is 7.5× the next handler on this machine, and the 267 ms cold is
+the CLR loading into the host. It is not silent and it is not broken at the
+classic-menu level.
+
+Its children carry one `U+200B` ZERO WIDTH SPACE per position — `To Gif`,
+`To Gif (low quality)` with two, `To Png` with three, through `To Pdf` with
+eight — presumably deliberate uniquing on the vendor's part. They are invisible
+to a reader and distinct to `MenuItemInfo::normalize`, which matters because this
+machine runs `modify.remove.duplicate=1`.
+
+**Still open, and it needs a live menu:** whether Shell's *composed* menu carries
+that submenu. Reading the composition path did not produce a mechanism that
+would drop it — `item->type = mii.hSubMenu != nullptr` classifies it as a menu,
+the duplicate check requires an equal hash *and* an equal type, `found_duplicate`
+is per-item (checked: it is declared inside the loop, so it does not truncate a
+level after the first duplicate), and `NativeTreePolicy::TargetedDiscovery`
+defers the children rather than dropping them. One right-click on an image with
+Shift+Alt held (`Include/MenuInspector.h`) answers it directly.
+
+### 11.6 Reversed: the background decline verification
+
+Section 9 proposed moving always-declining providers off the UI thread, and the
+last assessment called it the best remaining Shell-side item. **Withdrawn.** It
+is worth the 17.8 ms section 5 measured, against a total this pass moved to
+370–745 ms — three percent or less — and it costs a second apartment, provider
+objects with no documented agility, and a memo that is stale exactly when the
+answer it caches has changed. The eight-handler tail already sorts last (F6),
+which was the cheap ninety percent of it.
