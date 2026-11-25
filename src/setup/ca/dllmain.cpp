@@ -116,9 +116,11 @@ constexpr auto ROLLBACK_REQUIRED_ERROR = 25003;
 
 // Borrowing write access to TREATAS_PARENT reports through a plain function
 // pointer, which cannot carry an MSIHANDLE. The deferred custom actions here are
-// single-threaded and set this for the duration of one borrow so the diagnostic
-// reaches the MSI log instead of nowhere.
-// https://learn.microsoft.com/windows/win32/api/msiquery/nf-msiquery-msiprocessmessage
+// single-threaded, so BorrowReportScope below parks the current one here for the
+// duration of one action and the diagnostic reaches the MSI log instead of
+// nowhere. MsiProcessMessage is one of the few handle-taking functions a
+// deferred custom action may call.
+// https://learn.microsoft.com/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
 static MSIHANDLE g_borrow_install = 0;
 
 static void BorrowReportToInstaller(const wchar_t *message)
@@ -132,6 +134,19 @@ static void BorrowReportToInstaller(const wchar_t *message)
 	::MsiRecordSetStringW(record, 0, message);
 	::MsiProcessMessage(g_borrow_install, INSTALLMESSAGE_INFO, record);
 }
+
+// The handle is the installer's, and it is only valid for the duration of the
+// custom action it was handed to. Assigning it at entry and relying on every
+// return path to clear it is how a stale MSIHANDLE ends up being passed to
+// MsiProcessMessage later; both entry points below have several returns, and
+// this DLL stays loaded between actions.
+struct BorrowReportScope
+{
+	explicit BorrowReportScope(MSIHANDLE h) { g_borrow_install = h; }
+	~BorrowReportScope() { g_borrow_install = 0; }
+	BorrowReportScope(const BorrowReportScope &) = delete;
+	BorrowReportScope &operator=(const BorrowReportScope &) = delete;
+};
 
 // The custom actions run deferred and no-impersonate, i.e. as LocalSystem, and
 // LocalSystem holds ReadKey on TREATAS_PARENT and nothing more - measured on
@@ -892,7 +907,7 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 {
 	// Route any BorrowedKeyAccess diagnostic into this install's log.
-	g_borrow_install = hInstall;
+	BorrowReportScope borrow_report_scope(hInstall);
 
 	MSI msi(hInstall);
 	std::wstring data;
@@ -957,7 +972,7 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 UINT __stdcall TreatAsRollback(MSIHANDLE hInstall)
 {
 	// Route any BorrowedKeyAccess diagnostic into this install's log.
-	g_borrow_install = hInstall;
+	BorrowReportScope borrow_report_scope(hInstall);
 
 	MSI msi(hInstall);
 	std::wstring data;

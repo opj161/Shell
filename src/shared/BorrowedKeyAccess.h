@@ -128,6 +128,22 @@ namespace Nilesoft
 				   rc != ERROR_SUCCESS)
 					return fail(L"snapshot owner and DACL", rc);
 
+				// A null DACL is not "no DACL to worry about": SetSecurityInfo
+				// documents that "if the value of the SecurityInfo parameter
+				// includes the DACL_SECURITY_INFORMATION flag and the value of
+				// this parameter is set to NULL, full access to the object is
+				// granted to everyone".
+				// https://learn.microsoft.com/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
+				//
+				// So restoring one would hand back the exact machine-wide hole
+				// this class exists to remove, and widening one first *narrows*
+				// the key on the way there. It also cannot be the case worth
+				// borrowing for: a null DACL already grants everyone access, so
+				// the caller's plain write would have succeeded and never
+				// reached here. Refuse rather than reason about it.
+				if(!_saved_dacl)
+					return fail(L"borrow a key whose DACL is null", ERROR_INVALID_ACL);
+
 				PSID admins {};
 				SID_IDENTIFIER_AUTHORITY sia { SECURITY_NT_AUTHORITY };
 				if(!::AllocateAndInitializeSid(&sia, 2, SECURITY_BUILTIN_DOMAIN_RID,
