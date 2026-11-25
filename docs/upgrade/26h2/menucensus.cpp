@@ -336,10 +336,14 @@ static HWND find_descendant(HWND parent, const wchar_t *class_name, int depth)
 // WM_CONTEXTMENU: a person right-clicks it and leaves the menu up, and this
 // reads the menu they opened. It works for any host, so it is also the way to
 // census a folder or a selection that cannot be driven from here.
-static int census_read_open(void)
+static int census_read_open(int wait_seconds)
 {
+    if(wait_seconds < 1)
+        wait_seconds = 20;
+
+    const int polls = wait_seconds * 20; // 50 ms each
     HWND popup = nullptr;
-    for(int i = 0; i < 400 && !popup; i++)
+    for(int i = 0; i < polls && !popup; i++)
     {
         popup = ::FindWindowW(L"#32768", nullptr);
         if(!popup)
@@ -347,8 +351,32 @@ static int census_read_open(void)
     }
     if(!popup)
     {
-        wprintf(L"# read-open: no menu was open within 20 s\n");
+        wprintf(L"# read-open: no menu was open within %d s\n", wait_seconds);
         return 3;
+    }
+
+    // Record what was found, because the obvious ways to identify the surface do
+    // not work and it is worth not trying them again. Measured 2026-11-25 while
+    // a desktop menu was genuinely on screen: the #32768 window reports
+    // IsWindowVisible = 0 and GW_OWNER = NULL, so neither tells you which host
+    // tracked it, or even that the menu is showing.
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindow
+    //
+    // What does identify the surface is the content: a taskbar menu has "Task
+    // Manager" and "Taskbar Settings" in it, a desktop menu has "View", "Sort by"
+    // and "Refresh". Check that before trusting a reading.
+    //
+    // Stale windows are at least not a problem: with no menu open, FindWindow
+    // finds no #32768 at all, so a successful read means a menu really was up.
+    {
+        HWND owner = ::GetWindow(popup, GW_OWNER);
+        wchar_t owner_cls[128] {};
+        if(owner)
+            ::GetClassNameW(owner, owner_cls, 128);
+        wprintf(L"# read-open: popup %p visible=%d owner=%p class=%s\n",
+                static_cast<void *>(popup), ::IsWindowVisible(popup) ? 1 : 0,
+                static_cast<void *>(owner),
+                owner_cls[0] ? owner_cls : L"(none)");
     }
 
     HMENU menu = nullptr;
@@ -571,7 +599,7 @@ int wmain(int argc, wchar_t **argv)
     else if(::lstrcmpiW(argv[1], L"live-taskbar") == 0)
         rc = census_live_taskbar();
     else if(::lstrcmpiW(argv[1], L"read-open") == 0)
-        rc = census_read_open();
+        rc = census_read_open(argc > 2 ? ::_wtoi(argv[2]) : 20);
     else if(::lstrcmpiW(argv[1], L"live-folder") == 0)
     {
         if(argc < 3)

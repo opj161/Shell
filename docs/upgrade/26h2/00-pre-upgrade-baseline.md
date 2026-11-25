@@ -269,6 +269,7 @@ under test rather than the installed copy. The override and the staged
 | Surface | Rows | What it is |
 | --- | --- | --- |
 | `live-desktop` | **27** | what Explorer actually shows on the desktop background |
+| `live-taskbar` | **12** | what Explorer actually shows on the taskbar — recorded with a human right-click, see below |
 | `static-bg-desktop` | 19 | handler contributions, Desktop folder background |
 | `static-bg-repo` | 20 | handler contributions, a normal folder background |
 | `static-bg-drive-c` | 20 | handler contributions, `C:\` background |
@@ -500,12 +501,11 @@ does, the way out is forward (a fix, or a repair install) rather than back.
 
 Two consequences, neither of them done:
 
-- **System Protection state here is unknown.** `RPSessionInterval` is 1, but
-  `Get-ComputerRestorePoint` and the `SystemRestore` CIM class both answer
-  *Access denied* without elevation, so whether protection is on for `C:` and
-  whether any restore point exists could not be read. Worth checking in an
-  elevated prompt, and worth creating one — or a full image — before upgrading,
-  precisely because "Go back" probably is not available.
+- **A restore point now exists**: sequence 42, "before 26H2", created elevated on
+  2026-11-25. System Protection is therefore on for `C:`, which could not be read
+  from this shell at all — `Get-ComputerRestorePoint` and the `SystemRestore` CIM
+  class both answer *Access denied* without elevation. Since "Go back" probably
+  is not available for an eKB, this is the only real way back.
 - **The user's `shell.nss` is not in version control.** It exists at
   `C:\Program Files\Nilesoft Shell\shell.nss` and in `backup_installed_shell\`,
   which is in `.gitignore` — two copies, one disk, nothing off-machine. An
@@ -531,7 +531,7 @@ Ranked by expected cost, with the check that detects each and the fix.
 | 6 | `{86ca1aa0-…}` ACL widened again by a re-register | Low | `scripts/repair-treatas-acl.ps1 -WhatIfOnly` | same script without the flag |
 | 7 | IAT hook on `win32u!NtUserTrackPopupMenuEx` stops matching | Very low (no binary change) | menu does not appear at all | investigate; `src/dll/src/Main.cpp:1712` |
 | 8 | Shell extensions disabled by a policy the upgrade turns on | Low | snapshot `Blocked` | remove the block |
-| 9 | Something does break and there is no way back | Low, but **not mitigable after the fact** | `C:\Windows.old` absent, "Go back" greyed out | restore point or image taken *before* (§4) |
+| 9 | Something does break and there is no way back | Low; **mitigated 2026-11-25** | `C:\Windows.old` absent, "Go back" greyed out | restore point 42, "before 26H2" (§6) |
 
 On #7: `IsWindows11OrGreater()` is `Major > 10 || (Major == 10 && Build >= 22000)`
 (`src/shared/System/Windows/Windows.h:191`), so build 26300 keeps every Windows 11
@@ -564,16 +564,22 @@ at **26200.9974**, eleven cumulative revisions on. Those numbers were stale befo
    it. Done. (Untracked files survive a reboot perfectly well — the reason to
    commit is that the diff is worthless if half of it is missing.)
 
-Still open, and all three need either elevation or a human at the keyboard:
+7. ~~Create a restore point.~~ Done, elevated, 2026-11-25: sequence **42,
+   "before 26H2"**, the first restore point since 41 ("Windows Update",
+   2026-11-24). Worth having verified rather than assumed — `Checkpoint-Computer`
+   is silent both on success and when throttled by the default one-per-24-hours
+   frequency, and reading the list back is the only way to tell the two apart.
+   This is the safety net that matters, because "Go back" is probably unavailable
+   for an eKB (§4).
+8. ~~Census the taskbar menu.~~ Done, 12 items, `census/live-taskbar.tsv` (§7).
+   Redo it the same way *after* the upgrade — it is the surface 26H2 most
+   directly changes, and it is the one surface the recorder cannot collect on its
+   own.
 
-7. **Create a restore point, or an image.** "Go back" is probably unavailable for
-   an eKB (§4), and System Protection state could not be read without elevation.
-8. **Census the taskbar menu**, before and after. The probe cannot open it, but
-   `menucensus read-open` can read one you open: start it, then right-click the
-   taskbar and leave the menu up (§7). It is the surface 26H2 most directly
-   changes.
+Still open, and it is a judgement call rather than a task:
+
 9. **Put `shell.nss` somewhere off this machine.** Two copies on one disk, both
-   outside version control (§4).
+   outside version control (§4). Not a 26H2 risk; a standing one.
 
 ### The upgrade itself
 
@@ -658,34 +664,63 @@ In this order, because each step is cheaper than the next:
 - **The live census covers the desktop background only**, and the two attempts to
   widen it both failed for reasons worth recording rather than retrying:
 
-  - **The taskbar cannot be reached by posting a message.** `Shell_TrayWnd`
-    ignores a posted `WM_CONTEXTMENU` — ten attempts, no popup window ever
-    appeared — and so does the real child under the point, which is a
-    `Windows.UI.Composition.DesktopWindowContentBridge`. The Windows 11 taskbar
-    is a XAML surface. Reaching its menu needs synthetic input, and if Windows
-    answers with a XAML flyout rather than an `HMENU` there is no menu handle to
-    read at all. Since 26H2 turns taskbar app actions on by default, this is the
-    gap that matters most. (Shell does track a popup for the taskbar —
-    `src/dll/src/Main.cpp` passes `hTaskbar` to the tracking hook — so a real
-    right-click probably does produce a readable `HMENU`; that is untested.)
+  - **The taskbar cannot be *opened* by posting a message, but it can be read.**
+    `Shell_TrayWnd` ignores a posted `WM_CONTEXTMENU` — ten attempts, no popup
+    window ever appeared — and so does the real child under the point, which is a
+    `Windows.UI.Composition.DesktopWindowContentBridge`. Input to the Windows 11
+    taskbar goes through XAML, not through the message queue.
 
-    **There is a way to census it anyway, with one right-click from a human.**
-    `menucensus read-open` reads whatever popup menu is already open and leaves
-    it exactly as found, so:
+    What that does **not** mean, and an earlier draft of this document wrongly
+    speculated, is that there is no `HMENU` to read. There is. A human
+    right-click on 2026-11-25 produced a classic `#32768` popup whose menu reads
+    cleanly, 12 items, with this machine's `imports/taskbar.nss` entries in it —
+    `Terminal`, `Go To`, `Apps`, `windows`, `Desktop`, `Settings` — alongside
+    `Task Manager` and `Taskbar Settings`. **Shell composes the taskbar menu and
+    that composition is now baselined** in `census/live-taskbar.tsv`.
+
+    One detail in that reading changes what to expect from 26H2 here. In the
+    desktop menu, Explorer's own items carry ids in the 30 000s and Shell's carry
+    ids at or above `0x10000000`. In the taskbar menu **every** item is in Shell's
+    range, `Task Manager` and `Taskbar Settings` included — so Shell is not adding
+    to Explorer's taskbar menu, it is building the whole thing. A 26H2 change to
+    the *native* empty-taskbar menu would therefore show up as nothing at all in
+    this census, because that menu is not what gets displayed.
+
+    Which also locates the real remaining blind spot: 26H2's "app-specific
+    actions from the taskbar" appear on right-clicking an **app button** — a jump
+    list — not on empty taskbar space. That surface is not censused here, and
+    `read-open` would capture it the same way if it turns out to matter.
+
+    So the recipe for this surface is one right-click:
 
     ```
-    <probe> read-open > taskbar-before.tsv     # then right-click the taskbar
-                                               # and leave the menu up
+    <probe> read-open 240 > live-taskbar.tsv    # then right-click an empty part
+                                                # of the taskbar, menu up ~2 s
     ```
 
-    It waits up to 20 s for a menu to appear. Verified 2026-11-25 against a menu
-    opened by a separate process: the reading is **identical** to the settled
-    `live-desktop` one, row for row. It needed the same count-stability wait as
-    the live modes to get there — read the instant the handle became readable, it
-    caught the menu mid-composition and returned 27 rows that were a *different*
-    27, with Shell's items present and Explorer's `Paste` and `New+` not yet
-    added. The same trick censuses a folder or a selection, which is the other
-    surface this shell cannot drive.
+    `read-open` reads whatever popup is already open and leaves it exactly as
+    found, so it censuses the taskbar — or a folder, or a selection — without
+    needing to drive the host. It takes the wait in seconds. Verified against a
+    menu opened by a separate process: the reading is **identical** to the
+    settled `live-desktop` one, row for row.
+
+    Two things it cost to get right, both of which produce a plausible wrong
+    answer rather than an error:
+
+    - It needed the same count-stability wait as the live modes. Read the instant
+      the handle became readable, it caught the menu mid-composition and returned
+      27 rows that were a *different* 27, with Shell's items present and
+      Explorer's `Paste` and `New+` not yet added — which reads as a
+      composition-order regression.
+    - **Nothing about the popup window identifies the surface.** While a desktop
+      menu was genuinely on screen, the `#32768` window reported
+      `IsWindowVisible = 0` and `GW_OWNER = NULL`. So the only way to know which
+      menu you read is its content: a taskbar menu has `Task Manager` and
+      `Taskbar Settings`, a desktop menu has `View`, `Sort by` and `Refresh`.
+      Check that before trusting a reading — the first taskbar capture looked to
+      this author like a stale desktop menu until it was read properly.
+      Stale windows are at any rate not a hazard: with no menu open, `FindWindow`
+      finds no `#32768` at all, so a successful read means a menu really was up.
   - **A folder window could not be opened from this shell at all.** Neither the
     probe's `ShellExecuteW` nor `Start-Process explorer.exe <path>` produced a
     `CabinetWClass` window, across ten attempts; the process started and no
