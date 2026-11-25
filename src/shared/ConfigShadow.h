@@ -281,8 +281,11 @@ namespace Nilesoft
 		{
 			// FILE_FLAG_OPEN_REPARSE_POINT so a link is opened as itself and
 			// rejected below rather than silently followed somewhere else.
+			// Every share mode, because save() hashes the user's own files and must
+			// not make an editor's save fail; a write that lands anyway is what the
+			// stamp and verify() checks around the hash catch.
 			return ::CreateFileW(path.c_str(), GENERIC_READ,
-								 FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+								 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
 								 FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 		}
 

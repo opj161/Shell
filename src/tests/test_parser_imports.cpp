@@ -452,6 +452,42 @@ TEST(parser_imports, a_root_that_cannot_be_opened_is_unavailable)
 	CHECK(parsed.loaded.empty());
 }
 
+// The parser used to open with _wfopen_s, which shares nothing useful: an editor
+// holding the file for write (sharing reads) made the parse fail, and a parse in
+// flight made the editor's save fail, in place or by ReplaceFileW. Measured: with
+// every share mode those land; a classic MoveFileEx(REPLACE_EXISTING) over an
+// open file still fails with ERROR_ACCESS_DENIED whatever the reader shares, so
+// it is not asserted.
+TEST(parser_imports, reading_a_config_and_saving_it_do_not_block_each_other)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"shared.nss", "item(title='Shared')\r\n");
+
+	HANDLE editor = ::CreateFileW(root.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+								  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	CHECK(editor != INVALID_HANDLE_VALUE);
+	Parsed while_held(root);
+	if(editor != INVALID_HANDLE_VALUE)
+		::CloseHandle(editor);
+	CHECK(while_held.ok);
+	CHECK(!while_held.root_unavailable);
+
+	IO::File reader(root.c_str());
+	CHECK(reader.Open(false, IO::File::Encoding::Binary));
+
+	HANDLE writer = ::CreateFileW(root.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+								  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	CHECK_MSG(writer != INVALID_HANDLE_VALUE, "an in-place save must open while a host reads");
+	if(writer != INVALID_HANDLE_VALUE)
+		::CloseHandle(writer);
+
+	auto replacement = tmp.write(L"shared.tmp", "item(title='Saved')\r\n");
+	CHECK_MSG(::ReplaceFileW(root.c_str(), replacement.c_str(), nullptr, 0, nullptr, nullptr),
+			  "a ReplaceFileW save must land while a host reads");
+}
+
 // The decoder used to set length one short for UTF-16, and at() reads nothing at
 // or past length, so a file whose last character is the closing brace and has no
 // newline after it failed with "'}' expected".

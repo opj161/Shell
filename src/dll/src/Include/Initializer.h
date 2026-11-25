@@ -58,6 +58,7 @@ namespace Nilesoft
 			{
 				std::vector<std::wstring> files;
 				std::vector<uint64_t> stamps;	// parallel to files, taken before each read
+				bool unreadable{};				// the root exists but could not be opened
 			};
 
 			// One parse into one new generation, published only on success.

@@ -133,8 +133,10 @@ namespace Nilesoft
 			Status.Stale.store(served, std::memory_order_relaxed);
 
 			// A reload was requested and has now been attempted. Leaving the flag
-			// set would re-parse the broken file for every menu.
-			Status.Refresh.store(false, std::memory_order_relaxed);
+			// set would re-parse the broken file for every menu - which is exactly
+			// right for a file that merely could not be opened: the next menu
+			// retries, and the attempt fails at the open, which costs nothing.
+			Status.Refresh.store(outcome.unreadable, std::memory_order_relaxed);
 
 			// Served, from an older generation or from the shadow. Returning
 			// false here would cost exactly one menu: query() passes this result
@@ -495,15 +497,18 @@ namespace Nilesoft
 				/*
 					A root that does not exist or could not be opened is a
 					*successful* parse as far as Load() is concerned - a machine
-					with no shell.nss must still get a working shell. But when
-					something better is already in hand, publishing the resulting
-					empty configuration over it is wrong: the file is routinely
-					unreadable for a moment (an editor holding it, a rename-replace
-					save in flight) and the next load would find it fine. An
-					emptied-but-readable file is not this case.
+					with no shell.nss must still get a working shell. That holds for
+					a missing file only. One that exists but cannot be opened (an
+					editor holding it for write, measured) is not "no configuration",
+					and neither case may publish an empty one over a generation or
+					shadow already in hand. init() then asks the next menu to retry,
+					because releasing a file changes no stamp the watcher could see.
+					An emptied-but-readable file is not this case.
 				*/
-				if(parser->RootUnavailable() &&
-				   (has_snapshot() || !ConfigShadow::resolve(ConfigShadow::default_directory()).empty()))
+				outcome.unreadable = parser->RootUnavailable() && parser->RootStamp() != 0;
+				if(outcome.unreadable ||
+				   (parser->RootUnavailable() &&
+					(has_snapshot() || !ConfigShadow::resolve(ConfigShadow::default_directory()).empty())))
 				{
 					LastError = { TokenError::CannotFoundConfigFile, 0, 0 };
 					Logger::Error(L"error %s, \"%s\"",
