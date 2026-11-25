@@ -385,7 +385,6 @@ public:
 			_answered_ticket = 0;
 		}
 
-		::ResetEvent(_done);
 		::SetEvent(_work);
 
 		// The wait is the thing docs/refactor/02 section 5 asks to be counted,
@@ -393,19 +392,43 @@ public:
 		LARGE_INTEGER wait_start{};
 		::QueryPerformanceCounter(&wait_start);
 
-		DWORD index = 0;
-		::SetLastError(ERROR_SUCCESS);
-		auto hr = ::CoWaitForMultipleHandles(0, BUDGET_MS, 1, &_done, &index);
-
-		auto waited_us = elapsed_microseconds(wait_start);
-
+		// _done is manual-reset and the worker may still be finishing an earlier,
+		// abandoned request: its late SetEvent can land after this call's reset and
+		// wake the wait with somebody else's ticket on the slot. So the event is
+		// only a hint. Reset it, then look at the ticket under the mutex - the
+		// worker publishes the ticket before SetEvent, so an answer that arrives
+		// after the check also arrives after the reset and wakes the wait - and
+		// wait again with whatever budget is left.
+		// CoWaitForMultipleHandles returns S_OK when the handle was signaled and
+		// RPC_S_CALLPENDING (a failure code) when the timeout elapsed.
+		// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cowaitformultiplehandles
+		const auto deadline = ::GetTickCount64() + BUDGET_MS;
+		HRESULT hr = S_OK;
 		bool answer = false;
 		bool answered = false;
+		for(;;)
 		{
-			std::lock_guard<std::mutex> lock(_mutex);
-			answered = (_answered_ticket == ticket);
-			answer = _answer;
+			::ResetEvent(_done);
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				answered = (_answered_ticket == ticket);
+				answer = _answer;
+			}
+			if(answered)
+				break;
+
+			const auto tick = ::GetTickCount64();
+			if(tick >= deadline)
+				break;
+
+			DWORD index = 0;
+			::SetLastError(ERROR_SUCCESS);
+			hr = ::CoWaitForMultipleHandles(0, static_cast<DWORD>(deadline - tick), 1, &_done, &index);
+			if(FAILED(hr))
+				break;
 		}
+
+		auto waited_us = elapsed_microseconds(wait_start);
 
 		if(FAILED(hr) || !answered)
 		{
@@ -867,7 +890,7 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 				redirected activation lands on the classic menu too, because
 				COM does not fall back to the original class when a TreatAs
 				substitute fails. Restoring the modern menu means removing the
-				redirect - `shell.exe -unregister -treat` - which is machine-wide
+				redirect - `shell.exe -unregister` - which is machine-wide
 				HKLM state and an elevated act, not something a config file read
 				by every host process gets to do.
 
@@ -1200,7 +1223,6 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 			}
 
 			//cs.lock();
-			auto has_inited = 0;
 			auto perf_onstate = perf::menu_perf_begin();
 
 			// Classified once, from one read of the keyboard, and used by both
@@ -1250,7 +1272,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				// is injected from explorer
 				if(!_initializer.Status.Loaded)
 				{
-					if(_initializer.has_error() || has_inited)
+					if(_initializer.has_error())
 						__leave; //goto skip;
 					_initializer.init();
 				}
@@ -1808,7 +1830,6 @@ void BootstrapOnce()
 
 				success = true;
 				rt.hooks_installed.store(true, std::memory_order_release);
-				hooks_installed.store(true, std::memory_order_release);
 			}
 		}
 		catch(...)
@@ -1907,7 +1928,7 @@ STDAPI DllCanUnloadNow(void)
 	if(ShellExtCapture::has_active_captures())
 		return S_FALSE;
 
-	if(Runtime().hooks_installed.load(std::memory_order_relaxed) || hooks_installed.load(std::memory_order_relaxed))
+	if(Runtime().hooks_installed.load(std::memory_order_relaxed))
 		return S_FALSE;
 
 	if(!_loader.explorer || !is_registered())
@@ -1969,128 +1990,6 @@ int __stdcall ShellCheckConfig(const wchar_t *path, Nilesoft::Shell::ConfigCheck
 
 	return _initializer.check(path, *result);
 }
-
-// Register the COM server and the context menu handler.
-HRESULT Register(bool reg)
-{
-	try
-	{
-		if(reg)
-		{
-			Path::Delete(_log.path());
-			//_log.reset();
-		}
-
-		if(!ver->IsWindows7OrGreater())
-		{
-			//windows compatibility
-			_log.error(L"%s", string::Extract(_hInstance, IDS_WINDOWS_COMPATIBILITY).c_str());
-			return ERROR_EXE_MACHINE_TYPE_MISMATCH;//ERROR_DS_VERSION_CHECK_FAILURE
-		}
-
-		auto is_elevated = Security::Elevation::IsElevated();
-
-		if(!is_elevated)
-		{
-			// Missing administrative privileges!
-			string msg = string::Extract(_hInstance, IDS_ADMIN_PRIVILEGES).move();
-			//You will need to provide administrator permission to run this Shell
-			_log.error(L"%s", msg.c_str());
-			return ERROR_ACCESS_DENIED;
-		}
-
-		string path = Path::Module(_hInstance).move();
-
-		if(reg)
-		{
-			// The install-directory ACL widening that used to be here is gone;
-			// see the matching comment in exe/src/Main.cpp. It granted Users
-			// GENERIC_ALL on Program Files and only failed to do so because it
-			// could not open a directory handle.
-			//_log.reset();
-			//IO::Path::Delete(_log.path());
-		}
-
-		string msg;
-
-		if(reg)
-		{
-			//_log.create();
-			REGOP regop{};
-			regop.REGISTER = regop.CONTEXTMENU = regop.ICONOVERLAY = true;
-
-			if(!RegistryConfig::Register(path, regop))
-			{
-				msg = string::Extract(_hInstance, IDS_REGISTER_NOT_SUCCESS).move();
-				_log.error(L"%s", msg.c_str());
-				return S_FALSE;
-			}
-			msg = string::Extract(_hInstance, IDS_REGISTER_SUCCESS).move();
-		}
-		else
-		{
-			if(!RegistryConfig::IsRegistered())
-				return S_OK;
-
-			if(!RegistryConfig::Unregister())
-			{
-				msg = string::Extract(_hInstance, IDS_UNREGISTER_NOT_SUCCESS).move();
-				_log.error(L"%s", msg.c_str());
-				return S_FALSE;;
-			}
-			msg = string::Extract(_hInstance, IDS_UNREGISTER_SUCCESS).move();
-		}
-
-		_log.info(L"%s", msg.c_str());
-
-		_log.close();
-
-		return S_OK;
-	}
-	catch(...)
-	{
-#ifdef _DEBUG
-		_log.exception(__func__);
-#endif
-	}
-	_log.close();
-	return S_FALSE;
-}
-/*
-//  Register the COM server and the context menu handler.
-__control_entrypoint(DllExport)
-STDAPI DllRegisterServer()
-{
-	return Register(true);
-}
-
-__control_entrypoint(DllExport)
-STDAPI DllUnregisterServer()
-{
-	return Register(false);
-}
-*/
-/*
-STDAPI DllInstall(BOOL bInstall, _In_opt_ PCWSTR pszCmdLine)
-{
-	MBF(L"%d %s", bInstall, pszCmdLine);
-	return E_NOTIMPL;
-}
-*/
-
-/*
-#include <Shldisp.h>
-
-CoInitialize(NULL);
-// Create an instance of the shell class
-IShellDispatch4 *pShellDisp = NULL;
-HRESULT sc = CoCreateInstance(CLSID_Shell, NULL, CLSCTX_SERVER, IID_IDispatch, (LPVOID *) &pShellDisp );
-// Show the desktop
-sc = pShellDisp->ToggleDesktop();
-// Restore the desktop
-sc = pShellDisp->ToggleDesktop();
-pShellDisp->Release();
- */
 
 #pragma endregion
 

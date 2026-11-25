@@ -458,9 +458,7 @@ namespace Nilesoft
 				uses, so neither side needs normalising. It is empty for a file
 				with no extension, and an empty string must not be pushed: it
 				would compare equal to nothing a manifest can write, but it
-				would also make `extensions` non-empty for no reason. Note that
-				string::c_str() answers nullptr for an empty string, so the
-				emptiness check comes before the construction, never after.
+				would also make `extensions` non-empty for no reason.
 			*/
 			auto &extensions = selection_shape_for_manifest.extensions;
 			if(Selected.count.FILE)

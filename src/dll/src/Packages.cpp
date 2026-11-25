@@ -267,6 +267,17 @@ namespace Nilesoft
 
 			std::wstring result;
 
+			// Keys are the encoded path of a package's resources.pri or merged
+			// resource file, e.g.
+			//   C:%5CProgram Files%5CWindowsApps%5CMicrosoft.Paint_11.2508.361.0_x64__8wekyb3d8bbwe%5Cresources.pri
+			// so the package name sits between an encoded separator and the
+			// "_<version>" that follows it. A bare substring match took
+			// Microsoft.WindowsTerminalPreview_... for Microsoft.WindowsTerminal.
+			// Observed on Windows 11, not a documented format.
+			std::wstring needle = L"%5C";
+			needle += identity.name;
+			needle += L'_';
+
 			for(DWORD i = 0;; i++)
 			{
 				wchar_t name[512]{};
@@ -278,14 +289,18 @@ namespace Nilesoft
 				// embed the version that was current when the strings were
 				// cached, which drifts behind the installed one.
 				std::wstring entry(name, cch);
-				if(!icontains(entry, identity.name.c_str()))
+				if(!icontains(entry, needle.c_str()))
 					continue;
 
+				// Subkeys "are not ordered" and several versions of the package
+				// can be cached, so a matching key that yields nothing is not the
+				// end of the search - try the next one.
+				// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumkeyexw
 				// <package>\<merged resource file>\<language> holds the values.
 				HKEY level = nullptr;
 				if(::RegOpenKeyExW(mrt, entry.c_str(), 0,
 								   KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE, &level) != ERROR_SUCCESS)
-					break;
+					continue;
 
 				for(int depth = 0; depth < 2 && level; depth++)
 				{
@@ -309,19 +324,30 @@ namespace Nilesoft
 						DWORD data_cb = sizeof(value_data);
 						DWORD type = 0;
 
-						if(::RegEnumValueW(level, v, value_name, &name_cch, nullptr, &type,
-										   reinterpret_cast<LPBYTE>(value_data), &data_cb) != ERROR_SUCCESS)
+						auto rc = ::RegEnumValueW(level, v, value_name, &name_cch, nullptr, &type,
+												  reinterpret_cast<LPBYTE>(value_data), &data_cb);
+						if(rc == ERROR_MORE_DATA)
+							continue;	// this value does not fit; the next might
+						if(rc != ERROR_SUCCESS)
 							break;
 
 						if(display == value_name)
 						{
-							result = value_data;
+							// REG_SZ "may not have been stored with the proper
+							// null-terminating characters", so size from the byte
+							// count and stop at the first NUL rather than trusting one.
+							// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumvaluew
+							std::wstring data(value_data, data_cb / sizeof(wchar_t));
+							data.resize(data.find(L'\0') == std::wstring::npos ? data.size() : data.find(L'\0'));
+							result = std::move(data);
 							break;
 						}
 					}
 					::RegCloseKey(level);
 				}
-				break;
+
+				if(!result.empty())
+					break;
 			}
 
 			::RegCloseKey(mrt);

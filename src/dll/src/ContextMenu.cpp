@@ -4581,6 +4581,21 @@ namespace Nilesoft
 							if(!_browser_marshal.assign(Selected.ShellBrowser, IID_IShellBrowser))
 								Selected.ShellBrowser = nullptr;
 						}
+
+						// The worker deletes this object, and every COM reference
+						// still held here would be released with it - on the
+						// worker. All of them except the browser marshaled above
+						// came from this thread's apartment, where "it is forbidden
+						// to call an object directly from another thread", Release
+						// included. The worker needs none of them, so let go here.
+						// https://learn.microsoft.com/windows/win32/com/single-threaded-apartments
+						for(auto &mii : _gc)
+							mii->retain_explorer_command(nullptr);
+						if(Selected.ItemArrayOwned && Selected.ItemArray)
+							Selected.ItemArray->Release();
+						Selected.ItemArray = nullptr;
+						Selected.ItemArrayOwned = false;
+
 						std::thread(&Invoke, this).detach();
 						return id;
 					}
@@ -6082,17 +6097,8 @@ namespace Nilesoft
 
 						if(lp == FALSE)
 						{
-							//MENUINFO info{0};
-							//info.cbSize = sizeof(info);
-							//info.fMask = MIM_STYLE | MIM_MAXHEIGHT| MIM_MENUDATA;
-							//GetMenuInfo(reinterpret_cast<HMENU>(wParam), &info);
-							//_log.info(L"WM_INITMENUPOPUP %d 0x%08x 0x%08x", GetMenuItemCount(reinterpret_cast<HMENU>(wParam)), info.dwStyle, info.dwMenuData);
 							if(auto hMenu = reinterpret_cast<HMENU>(wParam); hMenu)
 								return ctx->OnInitMenuPopup(hMenu, LOWORD(lParam));
-						}
-						else if(lp == 100) // preinitmenupopup
-						{
-							lParam = MAKELPARAM(LOWORD(lParam), lp);
 						}
 						break;
 					}

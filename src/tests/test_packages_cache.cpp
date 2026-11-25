@@ -192,16 +192,6 @@ TEST(packages_cache, a_query_holds_the_snapshot_it_read)
 	CHECK(!cache.exists(L"WindowsCalculator"));
 }
 
-TEST(packages_cache, the_default_constructed_cache_still_uses_the_live_service)
-{
-	// CACHE holds one of these as a default-constructed member, so a null
-	// provider has to mean the singleton rather than "answer nothing". This
-	// asserts the fallback exists without asserting what the machine contains.
-	PackagesCache cache;
-	(void)cache.exists(L"SomethingThatIsNotInstalled");
-	CHECK(true);
-}
-
 // ---- R3 step 6: a miss asks for a rescan, but not on every menu ------------
 //
 // docs/refactor/12-closure-plan.md W9.2 / D12. PackageCatalogService::invalidate()
