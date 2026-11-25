@@ -1,0 +1,45 @@
+0|11|ownerdraw|&Paste
+0|11|submenu|Term&inal
+0|12|submenu|File manage
+0|12|submenu|New+
+0|13|ownerdraw|Open w&ith Code
+0|13|submenu|&Develop
+0|14|ownerdraw|WizTree
+0|14|sep|
+0|15|ownerdraw|Open w&ith Antigravity
+0|15|submenu|&Go To
+0|16|ownerdraw|Open with &Visual Studio
+0|16|sep|
+0|17|ownerdraw|NVIDIA App
+0|17|ownerdraw|Search Everything 1.5a...
+0|19|ownerdraw|NVIDIA App
+0|19|ownerdraw|NVIDIA Control Panel
+0|21|ownerdraw|NVIDIA Control Panel
+0|21|submenu|Ne&w
+0|22|sep|
+0|22|submenu|NanaZip
+0|23|ownerdraw|&Display settings
+0|23|ownerdraw|Open project in ChatGPT
+0|23|ownerdraw|Unlock with File Locksmith
+0|23|sep|
+0|23|submenu|NanaZip
+0|24|ownerdraw|&Display settings
+0|24|ownerdraw|Pe&rsonalise
+0|24|sep|
+0|25|ownerdraw|&Display settings
+0|25|ownerdraw|Pe&rsonalise
+0|26|ownerdraw|Pe&rsonalise
+0|3|ownerdraw|Repomix
+0|3|sep|
+0|4|ownerdraw|&Paste
+0|4|sep|
+0|5|ownerdraw|Open w&ith Antigravity
+0|5|submenu|Term&inal
+0|6|ownerdraw|Open with &Visual Studio
+0|6|submenu|File manage
+0|7|ownerdraw|Search Everything 1.5a...
+0|7|submenu|&Develop
+0|8|ownerdraw|Wi&zTree
+0|8|sep|
+0|9|ownerdraw|Repomix
+0|9|submenu|&Go To

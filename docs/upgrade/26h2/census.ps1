@@ -48,7 +48,8 @@ param(
     [string]$Out,
     [string]$Diff,
     [string]$Against,
-    [int]$MaxLiveRuns = 10
+    [int]$MaxLiveRuns = 10,
+    [switch]$Sets
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,6 +74,34 @@ function ConvertTo-CensusRows([string]$path) {
         })
 }
 
+if ($Diff -and $Sets) {
+    # The second pass the positional diff needs. A row's identity there includes
+    # its position, so one inserted item marks everything below it as changed:
+    # static-item-readme reported 40 -> 55 rows with 31 added and 24 removed
+    # lines, of which 15 were genuinely new and the rest had merely moved down.
+    # Comparing titles as unordered sets answers "what appeared and disappeared",
+    # which is the question a release-notes diff actually asks.
+    if (-not $Against) { throw '-Diff needs -Against' }
+    foreach ($f in (Get-ChildItem -LiteralPath $Diff -Filter '*.tsv')) {
+        $a = @(ConvertTo-CensusRows $f.FullName | ForEach-Object { ($_ -split '\|', 4)[3] } | Where-Object { $_ })
+        $bPath = Join-Path $Against $f.Name
+        if (-not (Test-Path -LiteralPath $bPath)) { Write-Output ("MISSING  {0}" -f $f.Name); continue }
+        $b = @(ConvertTo-CensusRows $bPath | ForEach-Object { ($_ -split '\|', 4)[3] } | Where-Object { $_ })
+
+        $delta = @(Compare-Object $a $b)
+        if ($delta.Count -eq 0) {
+            Write-Output ("same set {0,-26} {1} -> {2} titles (order/position only)" -f $f.Name, $a.Count, $b.Count)
+            continue
+        }
+        Write-Output ("CHANGED  {0,-26} {1} -> {2} titles" -f $f.Name, $a.Count, $b.Count)
+        foreach ($row in ($delta | Sort-Object SideIndicator, InputObject)) {
+            $mark = if ($row.SideIndicator -eq '=>') { '    NEW  ' } else { '    GONE ' }
+            Write-Output "$mark$($row.InputObject)"
+        }
+    }
+    return
+}
+
 if ($Diff) {
     if (-not $Against) { throw '-Diff needs -Against' }
     $names = @(Get-ChildItem -LiteralPath $Diff -Filter '*.tsv' |
@@ -94,13 +123,28 @@ if ($Diff) {
         }
         # Rows a recorder saw come and go are annotated rather than hidden: they
         # are still differences, they are just not evidence of anything.
-        $volatileRows = @()
+        #
+        # Matched on the TITLE, not the whole row. A volatile row changes the
+        # position of everything below it, so matching `depth|pos|kind|title`
+        # recognised the volatile row itself and nothing it displaced - measured
+        # 2026-11-25, when NanaZip appearing and disappearing moved 45 rows and
+        # only one of them was annotated. Separators are excluded: their title is
+        # empty, and treating "" as volatile would suppress every separator diff.
+        $volatileTitles = @()
         foreach ($dir in @($Diff, $Against)) {
             $vp = Join-Path $dir (($name -replace '\.tsv$', '') + '.volatile.txt')
-            if (Test-Path -LiteralPath $vp) { $volatileRows += @(Get-Content -LiteralPath $vp) }
+            if (Test-Path -LiteralPath $vp) {
+                $volatileTitles += @(Get-Content -LiteralPath $vp |
+                    ForEach-Object { ($_ -split '\|', 4)[3] } |
+                    Where-Object { $_ })
+            }
+        }
+        function Test-Volatile([string]$row) {
+            $t = ($row -split '\|', 4)[3]
+            return ($t -and $volatileTitles -contains $t)
         }
 
-        $real = @($delta | Where-Object { $volatileRows -notcontains $_.InputObject })
+        $real = @($delta | Where-Object { -not (Test-Volatile $_.InputObject) })
         if ($real.Count -eq 0) {
             Write-Output ("same*    {0,-26} {1} rows (differences are all known-volatile)" -f $name, $a.Count)
             continue
@@ -110,7 +154,7 @@ if ($Diff) {
         Write-Output ("CHANGED  {0,-26} {1} -> {2} rows" -f $name, $a.Count, $b.Count)
         foreach ($row in $delta) {
             $mark = if ($row.SideIndicator -eq '=>') { '  + ' } else { '  - ' }
-            $note = if ($volatileRows -contains $row.InputObject) { '   (known volatile)' } else { '' }
+            $note = if (Test-Volatile $row.InputObject) { '   (known volatile)' } else { '' }
             Write-Output "$mark$($row.InputObject)$note"
         }
     }

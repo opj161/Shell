@@ -370,6 +370,16 @@ copies are still there. Explorer is restarted by the deploy script; every other
 host that has ever raised a shell menu is not, so restart it before believing
 anything it shows you.
 
+**`SizeOfImage` often cannot discriminate, so check the PE link timestamp too.**
+Measured 2026-11-25: all six `shell.dll*` in the install directory — file sizes
+2 049 536 through 2 054 144 bytes, builds three months apart — reported
+`SizeOfImage` 2 072 576, because section alignment rounds every difference away.
+A later pair, 2 054 144 and 2 054 656 bytes, did the same. The mapped size is
+still worth reading, but when it matches everything, the discriminator is
+`IMAGE_FILE_HEADER.TimeDateStamp`:
+`docs/upgrade/26h2/capture-state.ps1` records it per file, and it differed by
+hours where the sizes were identical.
+
 Registration for a per-machine install lands in **HKLM**, not HKCU:
 `HKLM\SOFTWARE\Classes\CLSID\{BAE3934B-…}\InprocServer32`. On Windows 11 the
 menu only becomes the primary one via the `TreatAs` redirect that
@@ -493,22 +503,38 @@ The six sites this was found in are all guarded now, so `rg 'release\(.*-\s*1\)'
 returns *correct* code — check the guard before concluding you have found
 something. The rule is for the next one written.
 
-**`string::c_str()` answers `nullptr` for an empty string, and a
-`std::wstring_view` built from one is undefined.** `return valid() ? m_data :
-nullptr` (`System/Text/string.h`), and `std::wstring_view`'s pointer constructor
-calls `char_traits::length` on whatever it is given — so `wstring_view(s.c_str())`
-faults on every empty `s`. Nothing warns: it compiles, `/analyze` says nothing,
-and it reads like the most ordinary line in the file.
+**`string::c_str()` used to answer `nullptr` for an empty string. It no longer
+does — and the replacement rule is the opposite of the old one.** The history is
+worth keeping, because it is the sharpest example in this file of a line that
+looks ordinary and is not.
 
-What makes this worse than it sounds is which strings are empty. A top-level
-menu item's `path` is empty, so `signature_of(item->path.c_str(), …)` faulted on
-the *first item of every menu* — not an edge case, the common case. The symptom
-was a menu that never appeared, with `explorer.exe` still running and nothing in
-any log, because the access violation happened inside the hook's SEH region and
-`catch(...)` under `/EHsc` does not catch SEH. Convert through a helper that maps
-null to an empty view (`MenuIdentity::view`), or take `const wchar_t *` and check.
-Same family as `release(n - 1)` and the `MB_*`/`WC_*` flags: a silent wrong
-answer from a line that looks right.
+It was `return valid() ? m_data : nullptr` (`System/Text/string.h`) where
+`valid()` is `m_data && m_length > 0`, so every legitimately empty string
+answered `nullptr`. `std::wstring_view`'s pointer constructor calls
+`char_traits::length` on whatever it is given, so `wstring_view(s.c_str())`
+faulted on every empty `s`. Nothing warned: it compiled, `/analyze` said nothing.
+And a top-level menu item's `path` is empty, so `signature_of(item->path.c_str(),
+…)` faulted on the *first item of every menu* — not an edge case, the common
+case. The symptom was a menu that never appeared, with `explorer.exe` still
+running and nothing in any log, because the access violation happened inside the
+hook's SEH region and `catch(...)` under `/EHsc` does not catch SEH.
+
+`c_str()` and `operator wchar_t const *()` now answer `L""`. Of 532 `c_str()`
+call sites, none tested the result against null, so nothing depended on it.
+`operator wchar_t *()` — the **mutable** one — still answers `nullptr`, because
+handing out a writable pointer into a string literal is worse than handing out
+null.
+
+So the rule now: **a sink that means "absent" must test emptiness, not the
+pointer.** `if(x && *x)`, which is what this codebase already does in eight
+places. Two sinks did not, and both were fixed with the conversion rather than
+left to fail later: `Selections.h`'s `PathItem::get` tested `if(sep)` before
+`replace(L"\\", sep)` and would have stripped every backslash from a path, and
+`Shell.h`'s `OpenAndWait` assigned `sei.lpDirectory` unconditionally where
+`ShellExecuteEx` documents `NULL` as "the current directory is used" and does not
+define the empty string. Implicit conversions cannot be grepped, so if a
+null-means-absent sink was missed it is still out there; the sweep covered
+`if(<ptr>)` tests, NULL-sensitive Win32 sinks and `ptr ? a : b` ternaries.
 
 **`RegQueryValueEx` will not terminate a `REG_SZ` for you** — it "is NOT
 guaranteed to be null-terminated". Size from the byte count the *second* call

@@ -144,7 +144,8 @@ reasons a "no change" could have been missed or faked.
   which reads as a menu that was rebuilt. Comparing *sets of titles* instead
   showed 15 additions and nothing removed. The positional diff is still the right
   primary view — order matters in a menu — but **a set comparison must be the
-  second pass**, or the report is unreadable.
+  second pass**, or the report is unreadable. `census.ps1 -Diff <a> -Against <b>
+  -Sets` now does that pass; it was a throwaway script when this was written.
 - **The volatile-row detector inherits that flaw.** It flagged 39 rows as
   volatile across four readings that differed by two items, because the two
   missing items shifted every position below them. It needs to compare on title
@@ -179,3 +180,92 @@ reasons a "no change" could have been missed or faked.
   the volatile list, which is consistent but not proof.
 - **The MSI upgrade matrix**, unchanged from the baseline: still not verifiable
   on this machine.
+
+---
+
+## 7. Addendum, later the same day
+
+### The handler churn was churn, and that settles §3
+
+The build carrying the `c_str()` fix was deployed and the census retaken
+(`baseline/census-deployed/`). Compared as sets against the **pre-upgrade**
+baseline, every static surface is **identical**:
+
+```
+same set static-bg-desktop      14 -> 14      same set static-item-folder  43 -> 43
+same set static-bg-repo         15 -> 15      same set static-item-readme  30 -> 30
+same set static-bg-drive-c      15 -> 15      same set static-multi        26 -> 26
+```
+
+`static-item-readme` and `static-multi` are back to 30 and 26 titles — the
+numbers they held *before* the upgrade, after reading 45 and 35 immediately
+after it. So the +15 and +9 in §3 were third-party handler availability and
+nothing else, which is what §3 suspected and could not prove. The fresh-boot
+confound named there is now the confirmed explanation.
+
+It does **not** settle the `.nupkg` question, which still has no pre-upgrade
+reading of its own. `census.ps1` records that surface from now on.
+
+### The live desktop menu no longer settles, and it is NanaZip
+
+Ten readings after the deploy gave 26, 25, 25, 27, 27, 25, 27, 27, 25, 27 and
+never three in a row. The recorder refused to write a canonical file and said so,
+which is the behaviour it was given for exactly this case.
+
+Diffing a 27-row reading against a 25-row one, the entire difference is:
+
+```
+submenu|NanaZip
+sep|
+```
+
+One handler and its separator. And in **all ten** readings Shell's own five
+config items — `Repomix`, `Terminal`, `File manage`, `Develop`, `Go To` — are
+present. So composition is intact in every reading and the oscillation is a
+third-party handler registering and deregistering under Explorer, not the string
+change and not the upgrade.
+
+Two consequences. The volatile list should grow to include `NanaZip` with its
+separator. And this machine is a poor one for a 27-vs-25 judgement: the live
+desktop surface has about ±2 rows of third-party noise, so only Shell's own items
+and a *named Microsoft verb* are signal there.
+
+### What the string fix looks like in the real product
+
+`6e0fa7d` is deployed as `E3AB56E8F1413032…`; Explorer restarted after the copy
+and the `TreatAs` redirect was reapplied. The gates had already passed on this
+exact build (34 794 checks, `check-invariants` OK, hostprobe 10 of 10 in both
+modes), and the live reading above adds what the gates cannot: Shell composes a
+real Explorer menu, with its own items, ten times out of ten, through the changed
+`c_str()`.
+
+### PowerShell, resolved
+
+The MSI is back and the split is gone:
+
+| | |
+| --- | --- |
+| `C:\Program Files\PowerShell\7\pwsh.exe` | 7.6.10 (LTS, end-of-support 2028-11-14) |
+| MSIX 7.7.0 | removed |
+| Fresh-shell `pwsh` | one candidate, the MSI |
+| Machine `PATH` | still `ExpandString`, all 7 `%VAR%` tokens intact |
+
+Two things worth keeping. 7.7.0 ships **no MSI at all** — only `.zip` and
+`.msixbundle`, confirmed from the release assets and from Learn: *"Beginning with
+the PowerShell 7.7.0 release, there is no MSI package available. WinGet only
+installs the MSIX package."* So anything depending on
+`C:\Program Files\PowerShell\7\pwsh.exe` — the Claude Code PowerShell tool
+included — pins you to the 7.6 LTS line.
+
+And reading the machine `PATH` through
+`[Environment]::GetEnvironmentVariable('Path','Machine')` **expands** it. Writing
+that back would have baked `%NVM_SYMLINK%` to a literal and quietly broken
+`nvm use` for new shells. Read it with
+`RegistryValueOptions::DoNotExpandEnvironmentNames` and write with
+`-Type ExpandString`.
+
+**Still outstanding:** no winget pin. Without
+`winget pin add --id Microsoft.PowerShell --version "7.6.*"`, the next
+`winget upgrade --all` reinstalls the MSIX and breaks the path again. Microsoft
+Update will not do it — it *"will never upgrade an LTS release to a stable non-LTS
+release"* — but winget will.
