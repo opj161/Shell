@@ -15,7 +15,8 @@ This document merges three inputs into one executable plan:
   — an external QA pass (findings **F1–F10**), every one of which is re-verified
   below against the code and the vendor contract before being accepted;
 - [`11-qa-deep-pass.md`](11-qa-deep-pass.md) — the local deep pass (**N1–N7**);
-- the surviving items of [`10-remediation-qa-assessment.md`](10-remediation-qa-assessment.md).
+- the surviving items of the original `10-remediation-qa-assessment.md`
+  (since removed: `git show 9817e72:docs/refactor/10-remediation-qa-assessment.md`).
 
 Part A is the verification verdict on the external pass — what is confirmed,
 what is corrected, and what is rejected. Part B is the deduplicated defect

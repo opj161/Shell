@@ -208,27 +208,10 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $runDir = Join-Path $Out 'runs'
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
-# One live surface, not three, and the reason is worth keeping.
-#
-# menucensus also has live-taskbar and live-folder modes, and neither can be
-# recorded from an agent shell - measured 2026-11-25, ten attempts each:
-#
-#   live-taskbar  Shell_TrayWnd ignores a posted WM_CONTEXTMENU, and so does the
-#                 real child under the point, which is a
-#                 Windows.UI.Composition.DesktopWindowContentBridge. The Windows
-#                 11 taskbar is a XAML surface; reaching its menu needs synthetic
-#                 input, and if Windows answers with a XAML flyout rather than an
-#                 HMENU there is no menu handle to read at all. Check the taskbar
-#                 by hand.
-#   live-folder   no new CabinetWClass window ever appeared, from the probe's own
-#                 ShellExecuteW or from Start-Process explorer.exe. The probe
-#                 finds Progman, SHELLDLL_DefView and Shell_TrayWnd in the same
-#                 breath, so its window lookups work; a folder window launched
-#                 from here simply does not arrive. Consistent with the
-#                 registry-write asymmetry AGENTS.md records for this shell,
-#                 though that is not established as the same cause.
-#
-# Run those two modes by hand from an ordinary terminal if you want them.
+# One driven surface. The taskbar ignores a posted WM_CONTEXTMENU and a folder
+# window launched from an agent shell never arrives, so those two are read with
+# `menucensus read-open` after a right-click by hand - see
+# 00-pre-upgrade-baseline.md section 7 for the measurements.
 $live = @(
     @{ Name = 'live-desktop'; Args = @('live-desktop') }
 )

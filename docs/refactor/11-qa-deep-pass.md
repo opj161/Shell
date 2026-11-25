@@ -4,7 +4,8 @@
 `refactor/takeover-master-plan` with HEAD at `450985f` and the §09 remediation
 still present as uncommitted working-tree changes.
 
-[`10-remediation-qa-assessment.md`](10-remediation-qa-assessment.md) audited the
+The original `10-remediation-qa-assessment.md` (since replaced by
+[its revised version](10-remediation-qa-assessment-revised.md)) audited the
 remediation *diff*. This pass deliberately did not re-read it. It works in three
 directions the first pass did not:
 

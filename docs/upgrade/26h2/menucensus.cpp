@@ -305,31 +305,6 @@ static int census_live_at(HWND target, POINT pt, const wchar_t *label)
     return 0;
 }
 
-// Depth-first search for a descendant of the given window class. Windows 11
-// nests Explorer's view as CabinetWClass > ShellTabWindowClass >
-// SHELLDLL_DefView, so a direct-child lookup finds nothing - which is exactly
-// how this probe first reported "no view inside the window" on a window that
-// plainly had one.
-static HWND find_descendant(HWND parent, const wchar_t *class_name, int depth)
-{
-    if(!parent || depth > 6)
-        return nullptr;
-
-    HWND child = nullptr;
-    while((child = ::FindWindowExW(parent, child, nullptr, nullptr)) != nullptr)
-    {
-        wchar_t cls[128] {};
-        ::GetClassNameW(child, cls, 128);
-        if(::lstrcmpiW(cls, class_name) == 0)
-            return child;
-
-        HWND found = find_descendant(child, class_name, depth + 1);
-        if(found)
-            return found;
-    }
-    return nullptr;
-}
-
 // Read whatever popup menu is open right now, without opening one.
 //
 // This is the way round the taskbar being a XAML surface that ignores a posted
@@ -460,113 +435,6 @@ static int census_live_desktop(void)
     return census_live_at(target, centre_of(target), L"desktop");
 }
 
-static int census_live_taskbar(void)
-{
-    HWND tray = ::FindWindowW(L"Shell_TrayWnd", nullptr);
-    if(!tray)
-    {
-        wprintf(L"# taskbar: Shell_TrayWnd not found\n");
-        return 2;
-    }
-
-    // Aim at empty taskbar, not at a button: Windows 11 centres the icons, so a
-    // point just inside the left edge is bare. The point is printed so a later
-    // run can use the same one.
-    RECT rc {};
-    ::GetWindowRect(tray, &rc);
-    POINT pt { rc.left + 12, rc.top + (rc.bottom - rc.top) / 2 };
-    wprintf(L"# taskbar point: %ld,%ld in rect %ld,%ld-%ld,%ld\n",
-            pt.x, pt.y, rc.left, rc.top, rc.right, rc.bottom);
-
-    // Shell_TrayWnd itself ignores a posted WM_CONTEXTMENU - measured
-    // 2026-11-25, ten attempts, no popup window ever appeared - so try the real
-    // child under that point as well before giving up. Which window owns the
-    // taskbar menu is not documented, so this is a probe, not a contract.
-    POINT client = pt;
-    ::ScreenToClient(tray, &client);
-    HWND child = ::RealChildWindowFromPoint(tray, client);
-
-    int rc_code = census_live_at(tray, pt, L"taskbar(tray)");
-    if(rc_code == 0)
-        return rc_code;
-
-    if(child && child != tray)
-    {
-        wchar_t cls[128] {};
-        ::GetClassNameW(child, cls, 128);
-        wprintf(L"# taskbar: retrying against child class %s\n", cls);
-        rc_code = census_live_at(child, pt, L"taskbar(child)");
-    }
-    return rc_code;
-}
-
-static void collect_explorer_windows(std::vector<HWND> &out)
-{
-    out.clear();
-    HWND w = nullptr;
-    while((w = ::FindWindowExW(nullptr, w, L"CabinetWClass", nullptr)) != nullptr)
-        out.push_back(w);
-}
-
-static int census_live_folder(const wchar_t *path)
-{
-    std::vector<HWND> before;
-    collect_explorer_windows(before);
-
-    ::ShellExecuteW(nullptr, L"open", path, nullptr, nullptr, SW_SHOWNORMAL);
-
-    HWND opened = nullptr;
-    for(int i = 0; i < 160 && !opened; i++)
-    {
-        ::Sleep(50);
-        std::vector<HWND> after;
-        collect_explorer_windows(after);
-        for(HWND candidate : after)
-        {
-            bool existed = false;
-            for(HWND old : before)
-                if(old == candidate)
-                    existed = true;
-            if(!existed)
-            {
-                opened = candidate;
-                break;
-            }
-        }
-    }
-    if(!opened)
-    {
-        wprintf(L"# folder: no new CabinetWClass window appeared\n");
-        return 3;
-    }
-
-    // Give the view time to exist before asking it for a menu, and search the
-    // whole subtree: on Windows 11 the view is a grandchild, under
-    // ShellTabWindowClass.
-    HWND view = nullptr;
-    for(int i = 0; i < 100 && !view; i++)
-    {
-        view = find_descendant(opened, L"SHELLDLL_DefView", 0);
-        if(!view)
-            ::Sleep(50);
-    }
-    HWND list = view ? find_descendant(view, L"SysListView32", 0) : nullptr;
-    HWND target = list ? list : view;
-    if(!target)
-    {
-        wprintf(L"# folder: no view inside the window\n");
-        ::PostMessageW(opened, WM_CLOSE, 0, 0);
-        return 3;
-    }
-    ::Sleep(600); // let the folder finish enumerating before timing anything
-
-    const int rc = census_live_at(target, centre_of(target), L"folder");
-
-    // Close only the window this run opened.
-    ::PostMessageW(opened, WM_CLOSE, 0, 0);
-    return rc;
-}
-
 // ------------------------------------------------------------------------- main
 
 int wmain(int argc, wchar_t **argv)
@@ -578,9 +446,9 @@ int wmain(int argc, wchar_t **argv)
     {
         wprintf(L"usage: menucensus <mode> [args]\n"
                 L"  live-desktop            the desktop background menu Explorer shows\n"
-                L"  live-taskbar            the taskbar menu (needs real input; see the notes)\n"
-                L"  live-folder <folder>    a folder window's background menu\n"
-                L"  read-open               read a menu someone already opened, and leave it\n"
+                L"  read-open [seconds]     read a menu someone already opened, and leave it\n"
+                L"                          (the taskbar and folder windows cannot be driven\n"
+                L"                          from an agent shell; right-click them by hand)\n"
                 L"  bg <folder>             handler contributions, folder background\n"
                 L"  item <path> [<path>...] handler contributions, one or more items\n");
         return 1;
@@ -596,22 +464,8 @@ int wmain(int argc, wchar_t **argv)
     int rc = 1;
     if(::lstrcmpiW(argv[1], L"live-desktop") == 0)
         rc = census_live_desktop();
-    else if(::lstrcmpiW(argv[1], L"live-taskbar") == 0)
-        rc = census_live_taskbar();
     else if(::lstrcmpiW(argv[1], L"read-open") == 0)
         rc = census_read_open(argc > 2 ? ::_wtoi(argv[2]) : 20);
-    else if(::lstrcmpiW(argv[1], L"live-folder") == 0)
-    {
-        if(argc < 3)
-        {
-            wprintf(L"# live-folder needs a folder\n");
-            rc = 1;
-        }
-        else
-        {
-            rc = census_live_folder(argv[2]);
-        }
-    }
     else
         rc = census_static(argc - 1, argv + 1);
 

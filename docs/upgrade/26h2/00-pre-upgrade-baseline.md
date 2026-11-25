@@ -733,8 +733,10 @@ In this order, because each step is cheaper than the next:
     `SHELLDLL_DefView` and `Shell_TrayWnd` in the same run — so this is about UI
     launched from an agent shell not reaching the user's desktop. That rhymes
     with the registry-write asymmetry `AGENTS.md` records for this shell, but the
-    two are not established to share a cause. Run `menucensus live-folder <path>`
-    from an ordinary terminal if the folder surface is wanted.
+    two are not established to share a cause. `menucensus read-open` reads this
+    surface instead: open the folder by hand, right-click, and let it read the
+    menu. (The `live-taskbar` and `live-folder` modes that failed here were
+    removed from the probe for that reason.)
 
   So for folders, files and multi-selections the only reading available here is
   the `IContextMenu` one, which is deterministic and is the right instrument for

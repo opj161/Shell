@@ -305,6 +305,28 @@ step existed to remove. Test for the thing the error is actually about: MSB8020
 names a *platform toolset*, so the check is now the
 `MSBuild\Microsoft\VC\v170\Platforms\ARM64\PlatformToolsets\v143` directory.
 
+**Inside an installer custom action, a registry write the ACL forbids can
+"succeed" into a volatile store** (2026-11-25, Windows 11 26300 x64, undocumented).
+In msiexec's custom-action server, opening the TrustedInstaller-owned
+`{86ca1aa0-…}` key for `KEY_CREATE_SUB_KEY` succeeds and `RegCreateKeyExW` creates
+`TreatAs` — but `NtQueryKey(KeyNameInformation)` on the returned handle names
+`\REGISTRY\MACHINE\SOFTWARE\Volatile\00\MACHINE\SOFTWARE\Classes\...`, and the real
+key never changes. A rerun then "opens the existing key" (disposition 2) while the
+real one is absent. The same calls from an elevated shell or a SYSTEM scheduled
+task fail with `ERROR_ACCESS_DENIED` as the ACL says, and the custom action's token
+reports UAC virtualization neither allowed nor enabled. So a fallback keyed on
+`ERROR_ACCESS_DENIED` never runs there: `src/shared/TreatAsRegistry.h` judges a
+write by reading the real key back. `NtQueryKey` on the handle is how to see where
+a registry write actually went; a reboot clears the store.
+
+**Windows Installer's `WindowsBuild` is 9600 on Windows 10 and 11.** Under msiexec
+`VersionNT` is 603 and `WindowsBuild` 9600 (verbose logs on 26200 and 26300), so a
+condition of `WindowsBuild >= 22000` is never true. A session opened through the
+`WindowsInstaller.Installer` COM object from PowerShell reports the real values,
+because they follow the calling process's manifest — only a real install shows the
+problem. Read `CurrentBuildNumber` with a `RegistrySearch` (`WINDOWSCURRENTBUILD`
+in `setup.wxs`).
+
 Then encode the invariant in `src/tests`. The suites are dependency-free and
 self-registering; see `src/tests/test.h`. Prefer testing a real invariant over a
 mock: `test_native_menu_lazy` drives a real owner window whose child popups sleep
@@ -400,8 +422,9 @@ Building a single project needs `SolutionDir` passed explicitly:
 msbuild /p:Configuration=Release /p:Platform=x64 /p:SolutionDir="<repo>\src\" src\dll\Shell.vcxproj
 ```
 
-`/p:RunTestsAfterBuild=false` skips the post-build test run. Warnings are errors
-in the test project.
+Building `tests.vcxproj` does not run it; `build.ps1` and CI run `tests.exe`
+explicitly, which takes a suite-name substring as its one argument. Warnings are
+errors in the test project.
 
 Report suites individually rather than the aggregate check count.
 
@@ -484,11 +507,12 @@ one of Shell's own popups.
 **Custom actions and `INSTALLFOLDER`.** Directory properties are not resolved
 until `CostFinalize` (sequence 1000). An immediate custom action scheduled before
 that reads `INSTALLFOLDER` as empty whenever no UI sequence set it — a silent
-install, for instance — and `InstallFolder()` in `src/setup/ca/dllmain.cpp` then
-falls back to locating Shell by its registered CLSID. That silently services
+install, for instance. `InstallFolder()` in `src/setup/ca/dllmain.cpp` used to
+fall back to locating Shell by its registered CLSID, which silently serviced
 *whatever Shell is registered on the machine* rather than the one being installed:
 it was caught renaming the live installation's `shell.dll` aside while an entirely
-different product was installing. Schedule after `CostFinalize`; a deferred action
+different product was installing. The fallback is gone and an empty folder fails
+the action; keep it that way. Schedule after `CostFinalize`; a deferred action
 gets the path through `CustomActionData` instead and never sees the property.
 
 **`string::release(n - 1)` on an API's returned count.** `terminate()` clamps
@@ -535,6 +559,13 @@ left to fail later: `Selections.h`'s `PathItem::get` tested `if(sep)` before
 define the empty string. Implicit conversions cannot be grepped, so if a
 null-means-absent sink was missed it is still out there; the sweep covered
 `if(<ptr>)` tests, NULL-sensitive Win32 sinks and `ptr ? a : b` ternaries.
+
+**`ReplaceFileW` fails on a file you still hold open without
+`FILE_SHARE_DELETE`.** It opens the replaced file with `DELETE` access, so a handle
+of yours that shares only reading makes it fail with `ERROR_SHARING_VIOLATION`
+(measured). `RestoreLegacyConfig` did exactly that, and every legacy upgrade with a
+`shell.nss` to carry over failed with 1603 until the throwaway pair was actually
+installed.
 
 **`RegQueryValueEx` will not terminate a `REG_SZ` for you** — it "is NOT
 guaranteed to be null-terminated". Size from the byte count the *second* call
@@ -585,15 +616,22 @@ than implying you did.
   upgrade behaves.
 
   One row of it *is* verifiable here, and worth repeating whenever the setup
-  changes. Build a throwaway pair from the real WiX sources with a different
-  `UpgradeCode`, `ProductCode` and product name — so `INSTALLFOLDER` and the Start
-  Menu shortcut differ — and with the `OnInstall`/`OnUninstall` actions stripped,
-  because those run `shell.exe -register` and restart Explorer. Keep the *component*
-  codes identical across the pair: that is what a same-architecture upgrade looks
-  like. Shape the older one like whatever package you are upgrading from. Then
-  install, edit its `shell.nss`, upgrade, and read the verbose log rather than the
-  outcome alone — `Component: CONFIG;` and `Executing op: FileRemove` say what
-  Windows Installer decided, which is the part that keeps being surprising.
+  changes. `scripts/build-throwaway-msi.ps1` builds a throwaway pair from the real
+  WiX sources: a different product name (so `INSTALLFOLDER` and the Start Menu
+  entry differ), its own `UpgradeCode`, and component codes identical across the
+  pair — that is what a same-architecture upgrade looks like — but shared with
+  nothing the real install registered. `-Legacy` shapes the older one like
+  upstream before 1.9.20. Install it into a custom folder, edit its `shell.nss`,
+  upgrade, uninstall, reinstall, and read the verbose logs rather than the outcome
+  alone — `Component: CONFIG;`, `Executing op: FileRemove` and each custom action's
+  `Return value` say what Windows Installer decided, which is the part that keeps
+  being surprising. Its registration is the real one, so redeploy afterwards.
+
+  Run on 2026-11-25, it found two defects that every static check had passed:
+  the legacy config bridge failed *every* upgrade that had a `shell.nss` to carry
+  over (`RestoreLegacyConfig` held the file open without `FILE_SHARE_DELETE` while
+  `ReplaceFileW` replaced it), and the Windows 11 redirect was never created on a
+  fresh install (the redirected-write case below).
 
 ARM64 is not one of these: the v143 ARM64 cross tools
 (`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) are installed here, so

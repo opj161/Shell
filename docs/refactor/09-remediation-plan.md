@@ -3,7 +3,7 @@
 **Written and independently re-audited 2026-08-25 against
 `refactor/takeover-master-plan` @ `450985f`** — 83 commits ahead of `main`, 26
 after `6b26e61`. It merges an external audit
-([`external-audit.md`](external-audit.md)) with a first-hand QA pass run on
+(`external-audit.md`, since removed: `git show 9817e72:docs/refactor/external-audit.md`) with a first-hand QA pass run on
 this machine, keeps only what survived verification, and turns the remainder
 into work items.
 

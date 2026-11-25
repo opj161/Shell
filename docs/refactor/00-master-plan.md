@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-22 · **Tree:** `main` @ `a3431df`
 **Inputs:** `docs/maintenance/architecture-assessment-2026-08-22.md` (full-scan assessment),
-`docs/maintenance/Shell_Architecture_Audit_1.md`, `docs/maintenance/Shell_Architecture_Audit_2.md`,
+`docs/maintenance/Shell_Architecture_Audit_1.md`, `docs/maintenance/Shell_Architecture_Audit_2.md`
+(all three removed once folded in here; read them with `git show 9817e72:<path>`),
 plus first-hand code verification and Microsoft Learn fetches performed 2026-08-22
 (IContextMenu, IShellExtInit, TrackPopupMenu, WM_INITMENUPOPUP, WM_UNINITMENUPOPUP,
 WM_MENUCHAR, MENUINFO, Using Menus, IExplorerCommand::GetState,
@@ -354,9 +355,22 @@ oversights:
 | `04-code-health.md` | P0 defect/dead-code fixes, encoding/string cleanup, seam extraction, targeted moveto, caches/memoization |
 | `05-capabilities.md` | Provider health/Reliability Center, bypass, accessibility, keyboard, columns, favorites, inspector |
 | `06-phases-and-tests.md` | Phase sequencing with acceptance criteria, trace harness spec, regression gates, measurement protocol |
-| `07-plan-audit.md` | Critical audit of this plan and of Phase 0 as implemented. **Amendments from it are folded into 00–06 in place**; 07 is kept as the reasoning and evidence record, including the probes run against this machine |
+| `08-handoff.md` | Where the work stood after phases 0–2 and why it was sequenced that way |
+| `09-remediation-plan.md` | Remediation of the external audit and the first-hand QA pass |
+| `10-remediation-qa-assessment-revised.md` | Independent QA of the 09 remediation |
+| `11-qa-deep-pass.md` | Documentation-to-code QA pass: what 10 missed |
+| `12-closure-plan.md` | Closure specification for 09 (workstreams W0–W11) |
+| `13-implementation-handoff.md` | Operating manual for 12, including the hostprobe recipe (§4) |
+| `14-post-implementation-qa.md` | Closing out 12: QA, remaining implementation, validation |
+| `15-independent-qa-assessment.md` | Final verdict on the refactor, and the "measured and declined" list (§7) |
+| `16-third-party-hosts.md` | Which third-party hosts Shell can serve, and why Directory Opus is not one |
+| `17-menu-latency-and-the-audit.md` | Where the right-click latency actually is |
 
-| `08-handoff.md` | Where the work actually stands, why it is sequenced the way it is, and what to pick up next. **Start here.** |
+Removed 2026-11-25 as superseded, with their content folded into the documents
+above: `07-plan-audit.md` (amendments applied in place, §6 below), the original
+`10-remediation-qa-assessment.md` (replaced by its revised version),
+`external-audit.md`, and `docs/maintenance/`. Read any of them with
+`git show 9817e72:<path>`.
 ## 6. Amendments applied from the §07 audit
 
 | # | Change | Where |
