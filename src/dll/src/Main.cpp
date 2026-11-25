@@ -732,6 +732,21 @@ void log_breaker_opened() noexcept
 			   Nilesoft::Shell::TakeoverBreaker::THRESHOLD);
 }
 
+/*
+	Set once a menu window turns out to be painted by the host itself
+	(Include/HostMenuPainter.h). From then on the hook hands this process its own
+	menus without composing one it could not show. Process lifetime, like the
+	breaker above.
+*/
+std::atomic<bool> g_host_paints_menus{ false };
+
+// Its own function for the same C2712 reason as log_breaker_opened().
+void log_host_paints_menus() noexcept
+{
+	_log.write(L"this host paints its own menu windows (Delphi VCL Styles does); "
+			   L"it gets its own menus from now on\n");
+}
+
 LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 __inline auto is_registered(bool force_refresh = false) -> bool
@@ -1267,6 +1282,13 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				__leave;
 			}
 
+			// A decision about this host, not a failure, so not the breaker's.
+			if(g_host_paints_menus.load(std::memory_order_relaxed))
+			{
+				perf::session_decision(perf::TakeoverDecision::Declined);
+				__leave;
+			}
+
 			if(!_initializer.Status.Disabled)
 			{
 				// is injected from explorer
@@ -1411,6 +1433,22 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					takeover_breaker().record_success();
 
 					invoke(ctx->MenuHandle(), flag, { x, y });
+
+					// The host painted the menu window itself and Shell ended its
+					// menu unseen (Include/HostMenuPainter.h). Hand the host the menu
+					// it built - the __finally tracks it with its own flags - and every
+					// later one. Composition only read the host's menu, so it is intact.
+					if(ctx->host_paints_menus())
+					{
+						ctx->InvokeCommand(0);		// destroys ctx; nothing was chosen
+						ctx = nullptr;
+						if(!g_host_paints_menus.exchange(true))
+							log_host_paints_menus();
+						perf::session_decision(perf::TakeoverDecision::Declined);
+						attempted_takeover = false;
+						invoked = false;
+						__leave;
+					}
 
 					// v = 0;
 					// SystemParametersInfoW(SPI_SETMENUANIMATION, 0, &v, SPIF_SENDCHANGE);

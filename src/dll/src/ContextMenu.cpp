@@ -8,6 +8,7 @@
 #include "Include/TypeAhead.h"
 #include "Include/MenuColumns.h"
 #include "Include/VerticalBlank.h"
+#include "Include/HostMenuPainter.h"
 #include "RegistryConfig.h"
 
 using namespace Nilesoft::Diagnostics;
@@ -4393,6 +4394,24 @@ namespace Nilesoft
 					_hMenu = nullptr;
 				}
 
+				// Normally empty: MenuSubClassProc's WM_NCDESTROY releases each
+				// popup. A host that re-subclasses menu windows can cut Shell out of
+				// that chain (Include/HostMenuPainter.h), and the popup's backdrop
+				// windows - topmost, click-through, owned by the host - then stayed
+				// on screen until the host exited. This runs on the menu thread,
+				// which created them, so DestroyWindow is allowed here.
+				for(auto &[popup, wnd] : _map)
+				{
+					wnd.destroy();
+					if(::IsWindow(popup))
+					{
+						::RemoveWindowSubclass(popup, MenuSubClassProc, 0);
+						::RemovePropW(popup, L"wnd");
+						Prop::Remove(popup);
+					}
+				}
+				_map.clear();
+
 				_windowSubclass.unhook();
 
 				// Synthetic teardown first, then the borrowed popups are told
@@ -5022,6 +5041,15 @@ namespace Nilesoft
 
 		WND *ContextMenu::OnMenuCreate(HWND hWnd)
 		{
+			// The host paints this window itself, so Shell's owner-drawn items
+			// would never show. Leave it untouched; WinEventProc ends the menu on
+			// show and the hook hands the host its own. Include/HostMenuPainter.h.
+			if(_host_paints_menus || menu_window_replaced_by_host(hWnd))
+			{
+				_host_paints_menus = true;
+				return nullptr;
+			}
+
 			auto wnd = &_map[hWnd];
 
 			wnd->ctx = this;
@@ -5114,6 +5142,15 @@ namespace Nilesoft
 			// rather than a second, independent opinion drifting from it.
 			if(PopupAction::Show != _level.on_show(hWnd))
 				return;
+
+			// Replaced after Shell subclassed it, which hides the host from
+			// OnMenuCreate's check: same outcome, before the backdrop shows.
+			if(menu_window_replaced_by_host(hWnd))
+			{
+				_host_paints_menus = true;
+				::EndMenu();
+				return;
+			}
 
 			if(wnd == nullptr)
 				wnd = WND::get_prop(hWnd);
@@ -6011,23 +6048,27 @@ namespace Nilesoft
 			//idChild == INDEXID_CONTAINER
 			if(Window::IsPopupMenu(hWnd))
 			{
+				ContextMenu *ctx = nullptr;
+				{
+					std::lock_guard<std::mutex> lock(HookMapMutex);
+					auto it = HookMap.find(hWinEventHook);
+					if(it != HookMap.end())
+						ctx = it->second;
+				}
+
 				if(dwEvent == EVENT_OBJECT_CREATE)
 				{
-					ContextMenu *ctx = nullptr;
-					{
-						std::lock_guard<std::mutex> lock(HookMapMutex);
-						auto it = HookMap.find(hWinEventHook);
-						if(it != HookMap.end())
-							ctx = it->second;
-					}
 					if(ctx)
 						ctx->OnMenuCreate(hWnd);
 				}
-				else if(dwEvent == EVENT_OBJECT_SHOW)
-				{
-					if(auto ctx = Prop::Get(hWnd); ctx)
-						ctx->OnMenuShow(hWnd);
-				}
+				// A window OnMenuCreate left to the host that paints it: end the
+				// menu unseen. EndMenu at show was measured to end the tracking
+				// cleanly (scratch probe, Windows 11 26300).
+				// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-endmenu
+				else if(ctx && ctx->_host_paints_menus)
+					::EndMenu();
+				else if(auto owner = Prop::Get(hWnd); owner)
+					owner->OnMenuShow(hWnd);
 			}
 		}
 

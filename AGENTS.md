@@ -27,6 +27,18 @@ before you debug a "broken menu" in one:
   Nilesoft Shell does". Shell's value is *removing, moving and regrouping*
   existing items, which `QueryContextMenu` cannot express — through that door a
   handler can only add. Do not try to take Opus over; record it and move on.
+- **A host that repaints its own menu windows** gets its own menus, by design.
+  **WizTree** is the worked example (diagnosed 2026-11-25). It is Delphi, and
+  VCL Styles' `TSysPopupStyleHook` replaces the window procedure of every
+  `#32768` in the process with `SetWindowLongPtr`. Shell's owner-drawn items
+  were then never drawn: a blank rectangle that only closing WizTree removed.
+  Restoring that procedure on teardown also cut Shell's comctl32 subclass out
+  before `WM_NCDESTROY`, so the backdrop windows were never destroyed.
+  `Include/HostMenuPainter.h` detects the replacement, `WinEventProc` ends
+  Shell's menu unseen, and the hook tracks the host's own menu for that click
+  and every later one in the process. `Uninitialize()` now also destroys any
+  backdrop a popup left behind. The same applies to WizFile, TreeSize and
+  WinSCP whenever a VCL style (their dark modes) is active.
 
 That shapes how to work on it.
 
@@ -566,6 +578,19 @@ of yours that shares only reading makes it fail with `ERROR_SHARING_VIOLATION`
 (measured). `RestoreLegacyConfig` did exactly that, and every legacy upgrade with a
 `shell.nss` to carry over failed with 1603 until the throwaway pair was actually
 installed.
+
+**Every reader of a file the user edits shares read, write and delete.** Two
+dozen hosts reload `shell.nss` the moment it is saved. `_wfopen_s` "can't open a
+file for sharing": measured 2026-11-25, while it held the file an editor's
+`GENERIC_WRITE` open and a rename-replace's `DELETE` both failed with error 32, and
+an editor holding the file for write made the parser's open fail. `File::Open`'s
+binary read and `ConfigShadow::open_for_read` now open with all three share modes.
+With those, an in-place save, `ReplaceFileW` and a POSIX-semantics rename land
+while a host reads. A classic `MoveFileEx(REPLACE_EXISTING)` over an open file
+still fails with `ERROR_ACCESS_DENIED` whatever the reader shares (measured).
+The stamps catch a write that lands mid-read. A root that exists but cannot be
+opened leaves `Status.Refresh` set, so the next menu retries, because releasing a
+lock changes nothing the watcher can see.
 
 **`RegQueryValueEx` will not terminate a `REG_SZ` for you** — it "is NOT
 guaranteed to be null-terminated". Size from the byte count the *second* call

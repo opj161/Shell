@@ -193,6 +193,7 @@
     <ClInclude Include="src\Include\BitmapCache.h" />
     <ClInclude Include="src\Include\ComActivationPolicy.h" />
     <ClInclude Include="src\Include\HostContract.h" />
+    <ClInclude Include="src\Include\HostMenuPainter.h" />
     <ClInclude Include="src\Include\ProviderHealth.h" />
     <ClInclude Include="src\Include\IconResource.h" />
     <ClInclude Include="src\Include\Mnemonics.h" />

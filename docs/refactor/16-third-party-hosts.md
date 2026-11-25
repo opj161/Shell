@@ -44,6 +44,13 @@ that enumerates the registry itself and builds its own menu never displays the
 handle it gave the handlers, so the capture never matches — and a handler that
 adds no items is invisible to it.
 
+**Class 2 has one exception: a host that repaints its own menu windows.**
+Added 2026-11-25. WizTree uses Delphi VCL Styles, whose `TSysPopupStyleHook`
+replaces the procedure of every `#32768`. Shell's owner-drawn items were never
+drawn, so the menu came up as a blank rectangle that only closing WizTree
+removed. Shell now detects the replacement (`Include/HostMenuPainter.h`) and
+hands such a host its own menu. `AGENTS.md` has the full account.
+
 The zero-item design is not an oversight. It is what lets Shell *replace* a menu
 rather than append to one, and replacing is the entire product: the stock
 configuration's `modify.nss` removes `id.restore_previous_versions`, moves

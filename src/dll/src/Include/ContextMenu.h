@@ -873,6 +873,9 @@ plutovg_move_to(pluto, start.x, start.y);
 			// pointers into a map that erases by key.
 			PopupStack<WND> _level;
 			std::unordered_map<HWND, WND> _map;
+			// The host repaints its own menu windows, so this menu was ended
+			// unseen and the host gets its own. Include/HostMenuPainter.h.
+			bool _host_paints_menus = false;
 			// Owns every MenuItemInfo; the vector stores unique_ptr, so pointee addresses stay stable across growth.
 			std::vector<std::unique_ptr<MenuItemInfo>> _gc;
 			bool _uninitialized = false;
@@ -1051,6 +1054,7 @@ plutovg_move_to(pluto, start.x, start.y);
 				lookups into what composition already recorded.
 			*/
 			bool host_notifies_by_position() const noexcept { return _host_by_position; }
+			bool host_paints_menus() const noexcept { return _host_paints_menus; }
 
 			bool native_origin(int tracked, uint32_t *position, HMENU *menu) const
 			{
