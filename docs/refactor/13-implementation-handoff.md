@@ -97,24 +97,39 @@ Both commands must be run by hand until W6.4 lands.
 .\src\bin\x64\hostprobe.exe --verify .\src\tests\hostprobe\fixtures
 ```
 
-Takeover mode needs the per-user COM override — `--shell` alone cannot redirect
-shell-namespace COM activations. Full recipe, and **the cleanup is mandatory**:
+Takeover mode needs per-user COM overrides — `--shell` alone cannot redirect
+shell-namespace COM activations. `scripts/hostprobe-takeover.cmd` sets them, runs,
+and removes them (**the cleanup is mandatory**: left in place, every shell
+activation for this user loads a dev build):
 
-```powershell
-Copy-Item src\bin\shell.nss src\bin\x64\shell.nss -Force
-Copy-Item src\bin\imports src\bin\x64\imports -Recurse -Force
-$k = 'HKCU\SOFTWARE\Classes\CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}\InprocServer32'
-reg add $k /ve /t REG_SZ /d "$PWD\src\bin\x64\shell.dll" /f
-reg add $k /v ThreadingModel /t REG_SZ /d Apartment /f
-
-.\src\bin\x64\hostprobe.exe --takeover --verify .\src\tests\hostprobe\fixtures
-
-reg delete 'HKCU\SOFTWARE\Classes\CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}' /f
-Remove-Item src\bin\x64\shell.nss, src\bin\x64\imports -Recurse -Force
+```bat
+scripts\hostprobe-takeover.cmd con            :: from an UNELEVATED terminal
+scripts\hostprobe-takeover.cmd run.log "" 3    :: log file, no filter, three runs
 ```
 
-The QA session set this override and removed it; the machine is clean. Leaving it
-in place points every context-menu activation on the desktop at a dev build.
+**Corrected 2026-11-25: the recipe that stood here tested the installed build.**
+It overrode only the context-menu class, from whatever shell it was typed into.
+Two things defeat that, and both were measured:
+
+- An elevated process ignores the override: "A process elevated by using the UAC
+  mechanism does not load per-user classes during COM activations"
+  ([The COM Elevation Moniker](https://learn.microsoft.com/windows/win32/com/the-com-elevation-moniker)).
+  An agent shell here is elevated. Run the script through Explorer, which starts it
+  at medium integrity: `explorer.exe "<a .cmd that calls it with a log path>"`.
+- On Windows 11 with `-treat`, COM activated the installed copy through
+  `{86ca1aa0}`'s machine-wide `TreatAs` even at medium integrity. The script
+  shadows that redirect per user, as well as all three of Shell's classes.
+
+The tell was `shell.dll mapped in this process` listing two files. hostprobe now
+fails such a run. Earlier "takeover N/N" results from an elevated shell measured
+the deployed build's capture path, not the tree's.
+
+The overrides apply to *every* process of the user while they exist. Anything
+that activates Shell in that window loads the dev build from `src\bin\x64` and
+pins it for the rest of its life, and the next build then fails with `LNK1104:
+cannot open file ...\shell.dll`. On 2026-11-25 the culprit was a packaged verb's
+COM surrogate (`DllHost.exe /Processid:{1861E28B-...}`). Find the holder with
+`(Get-Process).Modules` and let it exit.
 
 **Check the `takeover:` line names the build under test.** Without the override
 the run still executes 32 scenarios but

@@ -56,6 +56,70 @@ namespace hostprobe
 		// read as both. Item 0 is 5001, item 1 is 5002, and so on.
 		constexpr UINT FIRST_ID = 5001;
 
+		/*
+			A host that paints its own menu windows, the way Delphi VCL Styles'
+			TSysPopupStyleHook does in WizTree: every #32768 this thread creates
+			gets its procedure replaced with SetWindowLongPtr at HCBT_CREATEWND,
+			and the saved one put back at HCBT_DESTROYWND. The replacement only
+			notes which HMENU the window painted. Include/HostMenuPainter.h.
+		*/
+		struct ReplacingHost
+		{
+			static inline HHOOK hook{};
+			static inline HMENU host_menu{};
+			static inline bool host_menu_painted{};
+			static inline std::map<HWND, WNDPROC> saved;
+
+			static LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+			{
+				auto it = saved.find(hwnd);
+				auto original = it != saved.end() ? it->second : &::DefWindowProcW;
+				if(msg == WM_PAINT && host_menu
+				   && reinterpret_cast<HMENU>(::CallWindowProcW(original, hwnd, MN_GETHMENU, 0, 0)) == host_menu)
+					host_menu_painted = true;
+				return ::CallWindowProcW(original, hwnd, msg, wp, lp);
+			}
+
+			static bool is_menu_window(HWND hwnd)
+			{
+				wchar_t cls[16]{};
+				return ::GetClassNameW(hwnd, cls, 16) && ::lstrcmpW(cls, L"#32768") == 0;
+			}
+
+			static LRESULT CALLBACK cbt(int code, WPARAM wp, LPARAM lp)
+			{
+				auto hwnd = reinterpret_cast<HWND>(wp);
+				if(code == HCBT_CREATEWND && is_menu_window(hwnd))
+					saved[hwnd] = reinterpret_cast<WNDPROC>(
+						::SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&proc)));
+				else if(code == HCBT_DESTROYWND)
+				{
+					auto it = saved.find(hwnd);
+					if(it != saved.end())
+					{
+						::SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(it->second));
+						saved.erase(it);
+					}
+				}
+				return ::CallNextHookEx(hook, code, wp, lp);
+			}
+
+			// Shell's windows still on screen on this thread.
+			static size_t shell_windows_visible()
+			{
+				size_t count = 0;
+				::EnumThreadWindows(::GetCurrentThreadId(), [](HWND hwnd, LPARAM counter) -> BOOL
+				{
+					wchar_t cls[32]{};
+					if(::IsWindowVisible(hwnd) && ::GetClassNameW(hwnd, cls, 32)
+					   && ::lstrcmpW(cls, L"Nilesoft.Shell.Window") == 0)
+						++*reinterpret_cast<size_t *>(counter);
+					return TRUE;
+				}, reinterpret_cast<LPARAM>(&count));
+				return count;
+			}
+		};
+
 		HMENU build(MenuShape shape, bool notify_by_pos)
 		{
 			if(shape == MenuShape::Invalid)
@@ -645,9 +709,25 @@ namespace hostprobe
 
 		probe.clear_navigation_failure();
 
+		if(s.host_replaces_menu_procs)
+		{
+			ReplacingHost::host_menu = menu;
+			ReplacingHost::host_menu_painted = false;
+			ReplacingHost::hook = ::SetWindowsHookExW(WH_CBT, &ReplacingHost::cbt, nullptr,
+													  ::GetCurrentThreadId());
+		}
+
 		Result result;
 		result.name = s.name;
 		result.returned = probe.track(menu, s.flags, s.use_ex, script);
+
+		if(s.host_replaces_menu_procs)
+		{
+			::UnhookWindowsHookEx(ReplacingHost::hook);
+			ReplacingHost::hook = nullptr;
+			result.host_menu_painted = ReplacingHost::host_menu_painted;
+			result.shell_windows_left = ReplacingHost::shell_windows_visible();
+		}
 		result.navigation_failed = probe.navigation_failed();
 		result.last_error = probe.last_error();
 		result.trace = probe.trace().render();
@@ -1222,6 +1302,23 @@ namespace hostprobe
 				s.expectation = Expect::ASubmenuOpensAgainstItsParent;
 				s.why = L"placement is presenter work, and section 07 will move "
 						L"the presenter";
+				v.push_back(s);
+			}
+			{
+				// Last, and it has to be: once Shell has seen a host repaint a
+				// menu window it hands that process its own menus for good, so
+				// every takeover scenario after this one would be declined.
+				Scenario s;
+				s.name = L"takeover.a_host_that_paints_its_menus_gets_its_own";
+				s.flags = TPM_LEFTALIGN | TPM_RIGHTBUTTON;
+				s.shape = MenuShape::ShellItem;
+				s.script = ScriptKind::CancelWhatever;
+				s.needs = Requires::Takeover;
+				s.machine_specific = true;
+				s.host_replaces_menu_procs = true;
+				s.expectation = Expect::HostShowsItsOwnMenu;
+				s.why = L"WizTree's blank, unclosable menu: Shell cannot paint a "
+						L"window the host paints";
 				v.push_back(s);
 			}
 

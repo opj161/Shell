@@ -72,6 +72,11 @@ namespace hostprobe
 		ComposedOrderSurvivesToTheScreen,
 		ThePopupContainsTheItemsItMeasured,
 		ASubmenuOpensAgainstItsParent,
+
+		// A host that replaces every menu window's procedure (Delphi VCL Styles
+		// does; WizTree) is handed its own menu, and no backdrop of Shell's is
+		// left on screen. Include/HostMenuPainter.h.
+		HostShowsItsOwnMenu,
 	};
 
 	struct Scenario
@@ -96,6 +101,11 @@ namespace hostprobe
 		// Its trace depends on what this machine has installed, so --record and
 		// --verify skip it. The expectation is the whole test.
 		bool machine_specific{};
+
+		// Act like a VCL-styled host: replace the procedure of every #32768 this
+		// thread creates (SetWindowLongPtr at HCBT_CREATEWND) and restore it at
+		// HCBT_DESTROYWND.
+		bool host_replaces_menu_procs{};
 	};
 
 	struct Result
@@ -150,6 +160,12 @@ namespace hostprobe
 		// one was initialised - the difference between Shell tracking the host's
 		// menu and Shell tracking one it composed.
 		bool tracked_a_different_menu{};
+
+		// host_replaces_menu_procs: a menu window painted the host's own HMENU,
+		// and how many of Shell's windows were still visible once tracking
+		// returned.
+		bool host_menu_painted{};
+		size_t shell_windows_left{};
 
 		// Every popup that received a WM_INITMENUPOPUP got exactly one
 		// WM_UNINITMENUPOPUP. The pairing commit a634ab6 landed, asserted
@@ -207,7 +223,7 @@ namespace hostprobe
 	// ShellItem scenarios landed. A count that lives only in prose drifts away
 	// from the thing it counts, and the drift is invisible precisely because
 	// the run still passes.
-	inline constexpr int kTakeoverScenarios = 33;
+	inline constexpr int kTakeoverScenarios = 34;
 	inline constexpr int kNativeScenarios = 23;
 	inline constexpr int kSkippedWithoutTakeover =
 		kTakeoverScenarios - kNativeScenarios;

@@ -220,6 +220,16 @@ namespace
 					  L"Shell declined, or the breaker is open\n");
 			return 1;
 
+		case Expect::HostShowsItsOwnMenu:
+			if(r.host_menu_painted && r.shell_windows_left == 0)
+				return 0;
+			::wprintf(L"    FAIL expected the host's own menu painted and no Shell "
+					  L"window left; the host's menu was %s, %zu Shell window(s) "
+					  L"still visible\n",
+					  r.host_menu_painted ? L"painted" : L"never painted",
+					  r.shell_windows_left);
+			return 1;
+
 		case Expect::EveryInitPopupHasOneUninit:
 			if(r.init_uninit_paired)
 				return 0;
@@ -519,9 +529,18 @@ int __cdecl wmain(int argc, wchar_t **argv)
 		::wprintf(L"\nshell.dll mapped in this process:\n");
 		for(auto &s : shells)
 			::wprintf(L"  %s\n", s.c_str());
+		// A second copy means COM activated another Shell for the shell-namespace
+		// scenarios, and its hook then did the work: the run tested that build,
+		// not this one. Measured 2026-11-25 - an elevated process ignores
+		// per-user classes, and the Windows 11 TreatAs redirect resolved to the
+		// installed copy - so it fails rather than reading as a pass.
+		// docs/refactor/13-implementation-handoff.md section 4 has the recipe.
 		if(shells.size() > 1)
-			::wprintf(L"  (more than one - the shell-namespace scenarios run "
-					  L"against whichever COM activated)\n");
+		{
+			::wprintf(L"    FAIL more than one shell.dll mapped - the shell-namespace "
+					  L"scenarios ran against whichever COM activated\n");
+			failures++;
+		}
 	}
 
 	// What the run was measured against, in the summary rather than only in the

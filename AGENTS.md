@@ -32,13 +32,16 @@ before you debug a "broken menu" in one:
   VCL Styles' `TSysPopupStyleHook` replaces the window procedure of every
   `#32768` in the process with `SetWindowLongPtr`. Shell's owner-drawn items
   were then never drawn: a blank rectangle that only closing WizTree removed.
-  Restoring that procedure on teardown also cut Shell's comctl32 subclass out
-  before `WM_NCDESTROY`, so the backdrop windows were never destroyed.
+  The backdrop outlived the menu because Shell's subclass never saw
+  `WM_NCDESTROY` (observed: no `#32768` left, backdrop still up). That VCL
+  caused this by restoring its saved procedure over comctl32's chain is
+  *inferred, not traced*.
   `Include/HostMenuPainter.h` detects the replacement, `WinEventProc` ends
   Shell's menu unseen, and the hook tracks the host's own menu for that click
   and every later one in the process. `Uninitialize()` now also destroys any
-  backdrop a popup left behind. The same applies to WizFile, TreeSize and
-  WinSCP whenever a VCL style (their dark modes) is active.
+  backdrop a popup left behind. WizFile, TreeSize and WinSCP link the same
+  hook, so they should behave the same whenever a VCL style (their dark modes)
+  is active; *not tried*.
 
 That shapes how to work on it.
 
@@ -452,7 +455,12 @@ Report suites individually rather than the aggregate check count.
   with a named owner ([`06`](docs/refactor/06-phases-and-tests.md) §3), it is the
   gate that has caught the most, and the recipe with its mandatory cleanup is in
   [`13`](docs/refactor/13-implementation-handoff.md) §4. Run it for anything
-  touching the menu path.
+  touching the menu path. Takeover mode goes through
+  `scripts/hostprobe-takeover.cmd` and must run **unelevated**: an elevated
+  process ignores per-user COM classes, so from an agent shell, which is
+  elevated, the shell-namespace scenarios silently tested the installed build
+  (measured 2026-11-25). Launch it through `explorer.exe`, which starts it at
+  medium integrity.
 
 ## Things that are easy to get wrong here
 
