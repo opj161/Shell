@@ -14,6 +14,7 @@
 #include "..\shared\Favorites.h"
 #include "..\dll\src\Include\MenuFavorites.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -404,4 +405,200 @@ TEST(menu_favorites, a_plan_naming_an_index_that_is_not_there_is_ignored)
 	CHECK_EQ(order.size(), (size_t)2);
 	CHECK_EQ(order[0], 20);
 	CHECK_EQ(order[1], 10);
+}
+
+// ---- writing back keeps what the user wrote -----------------------------
+//
+// favorites.txt says '#' comments a line out, so it is a file people edit. A
+// save that rebuilt it from the parsed entries deleted every comment, blank
+// line and mistyped line on the first click.
+
+namespace
+{
+	std::wstring text_of(const std::wstring &path)
+	{
+		return StoreFile::read(path, 1 << 20).text;
+	}
+
+	void put_bytes(const std::wstring &path, const std::string &bytes)
+	{
+		auto file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+								  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if(file == INVALID_HANDLE_VALUE)
+			return;
+		DWORD written = 0;
+		::WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+		::CloseHandle(file);
+	}
+
+	// Read, change, save: what FavoritesStore::record_use and shell.exe do.
+	template<class Change>
+	bool edit(const std::wstring &path, Change change)
+	{
+		auto loaded = Favorites::read(path);
+		if(!loaded.usable())
+			return false;
+		auto entries = std::move(loaded.entries);
+		if(!change(entries))
+			return false;
+		return Favorites::save(path, entries);
+	}
+}
+
+TEST(favorites_file, every_line_the_user_wrote_survives_each_kind_of_write)
+{
+	TempFile file;
+	auto a = item(L"alpha"), b = item(L"beta"), c = item(L"gamma");
+
+	CHECK(StoreFile::replace(file.path,
+		L"# my notes\r\n"
+		L"\r\n"
+		L"use 3 " + a.text + L"\r\n"
+		L"pin garbage\r\n"
+		L"use 1 " + b.text + L"\r\n"
+		L"use 9 " + a.text + L"\r\n"
+		L"# tail\r\n"));
+
+	// A use: the first line for the identity takes the new count, in place,
+	// and the repeat the parser already ignored goes.
+	CHECK(edit(file.path, [&](auto &e) { return record_use(e, a); }));
+	CHECK(text_of(file.path) ==
+		L"# my notes\r\n"
+		L"\r\n"
+		L"use 4 " + a.text + L"\r\n"
+		L"pin garbage\r\n"
+		L"use 1 " + b.text + L"\r\n"
+		L"# tail\r\n");
+
+	// A pin.
+	CHECK(edit(file.path, [&](auto &e) { return set_pinned(e, b, true); }));
+	CHECK(text_of(file.path) ==
+		L"# my notes\r\n"
+		L"\r\n"
+		L"use 4 " + a.text + L"\r\n"
+		L"pin garbage\r\n"
+		L"pin 1 " + b.text + L"\r\n"
+		L"# tail\r\n");
+
+	// A new identity goes at the end.
+	CHECK(edit(file.path, [&](auto &e) { return record_use(e, c); }));
+	CHECK(text_of(file.path) ==
+		L"# my notes\r\n"
+		L"\r\n"
+		L"use 4 " + a.text + L"\r\n"
+		L"pin garbage\r\n"
+		L"pin 1 " + b.text + L"\r\n"
+		L"# tail\r\n"
+		L"use 1 " + c.text + L"\r\n");
+
+	// An unpin rewrites one line.
+	CHECK(edit(file.path, [&](auto &e) { return set_pinned(e, b, false); }));
+	CHECK(text_of(file.path).find(L"use 1 " + b.text + L"\r\n") != std::wstring::npos);
+
+	// A forget removes exactly the line it names.
+	CHECK(edit(file.path, [&](auto &e)
+	{
+		e.erase(std::remove_if(e.begin(), e.end(), [&](const Entry &x)
+							   { return x.identity.hash == b.hash; }), e.end());
+		return true;
+	}));
+	CHECK(text_of(file.path) ==
+		L"# my notes\r\n"
+		L"\r\n"
+		L"use 4 " + a.text + L"\r\n"
+		L"pin garbage\r\n"
+		L"# tail\r\n"
+		L"use 1 " + c.text + L"\r\n");
+
+	// Forgetting everything leaves everything that was not an entry.
+	CHECK(edit(file.path, [&](auto &e) { e.clear(); return true; }));
+	CHECK(text_of(file.path) ==
+		L"# my notes\r\n"
+		L"\r\n"
+		L"pin garbage\r\n"
+		L"# tail\r\n");
+}
+
+TEST(favorites_file, an_unchanged_line_keeps_the_spelling_it_was_written_with)
+{
+	TempFile file;
+	auto a = item(L"alpha");
+	std::wstring original =
+		L"#  spaced   comment\r\n"
+		L"use    3    " + a.text + L"\r\n";
+	CHECK(StoreFile::replace(file.path, original));
+
+	CHECK(edit(file.path, [](auto &) { return true; }));
+	CHECK(text_of(file.path) == original);
+}
+
+TEST(favorites_file, a_new_file_gets_the_header_once)
+{
+	TempFile file;
+	auto a = item(L"alpha"), b = item(L"beta");
+
+	CHECK(edit(file.path, [&](auto &e) { return record_use(e, a); }));
+	CHECK(text_of(file.path) == std::wstring(Header) + L"use 1 " + a.text + L"\r\n");
+
+	CHECK(edit(file.path, [&](auto &e) { return record_use(e, b); }));
+	auto text = text_of(file.path);
+	CHECK(text.find(Header) == 0);
+	CHECK(text.find(Header, 1) == std::wstring::npos);
+}
+
+TEST(favorites_file, a_file_an_editor_saved_as_utf8_is_read_and_kept)
+{
+	auto a = item(L"alpha"), b = item(L"beta");
+
+	// Even and odd byte counts, with and without a mark: the even one without
+	// is what used to be read as UTF-16, parse as an empty list in state
+	// Loaded, and be replaced by a one-entry file on the next click.
+	for(int variant = 0; variant < 4; variant++)
+	{
+		TempFile file;
+		std::string body = "# caf\xC3\xA9\r\n";
+		body += "use 2 ";
+		for(wchar_t c : a.text)
+			body.push_back(static_cast<char>(c));
+		body += "\r\n";
+		if(variant & 1)
+			body = "\xEF\xBB\xBF" + body;
+		if((body.size() & 1) != ((variant & 2) ? 1u : 0u))
+			body += ' ';			// pad to the parity under test
+
+		put_bytes(file.path, body);
+		auto loaded = Favorites::read(file.path);
+		CHECK(loaded.loaded());
+		CHECK_EQ(loaded.entries.size(), (size_t)1);
+
+		CHECK(edit(file.path, [&](auto &e) { return record_use(e, b); }));
+		auto text = text_of(file.path);
+		CHECK(text.find(L"# café") != std::wstring::npos);
+		CHECK(text.find(L"use 2 " + a.text) != std::wstring::npos);
+		CHECK(text.find(L"use 1 " + b.text) != std::wstring::npos);
+	}
+}
+
+TEST(favorites_file, lines_beyond_the_cap_are_not_mistaken_for_removals)
+{
+	// The parser never looks past MaxEntries, so the caller never loaded those
+	// lines and cannot have removed them.
+	TempFile file;
+	std::wstring body;
+	for(size_t i = 0; i < MaxEntries + 1; i++)
+	{
+		wchar_t signature[32]{};
+		::swprintf_s(signature, L"n%04u", static_cast<unsigned>(i));
+		body += L"use 1 " + item(signature).text + L"\r\n";
+	}
+	CHECK(StoreFile::replace(file.path, body));
+
+	auto loaded = Favorites::read(file.path);
+	CHECK_EQ(loaded.entries.size(), MaxEntries);
+
+	CHECK(edit(file.path, [&](auto &e) { return record_use(e, e.front().identity); }));
+
+	auto text = text_of(file.path);
+	auto last = L"use 1 " + item(L"n0256").text + L"\r\n";
+	CHECK(text.size() >= last.size() && text.compare(text.size() - last.size(), last.size(), last) == 0);
 }

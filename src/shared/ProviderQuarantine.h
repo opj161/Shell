@@ -107,16 +107,7 @@ namespace Nilesoft
 				std::wstring note;
 			};
 
-			// Trims ASCII spaces and tabs from both ends. Deliberately not
-			// locale-aware: this file holds GUIDs.
-			inline std::wstring_view trim(std::wstring_view s) noexcept
-			{
-				while(!s.empty() && (s.front() == L' ' || s.front() == L'\t' || s.front() == L'\r'))
-					s.remove_prefix(1);
-				while(!s.empty() && (s.back() == L' ' || s.back() == L'\t' || s.back() == L'\r'))
-					s.remove_suffix(1);
-				return s;
-			}
+			using StoreFile::trim;
 
 			/*
 				`{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`, with or without the
@@ -204,6 +195,27 @@ namespace Nilesoft
 				one - `shell.exe -quarantine` writes this file, and a person
 				editing it by hand finds out by looking at `-quarantine list`.
 			*/
+			inline bool parse_line(std::wstring_view line, Entry &entry)
+			{
+				line = trim(line);
+				if(line.empty() || line.front() == L'#')
+					return false;
+
+				// The GUID is the first token; anything after the first run
+				// of whitespace is a note.
+				auto split = line.find_first_of(L" \t");
+				auto id = split == std::wstring_view::npos ? line : line.substr(0, split);
+				auto note = split == std::wstring_view::npos ? std::wstring_view{}
+															 : trim(line.substr(split));
+
+				if(!parse_guid(id, entry.clsid))
+					return false;
+
+				entry.hash = hash_clsid(entry.clsid);
+				entry.note.assign(note);
+				return true;
+			}
+
 			inline std::vector<Entry> parse(std::wstring_view text)
 			{
 				std::vector<Entry> out;
@@ -219,22 +231,9 @@ namespace Nilesoft
 					else
 						at = end + 1;
 
-					line = trim(line);
-					if(line.empty() || line.front() == L'#')
-						continue;
-
-					// The GUID is the first token; anything after the first run
-					// of whitespace is a note.
-					auto split = line.find_first_of(L" \t");
-					auto id = split == std::wstring_view::npos ? line : line.substr(0, split);
-					auto note = split == std::wstring_view::npos ? std::wstring_view{}
-																 : trim(line.substr(split));
-
 					Entry entry;
-					if(!parse_guid(id, entry.clsid))
+					if(!parse_line(line, entry))
 						continue;
-
-					entry.hash = hash_clsid(entry.clsid);
 
 					// Already listed. Keeping the first keeps the first note,
 					// and stops a file that repeats one CLSID from consuming
@@ -251,31 +250,36 @@ namespace Nilesoft
 					if(seen)
 						continue;
 
-					entry.note.assign(note);
 					out.push_back(std::move(entry));
 				}
 
 				return out;
 			}
 
+			// Written only when the file is created.
+			inline constexpr std::wstring_view Header =
+				L"# Nilesoft Shell - quarantined context-menu extensions.\r\n"
+				L"# One CLSID per line; text after it is a note. '#' comments a line out.\r\n"
+				L"# Shell stops asking these handlers when it builds a menu. They keep\r\n"
+				L"# working everywhere else. Delete a line to un-quarantine it.\r\n";
+
+			// One entry's line, without its terminator.
+			inline std::wstring render(const Entry &entry)
+			{
+				auto out = format_guid(entry.clsid);
+				if(!entry.note.empty())
+				{
+					out += L' ';
+					out += entry.note;
+				}
+				return out;
+			}
+
 			inline std::wstring serialize(const std::vector<Entry> &entries)
 			{
-				std::wstring out =
-					L"# Nilesoft Shell - quarantined context-menu extensions.\r\n"
-					L"# One CLSID per line; text after it is a note. '#' comments a line out.\r\n"
-					L"# Shell stops asking these handlers when it builds a menu. They keep\r\n"
-					L"# working everywhere else. Delete a line to un-quarantine it.\r\n";
-
+				std::wstring out(Header);
 				for(const auto &entry : entries)
-				{
-					out += format_guid(entry.clsid);
-					if(!entry.note.empty())
-					{
-						out += L' ';
-						out += entry.note;
-					}
-					out += L"\r\n";
-				}
+					out += render(entry) + L"\r\n";
 				return out;
 			}
 
@@ -311,10 +315,10 @@ namespace Nilesoft
 				not have to tell 'no file' from 'no entries'". A caller that
 				writes back does have to, and both of them do.
 
-				The file is UTF-16LE with a byte-order mark, which is what
-				Notepad writes back if a person edits it. A file without the
-				mark is still read, because a text editor that strips it should
-				not silently un-quarantine everything.
+				The file is written UTF-16LE with a byte-order mark. Anything a
+				text editor leaves behind is still read - UTF-8 with or without
+				a mark, UTF-16LE without one - because an editor must not
+				silently un-quarantine everything (StoreFile::decode).
 
 				FILE_FLAG_OPEN_REPARSE_POINT so a link is opened as itself
 				rather than followed: this path is under the user's own
@@ -361,26 +365,30 @@ namespace Nilesoft
 			}
 
 			/*
-				Written through a temporary and renamed over the target.
-
-				This used to say the non-atomic write was deliberate: "a torn
-				quarantine file loses at worst one entry ... the last-known-good
-				shadow gets a MoveFileEx swap because a torn *config* is the
-				failure it exists to survive; this is not that."
-
-				That reasoning is sound about a torn write and it addresses the
-				wrong risk. CREATE_ALWAYS truncates first and writes after, so
-				the destination is a zero-length file for the duration - and
-				load() mapped every failed read to an empty list, so another
-				host reading during that window did not observe a torn file, it
-				observed an empty one, and then wrote its own single entry over
-				the top. The swap is not about tearing. It is about the
-				destination never being observable in a state it was never in.
+				Written through a temporary and swapped over the target, so the
+				destination is never observable in a state it was never in: a
+				zero-length file read as "nothing is quarantined" by another
+				host, which then writes its own single entry over the top.
 				src/shared/StoreFile.h.
+
+				The file is re-read and rebuilt line by line (StoreFile::merge)
+				rather than replaced by `serialize(entries)`, which deleted every
+				comment, note line and mistyped line a person kept in it. An
+				entry absent from `entries` loses its line - that is how a
+				release is written - and one not in the file is appended. A file
+				that cannot be read is not written.
 			*/
 			inline bool save(const std::wstring &path, const std::vector<Entry> &entries)
 			{
-				return StoreFile::replace(path, serialize(entries));
+				auto current = StoreFile::read(path, MaxFileBytes);
+				if(!current.usable())
+					return false;
+
+				return StoreFile::replace(path, StoreFile::merge(
+					current, Header, entries, MaxEntries,
+					[](std::wstring_view line, Entry &out) { return parse_line(line, out); },
+					[](const Entry &entry) { return entry.hash; },
+					[](const Entry &entry) { return render(entry); }));
 			}
 
 		}

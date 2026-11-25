@@ -48,10 +48,10 @@
 
 	## Writing
 
-	Not atomic, for the same reason quarantine.txt is not: a torn favorites file
-	loses a count, which the next use restores. The last-known-good config
-	shadow gets a MoveFileEx swap because a torn *config* is the failure it
-	exists to survive. This is not that.
+	Through a temporary swapped over the target, so another host never reads a
+	truncated file as an empty list (src/shared/StoreFile.h). The file is
+	hand-editable, so a write keeps every line a person put there - comments,
+	blank lines, typos - and changes only the lines whose entry changed.
 
 	The menu path never writes. Recording a use happens after a command has been
 	chosen, which is after the menu is down.
@@ -98,14 +98,7 @@ namespace Nilesoft
 				uint32_t uses{};
 			};
 
-			inline std::wstring_view trim(std::wstring_view s) noexcept
-			{
-				while(!s.empty() && (s.front() == L' ' || s.front() == L'\t' || s.front() == L'\r'))
-					s.remove_prefix(1);
-				while(!s.empty() && (s.back() == L' ' || s.back() == L'\t' || s.back() == L'\r'))
-					s.remove_suffix(1);
-				return s;
-			}
+			using StoreFile::trim;
 
 			/*
 				One line: `<pin|use> <count> <identity>`.
@@ -202,22 +195,26 @@ namespace Nilesoft
 				return out;
 			}
 
+			// Written only when the file is created.
+			inline constexpr std::wstring_view Header =
+				L"# Nilesoft Shell - favorite menu items.\r\n"
+				L"# <pin|use> <count> <identity>. '#' comments a line out.\r\n"
+				L"# 'pin' is yours and Shell never changes it; 'use' is a count Shell keeps.\r\n"
+				L"# settings { favorites = N } promotes up to N of these to the top of a menu.\r\n";
+
+			// One entry's line, without its terminator.
+			inline std::wstring render(const Entry &entry)
+			{
+				wchar_t head[32]{};
+				::wsprintfW(head, L"%s %u ", entry.pinned ? L"pin" : L"use", entry.uses);
+				return head + entry.identity.text;
+			}
+
 			inline std::wstring serialize(const std::vector<Entry> &entries)
 			{
-				std::wstring out =
-					L"# Nilesoft Shell - favorite menu items.\r\n"
-					L"# <pin|use> <count> <identity>. '#' comments a line out.\r\n"
-					L"# 'pin' is yours and Shell never changes it; 'use' is a count Shell keeps.\r\n"
-					L"# settings { favorites = N } promotes up to N of these to the top of a menu.\r\n";
-
+				std::wstring out(Header);
 				for(const auto &entry : entries)
-				{
-					wchar_t head[32]{};
-					::wsprintfW(head, L"%s %u ", entry.pinned ? L"pin" : L"use", entry.uses);
-					out += head;
-					out += entry.identity.text;
-					out += L"\r\n";
-				}
+					out += render(entry) + L"\r\n";
 				return out;
 			}
 
@@ -299,15 +296,30 @@ namespace Nilesoft
 			}
 
 			/*
-				Written through a temporary and renamed over the target, so the
+				Written through a temporary and swapped over the target, so the
 				destination is never a truncated or half-written file for another
 				host to read as an empty list. See src/shared/StoreFile.h for the
 				interleaving that made that destructive rather than merely
 				untidy.
+
+				The file is re-read and rebuilt line by line (StoreFile::merge)
+				rather than replaced by `serialize(entries)`: that dropped every
+				comment, blank line and mistyped line the user had written, on
+				the first click. An entry absent from `entries` loses its line -
+				that is how unpin and forget are written - and one not in the
+				file is appended. A file that cannot be read is not written.
 			*/
 			inline bool save(const std::wstring &path, const std::vector<Entry> &entries)
 			{
-				return StoreFile::replace(path, serialize(entries));
+				auto current = StoreFile::read(path, MaxFileBytes);
+				if(!current.usable())
+					return false;
+
+				return StoreFile::replace(path, StoreFile::merge(
+					current, Header, entries, MaxEntries,
+					[](std::wstring_view line, Entry &out) { return parse_line(line, out); },
+					[](const Entry &entry) { return entry.identity.hash; },
+					[](const Entry &entry) { return render(entry); }));
 			}
 
 			/*

@@ -1,8 +1,8 @@
 #pragma once
 
 /*
-	Reading and replacing the two small files Shell keeps beside a user's
-	config: favorites.txt and quarantine.txt.
+	Reading, rewriting and replacing the two small files Shell keeps beside a
+	user's config: favorites.txt and quarantine.txt.
 
 	Both were read with `load()` returning a vector, and written with
 	`CreateFile(GENERIC_WRITE, share 0, CREATE_ALWAYS)`. Three defects follow
@@ -32,19 +32,9 @@
 
 	CREATE_ALWAYS is what opens that window: it truncates first and writes
 	after, so the file is empty on disk for as long as the write takes. Writing
-	a temporary in the same directory and renaming over the target removes the
-	window entirely - there is no moment at which the destination is a
-	half-written or zero-length file.
-
-	    MOVEFILE_REPLACE_EXISTING: "If a file named lpNewFileName exists, the
-	    function replaces its contents with the contents of the
-	    lpExistingFileName file"
-	    MOVEFILE_WRITE_THROUGH: "The function does not return until the file is
-	    actually moved on the disk"
-	    https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw
-
-	Which is the same swap ConfigShadow.h already performs for the
-	last-known-good manifest, for the same reason.
+	a temporary in the same directory and swapping it in removes the window
+	entirely - there is no moment at which the destination is a half-written or
+	zero-length file. replace() below says which swap and why.
 
 	ProviderQuarantine::save carried a comment defending the non-atomic write:
 	"a torn quarantine file loses at worst one entry". That is a sound argument
@@ -61,6 +51,19 @@
 	for the specified file", the one the handle names.
 	https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle
 
+	## Both files are hand-edited, so a write must keep what a person wrote
+
+	Each file says '#' comments a line out and that a person may keep notes in
+	it. Writing back `header + parsed entries` deleted every comment, blank
+	line, mistyped line and duplicate on the first click. merge() rebuilds the
+	file line by line instead: it changes only the lines whose entry changed.
+
+	A file made by hand is also not necessarily UTF-16: Notepad's default is
+	UTF-8 without a mark. Read as UTF-16 that parses as an empty list in state
+	Loaded, and the next write replaces the whole list. decode() accepts what an
+	editor produces and refuses what it cannot decode, and a Failed file is
+	never written back.
+
 	Kept in src/shared because shell.exe's -quarantine and -favorites commands
 	read and write the same files as the DLL does, and a rule about who may
 	write is not a rule if only one of them follows it.
@@ -68,7 +71,14 @@
 
 #include <windows.h>
 
+#include <climits>
+#include <cstdint>
+#include <cstring>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace Nilesoft
 {
@@ -105,6 +115,17 @@ namespace Nilesoft
 
 			inline constexpr wchar_t ByteOrderMark = 0xFEFF;
 
+			// Trims ASCII spaces, tabs and CR from both ends. Deliberately not
+			// locale-aware: these files hold GUIDs and identities.
+			inline std::wstring_view trim(std::wstring_view s) noexcept
+			{
+				while(!s.empty() && (s.front() == L' ' || s.front() == L'\t' || s.front() == L'\r'))
+					s.remove_prefix(1);
+				while(!s.empty() && (s.back() == L' ' || s.back() == L'\t' || s.back() == L'\r'))
+					s.remove_suffix(1);
+				return s;
+			}
+
 			inline uint64_t file_time_of(HANDLE file)
 			{
 				BY_HANDLE_FILE_INFORMATION info{};
@@ -118,6 +139,77 @@ namespace Nilesoft
 			}
 
 			/*
+				Bytes to text. Writes are always UTF-16LE with a mark; reads accept
+				what a person's editor leaves behind.
+
+				  FF FE      UTF-16LE mark: the rest is UTF-16.
+				  EF BB BF   UTF-8 mark: the rest is UTF-8.
+				  FE FF      UTF-16BE: not supported, so Failed rather than guessed.
+				  no mark    UTF-16LE if the length is even and some odd-offset byte
+				             is zero - the high byte of any ASCII-range code unit,
+				             and these files are full of them (GUIDs, "pin", "use").
+				             UTF-8 text never contains NUL, so no ordinary UTF-8 file
+				             is taken for it. Everything else is UTF-8.
+
+				UTF-8 is decoded with MB_ERR_INVALID_CHARS, which for CP_UTF8
+				"must be set to either 0 or MB_ERR_INVALID_CHARS", and fails with
+				ERROR_NO_UNICODE_TRANSLATION on an invalid sequence instead of
+				substituting U+FFFD. A file with a replaced character in it is
+				one nobody should write back over. "If cbMultiByte is 0, the
+				function fails", so an empty body is handled before the call.
+				https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-multibytetowidechar
+			*/
+			inline bool decode(std::string_view bytes, std::wstring &out)
+			{
+				auto at = [&bytes](size_t i) { return static_cast<unsigned char>(bytes[i]); };
+
+				bool utf16 = false;
+				if(bytes.size() >= 2 && at(0) == 0xFF && at(1) == 0xFE)
+				{
+					utf16 = true;
+					bytes.remove_prefix(2);
+				}
+				else if(bytes.size() >= 3 && at(0) == 0xEF && at(1) == 0xBB && at(2) == 0xBF)
+					bytes.remove_prefix(3);
+				else if(bytes.size() >= 2 && at(0) == 0xFE && at(1) == 0xFF)
+					return false;
+				else if((bytes.size() % sizeof(wchar_t)) == 0)
+				{
+					for(size_t i = 1; i < bytes.size() && !utf16; i += 2)
+						utf16 = at(i) == 0;
+				}
+
+				out.clear();
+				if(utf16)
+				{
+					if((bytes.size() % sizeof(wchar_t)) != 0)
+						return false;
+					out.resize(bytes.size() / sizeof(wchar_t));
+					if(!bytes.empty())
+						std::memcpy(out.data(), bytes.data(), bytes.size());
+					return true;
+				}
+
+				if(bytes.empty())
+					return true;
+				if(bytes.size() > INT_MAX)
+					return false;
+
+				auto size = static_cast<int>(bytes.size());
+				auto need = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+												  bytes.data(), size, nullptr, 0);
+				if(need <= 0)
+					return false;
+
+				out.resize(static_cast<size_t>(need));
+				if(::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+										 bytes.data(), size, out.data(), need) != need)
+					return false;
+
+				return out.find(L'\0') == std::wstring::npos;
+			}
+
+			/*
 				`max_bytes` is a cap because these are parsed on the way to
 				building a menu. A file above it is Failed rather than empty: an
 				oversized list is a machine in a state nobody should write back
@@ -127,7 +219,7 @@ namespace Nilesoft
 				rather than followed - a file that steers what a menu does
 				should not be redirectable by whatever got to the path first.
 
-				FILE_SHARE_DELETE matters as much as the other two and is new.
+				FILE_SHARE_DELETE matters as much as the other two.
 				replace() below renames over this path, and a rename cannot
 				replace a file another process holds open without it - so a
 				reader that omitted it would make every writer fail, which is
@@ -155,7 +247,7 @@ namespace Nilesoft
 				LARGE_INTEGER size{};
 				if(!::GetFileSizeEx(file, &size) || size.QuadPart < 0
 				   || static_cast<uint64_t>(size.QuadPart) > max_bytes
-				   || (size.QuadPart % sizeof(wchar_t)) != 0)
+				   || size.QuadPart > INT_MAX)
 				{
 					::CloseHandle(file);
 					return out;			// Failed
@@ -163,20 +255,17 @@ namespace Nilesoft
 
 				if(size.QuadPart > 0)
 				{
-					std::wstring text(static_cast<size_t>(size.QuadPart / sizeof(wchar_t)), L'\0');
+					std::string bytes(static_cast<size_t>(size.QuadPart), '\0');
 					DWORD got = 0;
-					if(!::ReadFile(file, text.data(), static_cast<DWORD>(size.QuadPart),
+					if(!::ReadFile(file, bytes.data(), static_cast<DWORD>(size.QuadPart),
 								   &got, nullptr)
-					   || got != size.QuadPart)
+					   || got != size.QuadPart
+					   || !decode(bytes, out.text))
 					{
 						::CloseHandle(file);
+						out.text.clear();
 						return out;		// Failed
 					}
-
-					std::wstring_view view(text);
-					if(!view.empty() && view.front() == ByteOrderMark)
-						view.remove_prefix(1);
-					out.text.assign(view);
 				}
 
 				// From this handle, before it is closed, so the stamp describes
@@ -207,14 +296,22 @@ namespace Nilesoft
 				::CreateDirectoryW(directory.c_str(), nullptr);
 			}
 
+			// ReplaceFileW, behind a pointer only so a test can make it fail
+			// with a chosen error: the two failure classes below cannot be
+			// produced on demand by a real race.
+			using ReplaceFileFn = BOOL(WINAPI *)(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, LPVOID, LPVOID);
+			inline ReplaceFileFn replace_file = ::ReplaceFileW;
+
 			/*
 				Write `text` to `path`, byte-order mark first, without the
-				destination ever being a partial file.
+				destination ever being a partial file - and without ever being
+				the reason the only copy of the data is gone.
 
 				The temporary is in the same directory on purpose: MoveFileEx
 				across volumes "simulates the move by using the CopyFile and
 				DeleteFile functions", which is not a replace and not atomic. A
 				sibling name keeps it a rename.
+				https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw
 
 				Named with the process id and a tick so two hosts staging at the
 				same moment do not collide on the temporary itself - which would
@@ -284,20 +381,132 @@ namespace Nilesoft
 					first save on a machine, and no reader can be holding a file
 					that does not exist.
 				*/
-				if(::ReplaceFileW(path.c_str(), staged.c_str(), nullptr,
-								  REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr))
+				if(replace_file(path.c_str(), staged.c_str(), nullptr,
+								REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr))
 					return true;
 
-				if(::GetLastError() == ERROR_FILE_NOT_FOUND
-				   && ::MoveFileExW(staged.c_str(), path.c_str(),
-									MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-					return true;
+				auto error = ::GetLastError();
+				if(error == ERROR_FILE_NOT_FOUND)
+					return ::MoveFileExW(staged.c_str(), path.c_str(),
+										 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+						   || (::DeleteFileW(staged.c_str()), false);
 
-				// On ERROR_UNABLE_TO_MOVE_REPLACEMENT and its two siblings the
-				// staged file may already be gone or renamed; deleting what is
-				// not there is harmless and leaving one behind is not.
+				/*
+					With no backup file, these two are the failures that destroy
+					the destination:
+
+					  1176 "Otherwise, the replaced file no longer exists and the
+					       replacement file exists under its original name."
+					  1177 "The replacement file still exists under its original
+					       name ... The file to be replaced still exists with a
+					       different name."
+
+					Either way the staged file now holds the only copy of the
+					content we meant to write, so deleting it - which this did -
+					leaves the next reader a Missing file, which reads as an empty
+					list that is safe to write over. Finish the job by moving it
+					to `path`; if that fails too, keep the staged file. A stray
+					temporary is recoverable and a lost list is not.
+
+					Every other error, 1175 included, "the replaced and
+					replacement files retain their original file names", so
+					`path` is untouched and the staged file is only litter.
+				*/
+				if(error == ERROR_UNABLE_TO_MOVE_REPLACEMENT
+				   || error == ERROR_UNABLE_TO_MOVE_REPLACEMENT_2)
+					return ::MoveFileExW(staged.c_str(), path.c_str(),
+										 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+
 				::DeleteFileW(staged.c_str());
 				return false;
+			}
+
+			/*
+				The next contents of a store file: `current`, with only the lines
+				the caller's `entries` changed.
+
+				Each line is walked once, in place:
+
+				  - a line that parses to an entry still in `entries` stays where
+				    it is - verbatim if its rendering is unchanged, so a person's
+				    spelling survives, otherwise re-rendered with the new values;
+				  - a later line carrying the same key is a duplicate the parser
+				    already ignored, and is dropped;
+				  - a line whose key is gone from `entries` is how a removal is
+				    written, and is dropped;
+				  - everything else - comments, blank lines, lines that do not
+				    parse - is kept as written;
+				  - entries not in the file yet are appended.
+
+				`max_entries` is the parser's cap: past it the parser never looks
+				at a line, so the caller never loaded it and cannot have removed
+				it, and it is kept rather than mistaken for a removal.
+
+				`header` goes only into a file that does not exist yet. Lines come
+				out CRLF whatever they went in as.
+
+				Entry needs default construction; `parse_line(view, Entry&)`
+				returns false for anything that is not an entry; `key_of` and
+				`render` read an Entry.
+			*/
+			template<class Entry, class ParseLine, class KeyOf, class Render>
+			inline std::wstring merge(const Text &current, std::wstring_view header,
+									  const std::vector<Entry> &entries, size_t max_entries,
+									  ParseLine parse_line, KeyOf key_of, Render render)
+			{
+				std::wstring out;
+				if(current.state == LoadState::Missing)
+					out = header;
+
+				std::unordered_map<uint32_t, const Entry *> wanted;
+				for(const auto &entry : entries)
+					wanted.emplace(key_of(entry), &entry);
+
+				std::unordered_set<uint32_t> seen;
+				std::wstring_view text(current.text);
+				size_t at = 0;
+				while(at < text.size())
+				{
+					auto end = text.find(L'\n', at);
+					auto line = text.substr(at, end == std::wstring_view::npos
+												? std::wstring_view::npos : end - at);
+					at = end == std::wstring_view::npos ? text.size() : end + 1;
+					if(!line.empty() && line.back() == L'\r')
+						line.remove_suffix(1);
+
+					Entry parsed;
+					if(seen.size() < max_entries && parse_line(line, parsed))
+					{
+						auto key = key_of(parsed);
+						if(!seen.insert(key).second)
+							continue;
+
+						auto found = wanted.find(key);
+						if(found == wanted.end())
+							continue;
+
+						auto fresh = render(*found->second);
+						if(fresh == render(parsed))
+							out += line;
+						else
+							out += fresh;
+						out += L"\r\n";
+						continue;
+					}
+
+					out += line;
+					out += L"\r\n";
+				}
+
+				for(const auto &entry : entries)
+				{
+					if(seen.insert(key_of(entry)).second)
+					{
+						out += render(entry);
+						out += L"\r\n";
+					}
+				}
+				return out;
 			}
 		}
 	}

@@ -204,16 +204,271 @@ TEST(store_file, an_oversized_file_is_failed_rather_than_truncated_or_empty)
 	CHECK(!got.usable());
 }
 
-TEST(store_file, an_odd_sized_file_is_failed)
+TEST(store_file, an_odd_sized_file_after_a_utf16_mark_is_failed)
 {
-	// UTF-16, so an odd byte count is not a short read, it is a file that is
-	// not what it claims to be.
+	// Marked UTF-16, so an odd byte count is not a short read, it is a file
+	// that is not what it claims to be.
 	auto path = temp_path(L"odd.txt");
-	const char bytes[] = { 'a', 'b', 'c' };
+	const char bytes[] = { '\xFF', '\xFE', 'a' };
 	write_raw(path, bytes, 3);
 
 	auto got = StoreFile::read(path, 64 * 1024);
 	CHECK(got.state == StoreFile::LoadState::Failed);
+}
+
+// ---- encoding on read ---------------------------------------------------
+
+namespace
+{
+	std::string bytes_of(std::initializer_list<int> values)
+	{
+		std::string out;
+		for(int v : values)
+			out.push_back(static_cast<char>(v));
+		return out;
+	}
+
+	std::wstring decoded(const std::string &bytes, bool &ok)
+	{
+		std::wstring out;
+		ok = StoreFile::decode(bytes, out);
+		return out;
+	}
+}
+
+TEST(store_file, an_editors_encodings_are_all_read)
+{
+	bool ok = false;
+
+	// UTF-16LE with a mark: what Shell itself writes.
+	CHECK(decoded(bytes_of({ 0xFF, 0xFE, 'a', 0, 'b', 0 }), ok) == L"ab" && ok);
+	// UTF-8 with a mark.
+	CHECK(decoded(bytes_of({ 0xEF, 0xBB, 0xBF, 'a', 'b' }), ok) == L"ab" && ok);
+	// UTF-16LE without one.
+	CHECK(decoded(bytes_of({ 'a', 0, 'b', 0 }), ok) == L"ab" && ok);
+
+	// UTF-8 without one - Notepad's default - at both parities, which is what
+	// the old "even means UTF-16" rule could not tell apart.
+	CHECK(decoded(bytes_of({ 'a', 'b' }), ok) == L"ab" && ok);
+	CHECK(decoded(bytes_of({ 'a', 'b', 'c' }), ok) == L"abc" && ok);
+	CHECK(decoded(bytes_of({ 'c', 'a', 'f', 0xC3, 0xA9 }), ok) == L"café" && ok);
+	CHECK(decoded(bytes_of({ 'c', 'a', 'f', 0xC3, 0xA9, '!' }), ok) == L"café!" && ok);
+}
+
+TEST(store_file, bytes_that_are_not_text_are_refused_rather_than_repaired)
+{
+	bool ok = true;
+
+	// An invalid sequence would come back as U+FFFD without
+	// MB_ERR_INVALID_CHARS, and the file would be written back that way.
+	decoded(bytes_of({ 'a', 0xC3, 0x28 }), ok);
+	CHECK(!ok);
+	decoded(bytes_of({ 0xFF, 'a' }), ok);
+	CHECK(!ok);
+
+	// UTF-16BE is not guessed at.
+	decoded(bytes_of({ 0xFE, 0xFF, 0, 'a' }), ok);
+	CHECK(!ok);
+
+	// A NUL in what would have to be UTF-8 is a binary file.
+	decoded(bytes_of({ 'a', 0, 'b' }), ok);
+	CHECK(!ok);
+}
+
+TEST(store_file, a_utf8_file_is_read_from_disk)
+{
+	auto path = temp_path(L"utf8.txt");
+	auto bytes = bytes_of({ 0xEF, 0xBB, 0xBF, '#', ' ', 'c', 'a', 'f', 0xC3, 0xA9, '\r', '\n' });
+	write_raw(path, bytes.data(), static_cast<DWORD>(bytes.size()));
+
+	auto got = StoreFile::read(path, 64 * 1024);
+	CHECK(got.loaded());
+	CHECK(got.text == L"# café\r\n");
+}
+
+TEST(store_file, an_undecodable_file_is_failed_and_never_written_back)
+{
+	auto path = temp_path(L"favorites-invalid.txt");
+	auto bytes = bytes_of({ '#', ' ', 0xC3, 0x28, '\r', '\n' });
+	write_raw(path, bytes.data(), static_cast<DWORD>(bytes.size()));
+
+	CHECK(StoreFile::read(path, 64 * 1024).state == StoreFile::LoadState::Failed);
+
+	std::vector<Favorites::Entry> entries;
+	CHECK(Favorites::record_use(entries, identity_of(0x01010101)));
+	CHECK(!Favorites::save(path, entries));
+
+	std::vector<Quarantine::Entry> held;
+	Quarantine::Entry e;
+	CHECK(Quarantine::parse_guid(L"{11111111-2222-3333-4444-555555555555}", e.clsid));
+	e.hash = Quarantine::hash_clsid(e.clsid);
+	held.push_back(e);
+	CHECK(!Quarantine::save(path, held));
+
+	// Byte for byte what was there.
+	auto file = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+							  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	CHECK(file != INVALID_HANDLE_VALUE);
+	if(file != INVALID_HANDLE_VALUE)
+	{
+		char back[64]{};
+		DWORD got = 0;
+		::ReadFile(file, back, sizeof(back), &got, nullptr);
+		::CloseHandle(file);
+		CHECK(std::string(back, got) == bytes);
+	}
+}
+
+// ---- replace() when ReplaceFile fails -----------------------------------
+
+namespace
+{
+	// What a real race cannot be made to produce on demand. Each fake leaves
+	// the disk as the ReplaceFileW page says that error leaves it.
+	// https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew
+	BOOL WINAPI fake_1176(LPCWSTR replaced, LPCWSTR, LPCWSTR, DWORD, LPVOID, LPVOID)
+	{
+		// "the replaced file no longer exists and the replacement file exists
+		// under its original name"
+		::DeleteFileW(replaced);
+		::SetLastError(ERROR_UNABLE_TO_MOVE_REPLACEMENT);
+		return FALSE;
+	}
+
+	BOOL WINAPI fake_1177(LPCWSTR replaced, LPCWSTR, LPCWSTR, DWORD, LPVOID, LPVOID)
+	{
+		// "The file to be replaced still exists with a different name."
+		std::wstring aside = std::wstring(replaced) + L".old";
+		::MoveFileExW(replaced, aside.c_str(), MOVEFILE_REPLACE_EXISTING);
+		::SetLastError(ERROR_UNABLE_TO_MOVE_REPLACEMENT_2);
+		return FALSE;
+	}
+
+	BOOL WINAPI fake_1175(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, LPVOID, LPVOID)
+	{
+		::SetLastError(ERROR_UNABLE_TO_REMOVE_REPLACED);	// both names kept
+		return FALSE;
+	}
+
+	BOOL WINAPI fake_invalid_parameter(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, LPVOID, LPVOID)
+	{
+		::SetLastError(ERROR_INVALID_PARAMETER);			// both names kept
+		return FALSE;
+	}
+
+	// The destination is gone *and* cannot be recreated: a directory now
+	// stands at the path, which MoveFileEx will not replace.
+	BOOL WINAPI fake_1176_then_blocked(LPCWSTR replaced, LPCWSTR, LPCWSTR, DWORD, LPVOID, LPVOID)
+	{
+		::DeleteFileW(replaced);
+		::CreateDirectoryW(replaced, nullptr);
+		::SetLastError(ERROR_UNABLE_TO_MOVE_REPLACEMENT);
+		return FALSE;
+	}
+
+	struct FakeReplaceFile
+	{
+		StoreFile::ReplaceFileFn saved;
+		explicit FakeReplaceFile(StoreFile::ReplaceFileFn fake)
+			: saved(StoreFile::replace_file) { StoreFile::replace_file = fake; }
+		~FakeReplaceFile() { StoreFile::replace_file = saved; }
+	};
+
+	// Every *.tmp beside `path`: what replace() stages into.
+	std::vector<std::wstring> staged_beside(const std::wstring &path)
+	{
+		std::vector<std::wstring> out;
+		auto directory = path.substr(0, path.find_last_of(L'\\') + 1);
+		WIN32_FIND_DATAW found{};
+		auto search = ::FindFirstFileW((directory + L"*.tmp").c_str(), &found);
+		if(search == INVALID_HANDLE_VALUE)
+			return out;
+		do
+			out.push_back(directory + found.cFileName);
+		while(::FindNextFileW(search, &found));
+		::FindClose(search);
+		return out;
+	}
+}
+
+TEST(store_file, a_replace_that_lost_the_destination_still_lands_the_new_content)
+{
+	// 1176: the only copy is the staged file, and deleting it - which this did
+	// - left favorites.txt Missing, i.e. an empty list that is safe to write
+	// over.
+	auto path = temp_path(L"lost-1176.txt");
+	CHECK(StoreFile::replace(path, L"old\r\n"));
+
+	{
+		FakeReplaceFile fake(&fake_1176);
+		CHECK(StoreFile::replace(path, L"new\r\n"));
+	}
+
+	auto got = StoreFile::read(path, 64 * 1024);
+	CHECK(got.loaded());
+	CHECK(got.text == L"new\r\n");
+	CHECK(staged_beside(path).empty());
+}
+
+TEST(store_file, a_replace_that_moved_the_destination_aside_still_lands_the_new_content)
+{
+	auto path = temp_path(L"lost-1177.txt");
+	CHECK(StoreFile::replace(path, L"old\r\n"));
+
+	{
+		FakeReplaceFile fake(&fake_1177);
+		CHECK(StoreFile::replace(path, L"new\r\n"));
+	}
+
+	auto got = StoreFile::read(path, 64 * 1024);
+	CHECK(got.loaded());
+	CHECK(got.text == L"new\r\n");
+	CHECK(staged_beside(path).empty());
+	::DeleteFileW((path + L".old").c_str());
+}
+
+TEST(store_file, a_replace_that_changed_nothing_keeps_the_old_content_and_tidies_up)
+{
+	// 1175 and everything else: "the replaced and replacement files retain
+	// their original file names", so the staged copy is only litter.
+	StoreFile::ReplaceFileFn fakes[] = { &fake_1175, &fake_invalid_parameter };
+	for(auto fake : fakes)
+	{
+		auto path = temp_path(L"kept-other.txt");
+		CHECK(StoreFile::replace(path, L"old\r\n"));
+
+		{
+			FakeReplaceFile scoped(fake);
+			CHECK(!StoreFile::replace(path, L"new\r\n"));
+		}
+
+		auto got = StoreFile::read(path, 64 * 1024);
+		CHECK(got.loaded());
+		CHECK(got.text == L"old\r\n");
+		CHECK(staged_beside(path).empty());
+	}
+}
+
+TEST(store_file, the_staged_file_is_kept_when_it_is_the_only_copy_and_cannot_be_moved)
+{
+	auto path = temp_path(L"blocked-1176.txt");
+	CHECK(StoreFile::replace(path, L"old\r\n"));
+
+	{
+		FakeReplaceFile fake(&fake_1176_then_blocked);
+		CHECK(!StoreFile::replace(path, L"new\r\n"));
+	}
+	::RemoveDirectoryW(path.c_str());
+
+	auto staged = staged_beside(path);
+	CHECK_EQ(staged.size(), (size_t)1);
+	for(const auto &file : staged)
+	{
+		auto got = StoreFile::read(file, 64 * 1024);
+		CHECK(got.loaded());
+		CHECK(got.text == L"new\r\n");
+		::DeleteFileW(file.c_str());
+	}
 }
 
 TEST(store_file, a_failed_replace_leaves_the_previous_file_intact)

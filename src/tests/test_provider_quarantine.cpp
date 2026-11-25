@@ -15,6 +15,7 @@
 
 #include "..\shared\ProviderQuarantine.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -286,4 +287,175 @@ TEST(provider_quarantine, a_file_without_a_byte_order_mark_is_still_read)
 		CHECK_EQ(back.size(), size_t(1));
 	}
 	::DeleteFileW(path.c_str());
+}
+
+// ---- writing back keeps what the user wrote -----------------------------
+//
+// The file says "stays something a person can keep notes in". A save that
+// rebuilt it from the parsed entries deleted every note, comment and mistyped
+// line on the first `shell.exe -quarantine`.
+
+namespace
+{
+	struct TempFile
+	{
+		std::wstring path;
+
+		TempFile()
+		{
+			wchar_t base[MAX_PATH]{};
+			::GetTempPathW(MAX_PATH, base);
+			wchar_t unique[MAX_PATH]{};
+			::swprintf_s(unique, L"%squar_%lu_%llu.txt", base,
+						 ::GetCurrentProcessId(), (unsigned long long)::GetTickCount64());
+			path = unique;
+			::DeleteFileW(path.c_str());
+		}
+
+		~TempFile() { ::DeleteFileW(path.c_str()); }
+	};
+
+	const wchar_t *const G1 = L"{A0B1C2D3-E4F5-6789-ABCD-EF0123456789}";
+	const wchar_t *const G2 = L"{11111111-2222-3333-4444-555555555555}";
+	const wchar_t *const G3 = L"{22222222-3333-4444-5555-666666666666}";
+
+	std::wstring text_of(const std::wstring &path)
+	{
+		return StoreFile::read(path, 1 << 20).text;
+	}
+
+	void put_bytes(const std::wstring &path, const std::string &bytes)
+	{
+		auto file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+								  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if(file == INVALID_HANDLE_VALUE)
+			return;
+		DWORD written = 0;
+		::WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+		::CloseHandle(file);
+	}
+
+	Quarantine::Entry entry_of(const wchar_t *guid, const wchar_t *note = L"")
+	{
+		Quarantine::Entry e;
+		Quarantine::parse_guid(guid, e.clsid);
+		e.hash = Quarantine::hash_clsid(e.clsid);
+		e.note = note;
+		return e;
+	}
+
+	// Read, change, save: what `shell.exe -quarantine` does.
+	template<class Change>
+	bool edit(const std::wstring &path, Change change)
+	{
+		auto loaded = Quarantine::read(path);
+		if(!loaded.usable())
+			return false;
+		auto entries = std::move(loaded.entries);
+		if(!change(entries))
+			return false;
+		return Quarantine::save(path, entries);
+	}
+}
+
+TEST(quarantine_file, every_line_the_user_wrote_survives_each_kind_of_write)
+{
+	TempFile file;
+	std::wstring head =
+		L"# slow handlers\r\n"
+		L"\r\n"
+		L"{A0B1C2D3-E4F5-6789-ABCD-EF0123456789}  NanaZip\r\n"
+		L"not a guid at all\r\n"
+		L"11111111-2222-3333-4444-555555555555 typed by hand\r\n";
+	CHECK(StoreFile::replace(file.path, head +
+		L"{A0B1C2D3-E4F5-6789-ABCD-EF0123456789} a duplicate\r\n"
+		L"# end\r\n"));
+
+	// Quarantining one more: appended, nothing else touched. The duplicate the
+	// parser ignored is dropped; the hand spelling of the others is not.
+	CHECK(edit(file.path, [](auto &e) { e.push_back(entry_of(G3, L"new")); return true; }));
+	CHECK(text_of(file.path) == head + L"# end\r\n" + std::wstring(G3) + L" new\r\n");
+
+	// A note changed: that one line is rewritten.
+	CHECK(edit(file.path, [](auto &e) { e[0].note = L"renamed"; return true; }));
+	CHECK(text_of(file.path) ==
+		L"# slow handlers\r\n"
+		L"\r\n" + std::wstring(G1) + L" renamed\r\n"
+		L"not a guid at all\r\n"
+		L"11111111-2222-3333-4444-555555555555 typed by hand\r\n"
+		L"# end\r\n" + std::wstring(G3) + L" new\r\n");
+
+	// A release removes exactly the line it names.
+	CHECK(edit(file.path, [](auto &e)
+	{
+		e.erase(std::remove_if(e.begin(), e.end(), [](const Quarantine::Entry &x)
+							   { return x.hash == entry_of(G2).hash; }), e.end());
+		return true;
+	}));
+	CHECK(text_of(file.path) ==
+		L"# slow handlers\r\n"
+		L"\r\n" + std::wstring(G1) + L" renamed\r\n"
+		L"not a guid at all\r\n"
+		L"# end\r\n" + std::wstring(G3) + L" new\r\n");
+
+	// Releasing everything leaves everything that was not an entry.
+	CHECK(edit(file.path, [](auto &e) { e.clear(); return true; }));
+	CHECK(text_of(file.path) ==
+		L"# slow handlers\r\n"
+		L"\r\n"
+		L"not a guid at all\r\n"
+		L"# end\r\n");
+}
+
+TEST(quarantine_file, an_unchanged_list_rewrites_nothing)
+{
+	TempFile file;
+	std::wstring original =
+		L"#  spaced   comment\r\n"
+		L"a0b1c2d3-e4f5-6789-abcd-ef0123456789    spaced   note\r\n";
+	CHECK(StoreFile::replace(file.path, original));
+
+	CHECK(edit(file.path, [](auto &) { return true; }));
+	CHECK(text_of(file.path) == original);
+}
+
+TEST(quarantine_file, a_new_file_gets_the_header_once)
+{
+	TempFile file;
+
+	CHECK(edit(file.path, [](auto &e) { e.push_back(entry_of(G1)); return true; }));
+	CHECK(text_of(file.path) == std::wstring(Quarantine::Header) + G1 + L"\r\n");
+
+	CHECK(edit(file.path, [](auto &e) { e.push_back(entry_of(G2)); return true; }));
+	auto text = text_of(file.path);
+	CHECK(text.find(Quarantine::Header) == 0);
+	CHECK(text.find(Quarantine::Header, 1) == std::wstring::npos);
+}
+
+TEST(quarantine_file, a_file_an_editor_saved_as_utf8_is_read_and_kept)
+{
+	// Even and odd byte counts, with and without a mark.
+	for(int variant = 0; variant < 4; variant++)
+	{
+		TempFile file;
+		std::string body = "# caf\xC3\xA9\r\n";
+		for(const wchar_t *c = G1; *c; c++)
+			body.push_back(static_cast<char>(*c));
+		body += " NanaZip\r\n";
+		if(variant & 1)
+			body = "\xEF\xBB\xBF" + body;
+		if((body.size() & 1) != ((variant & 2) ? 1u : 0u))
+			body += ' ';			// pad to the parity under test
+
+		put_bytes(file.path, body);
+		auto loaded = Quarantine::read(file.path);
+		CHECK(loaded.loaded());
+		CHECK_EQ(loaded.entries.size(), size_t(1));
+
+		CHECK(edit(file.path, [](auto &e) { e.push_back(entry_of(G2)); return true; }));
+		auto text = text_of(file.path);
+		CHECK(text.find(L"# café") != std::wstring::npos);
+		CHECK(text.find(std::wstring(G1) + L" NanaZip") != std::wstring::npos);
+		CHECK(text.find(G2) != std::wstring::npos);
+	}
 }
