@@ -1,10 +1,32 @@
 # Working in this repository
 
-Nilesoft Shell is a DLL injected into `explorer.exe` and into third-party file
-managers. It hooks `TrackPopupMenu`, subclasses host windows, and hands the shell
-a COM context-menu handler. Almost every interesting bug here is a Win32, COM or
+Nilesoft Shell is a DLL that Windows loads into `explorer.exe` and into
+third-party file managers **by COM activation, not by injection** — `DllMain`
+does nothing but record the instance, and `BootstrapOnce()` runs from
+`DllGetClassObject`. Once activated it pins its own module, hooks
+`TrackPopupMenu`, subclasses host windows, and hands the shell a COM
+context-menu handler. Almost every interesting bug here is a Win32, COM or
 Windows Installer contract being broken — not a logic error you can reason out
 from the source alone.
+
+Which host it can actually serve follows from that, and the distinction matters
+before you debug a "broken menu" in one:
+
+- **Explorer** — recognised by window class in `Selections::QueryShellWindow`.
+- **A host that tracks the HMENU it handed the handlers** — `QueryContextMenu`
+  binds that handle in `ShellExtCapture` and inserts *zero items*, and the
+  `TrackPopupMenu` hook recognises it later and composes. **Everything** works
+  this way; verified 2026-08-28.
+- **A host that builds its own menu instead** cannot be served at all, and no
+  change on this side fixes it. **Directory Opus** is the worked example: it
+  "searches the system registry and its own file type settings for the commands
+  to display on the menu"
+  ([Context Menu](https://www.gpsoft.com.au/help/opus12/documents/Context_Menu.htm)),
+  so a handler that adds no items contributes nothing. Its vendor says it does
+  this deliberately, "largely in order to provide the same sort of functionality
+  Nilesoft Shell does". Shell's value is *removing, moving and regrouping*
+  existing items, which `QueryContextMenu` cannot express — through that door a
+  handler can only add. Do not try to take Opus over; record it and move on.
 
 That shapes how to work on it.
 
@@ -175,6 +197,13 @@ like a finding about Windows — or, worse, like a regression in the change you
 just made.
 
 **A registry value set from an agent's shell is not visible to `explorer.exe`.**
+Re-confirmed 2026-08-28, and the asymmetry is specifically about *writes*:
+reading agrees in both directions — this shell and a scheduled task both counted
+101 subkeys under `HKCU\SOFTWARE` and both saw the same keys — but a value
+written from here was still absent when a scheduled task read it back four
+seconds later. So reading configuration to find out what a host sees is fine;
+setting one for a host to pick up is not, and needs the task below.
+
 Measured 2026-08-24: a key created here took `HKCU\SOFTWARE`'s subkey count to
 101 in that shell while Explorer still counted 100 and answered
 `ERROR_FILE_NOT_FOUND` for the key by name. Elevating with
@@ -323,6 +352,24 @@ path. Processes that already loaded the old file keep running it until they
 exit, which is why a freshly deployed change may not appear in an app that was
 already open.
 
+**And `GetModuleFileName` will not tell you, so do not ask it.** It reports the
+name the file had at load, which after the rotation is the canonical path — so
+a stale host looks identical to a current one in every module listing. This cost
+a session on 2026-08-28: `Everything.exe` had been running since before the
+deploy, its menu misbehaved, and the module list said
+`C:\Program Files\Nilesoft Shell\shell.dll`. Compare the **mapped image size**
+against the candidates on disk instead, which differs whenever the link did:
+
+```powershell
+(Get-Process Everything).Modules |
+    Where-Object ModuleName -eq 'shell.dll' | Select-Object ModuleMemorySize
+```
+
+against each `shell.dll*`'s `SizeOfImage` in the install directory — the rotated
+copies are still there. Explorer is restarted by the deploy script; every other
+host that has ever raised a shell menu is not, so restart it before believing
+anything it shows you.
+
 Registration for a per-machine install lands in **HKLM**, not HKCU:
 `HKLM\SOFTWARE\Classes\CLSID\{BAE3934B-…}\InprocServer32`. On Windows 11 the
 menu only becomes the primary one via the `TreatAs` redirect that
@@ -386,6 +433,21 @@ which is what memory corruption looks like from outside, and is indistinguishabl
 from the desktop flakiness `fixtures/README.md` warns about. When the harness is
 erratic rather than repeatably wrong, build the last known-green commit in a
 worktree and run both under the same conditions before blaming the machine.
+
+**Rule out the harness's own race first, because it has one and it looks
+identical.** Measured 2026-08-28: 3 failures in 21 native runs and 3 in 17
+takeover runs, always one scenario, always a different one, always in the
+`select.*` family, and always the trailing `WM_COMMAND` missing from the trace.
+It reproduces in **native** mode, where Shell is never loaded into the process,
+so it cannot be the product. `TrackPopupMenuEx` promises only that the owner
+"does not receive a WM_COMMAND message from the menu until the function
+returns" — a floor, not a delivery guarantee, and the message is *posted* — so
+`Probe::track`'s drain stopping at the first empty `PeekMessage` dropped it
+whenever the poster was descheduled, which is why the failures cluster under
+load. The drain now waits for a quiet queue rather than one empty read. Two
+consequences worth keeping: a single green hostprobe run is not a gate result,
+report it as *N of M*; and an erratic `select.*` failure is this, not the
+paragraph above.
 
 **Structured exception handling.** `NtUserTrackPopupMenu` and several hooks use
 `__try`/`__finally`. MSVC refuses (C2712) to compile a function that mixes SEH
@@ -483,9 +545,14 @@ use the `perf` alias or qualify fully.
 Be explicit in the commit message when you could not verify something, rather
 than implying you did.
 
-- **Third-party host smoke tests.** Total Commander, Directory Opus, Everything -
-  the hosts that reach Shell through `IShellExtInit`/`IContextMenu` rather than
-  `IShellBrowser`. Nothing here exercises that path.
+- **Third-party host smoke tests**, for the hosts that reach Shell through
+  `IShellExtInit`/`IContextMenu` rather than `IShellBrowser`. Partly closed on
+  2026-08-28: **Everything** was driven by hand and composes correctly, which is
+  the first real confirmation of the capture path outside the harness.
+  **Directory Opus** is now known to be out of scope by its vendor's design (see
+  the host classes at the top of this file) — do not spend time on it.
+  **Total Commander** remains untested, and the question to answer there is the
+  only one that matters: does it track the same `HMENU` it handed the handlers?
 - **The MSI upgrade matrix.** Component identity and sequencing changes need real
   installs on clean VMs across the full set of upgrade combinations. Reading the
   emitted tables proves the package is authored as intended; it does not prove an
