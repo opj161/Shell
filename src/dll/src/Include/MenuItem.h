@@ -210,6 +210,11 @@ namespace Nilesoft
 			struct menuitem_t *system_source = nullptr;
 			IExplorerCommand *explorer_command = nullptr;
 
+			// Carried from menuitem_t so an invoked item can name itself after
+			// Uninitialize has taken the menuitem_t away, which is where a use
+			// is recorded. src/shared/MenuIdentity.h.
+			GUID explorer_clsid{};
+
 			// Keep an independent ref so Invoke still has a live pointer after
 			// Uninitialize deletes the menuitem_t that first owned the command.
 			// https://learn.microsoft.com/en-us/windows/win32/api/unknwn/nf-unknwn-iunknown-addref

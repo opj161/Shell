@@ -1,0 +1,57 @@
+# depth	pos	id	kind	title	verb
+0	0	226	item	&Open	open
+0	1	227	submenu	NanaZip	{CAE3F1D4-7765-4D98-A060-52CD14D56EAB}
+1	0	244	item		
+0	2	230	item	&Move to OneDrive	{1FA0E654-C9F2-4A1F-9800-B9A75D744B01}
+0	3	235	item	Unlock with File Locksmith	{AAF1E27D-4976-49C2-8895-AAFA743C0A7E}
+0	4	237	item	Edit in Notepad	{CA6CC9F1-867A-481E-951E-A28C5E4F01EA}
+0	5	238	item	Open w&ith Code	{1C6DF0C0-192A-4451-BE36-6A59A86A692E}
+0	6	239	item	Rename with PowerRename	{1861E28B-A1F0-4EF4-A1FE-4C8CA88E2174}
+0	7	240	item	Add to &Favourites	pintohomefile
+0	8	242	item	Send with Tailscale...	tailscale
+0	9	192	item	&Move to OneDrive	
+0	10	0	sep		
+0	11	121	item	Sign and encrypt	
+0	12	127	submenu	More GpgEX options	
+1	0	119	item	Decrypt	
+1	1	120	item	Verify	
+1	2	118	item	Decrypt and verify	
+1	3	122	item	Encrypt	
+1	4	123	item	Sign	
+1	5	121	item	Sign and encrypt	
+1	6	124	item	Import keys	
+1	7	125	item	Create checksums	
+1	8	126	item	Verify checksums	
+1	9	0	sep		
+1	10	128	item	About GpgEX	
+0	13	0	sep		
+0	14	100	submenu	Open wit&h	openas
+1	0	102	item	Open wit&h	
+0	15	0	sep		
+0	16	99	submenu	&Give access to	Windows.Share
+1	0	84	item		
+0	17	81	item	Copy &as path	copyaspath
+0	18	80	item	Unlock with File Locksmith	
+0	19	79	item	&Share	Windows.ModernShare
+0	20	78	item	Rename with Pow&erRename	
+0	21	28	item	Restore previous &versions	PreviousVersions
+0	22	32765	sep		
+0	23	77	submenu	Se&nd to	
+1	0	30	item	Bluetooth device	
+1	1	31	item	Compressed (zipped) folder	
+1	2	32	item	Desktop (create shortcut)	
+1	3	33	item	Documents	
+1	4	34	item	FreeFileSync	
+1	5	35	item	Mail recipient	
+1	6	36	item	Media Player Classic	
+1	7	37	item	MediaInfo	
+1	8	38	item	WinSCP (for upload)	
+0	24	32764	sep		
+0	25	25	item	Cu&t	cut
+0	26	26	item	&Copy	copy
+0	27	4294967295	sep		
+0	28	17	item	Create &shortcut	link
+0	29	18	item	&Delete	delete
+0	30	32766	sep		
+0	31	20	item	Pr&operties	properties
+# top-level items: 32

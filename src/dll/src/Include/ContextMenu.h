@@ -1,4 +1,6 @@
-#pragma once
+﻿#pragma once
+
+#include "Include/TypeAhead.h"
 
 //constexpr auto WC_MENU_Layer = L"Nilesoft.Shell.Window.Layers";
 //constexpr auto WC_MENU_Layers = L"Nilesoft.Shell.Window.Border";
@@ -13,12 +15,19 @@ constexpr auto Windows_UI_FileExplorer = L"Windows.UI.FileExplorer.dll";
 
 #include "Include/Theme.h"
 #include "Include/NativeMenuLazy.h"
+#include "Include/NativeMenuTargets.h"
+#include "Include/MenuModel.h"
+#include "Include/MenuFavorites.h"
+#include "Include/FavoritesStore.h"
+#include "Include/MenuInspector.h"
 #include "Include/OneShotMarshal.h"
+#include "Include/PopupLifecycle.h"
 
 struct IExplorerCommand;
 struct IShellItemArray;
 #include <Library/PlutoVGWrap.h>
 #include "Include/Tip.h"
+#include <memory>
 #include <stack>
 
 #define MF_ALLSTATE         0x00FF
@@ -96,7 +105,15 @@ namespace Nilesoft
 			bool radio_check = false;
 			int checked = 0;
 			ULONG_PTR dwItemData = 0;
+
+			// Borrowed for a native item - MenuItemInfo::FindImage returns the
+			// host's own hbmpItem/hbmpUnchecked/hbmpChecked - and owned when this
+			// item built it from a packaged verb's icon resource. Deleting
+			// unconditionally would destroy Explorer's bitmaps; deleting never,
+			// which is what this used to do, leaked one GDI object per packaged
+			// verb per menu. See Include/IconResource.h for the measurement.
 			HBITMAP image = nullptr;
+			bool image_owned = false;
 			menuitem_t *parent = nullptr;
 			string path;
 			Position position = Position::Auto;
@@ -110,12 +127,43 @@ namespace Nilesoft
 			// Empty `items` on a node with a handle means "not opened yet".
 			NativePopupState native_popup;
 
+			/*
+				Where a mirrored native item sits in the host's own menu.
+
+				`enumerate_native_menu_level` has always walked the borrowed menu
+				by index and thrown the index away, because the host's wID was
+				assumed to be the item's identity. For a menu the host addresses
+				by position that assumption is wrong in both directions - the
+				identifier is commonly 0 and duplicates are legal - and the
+				position is the only thing WM_MENUCOMMAND can be built from:
+				"wParam - The zero-based index of the item selected. lParam - A
+				handle to the menu for the item selected."
+				https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand
+
+				The menu is kept as well as the position because lParam names the
+				menu that *owns* the item, which for a nested selection is the
+				submenu rather than the root. Borrowed; Shell never destroys it.
+			*/
+			struct NativeSource
+			{
+				HMENU menu{};
+				UINT position{};
+				bool known{};
+			} native_source;
+
 			// Packaged IExplorerCommand this item was built from. Owned when
 			// explorer_command_owned is true. Not an IContextMenu handler.
 			// MenuItemInfo retains a second ref for Invoke after Uninitialize.
 			// https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand
 			IExplorerCommand *explorer_command = nullptr;
 			bool explorer_command_owned = false;
+
+			// The registration this packaged verb came from. GUID_NULL for
+			// everything else. It is the item's identity across sessions - the
+			// same identifier `-quarantine:add` takes - where a title is not,
+			// because a handler may title itself after the selection ("Compress
+			// to holiday.zip"). src/shared/MenuIdentity.h.
+			GUID explorer_clsid{};
 
 			~menuitem_t()
 			{
@@ -124,6 +172,9 @@ namespace Nilesoft
 				if(explorer_command_owned && explorer_command)
 					static_cast<IUnknown *>(explorer_command)->Release();
 				explorer_command = nullptr;
+				if(image_owned && image)
+					::DeleteObject(image);
+				image = nullptr;
 			}
 
 			bool is_separator() const { return type == 2; }
@@ -457,11 +508,67 @@ plutovg_move_to(pluto, start.x, start.y);
 				static constexpr auto start_id = 0x0fffffff; //0-65535
 				static constexpr auto start_sys = 0x5fffffff;
 
-				uint32_t sys = start_sys;
+				/*
+					Tracking identifiers for mirrored native items, used only
+					when the borrowed root carried MNS_NOTIFYBYPOS.
+
+					Deliberately outside [start_id, start_sys), so equals() below
+					still answers false and InvokeCommand still treats these as
+					the host's items rather than Shell's. They exist because in a
+					by-position menu the host's own wID is not an identity: it is
+					commonly 0 - which the composition path then replaces with a
+					*Shell* identifier, making a host item look like one of
+					Shell's - and duplicates across items are legal, so the first
+					match wins and the wrong item is reported. Neither is
+					survivable when the whole point is telling the host which
+					position was chosen. docs/refactor/09-remediation-plan.md R2.
+
+					They never leave the process: complete_host_contract maps one
+					back to {position, containing menu} before anything is
+					posted, and refuses to notify at all if it cannot.
+				*/
+				static constexpr auto start_native = 0x60000000;
+				static constexpr auto end_native = 0x6fffffff;
+
+				/*
+					The two ranges have to stay apart, and until now nothing
+					said so.
+
+					`get_sys()` used to sit here handing out `sys++` from
+					`start_sys` - which is 0x5fffffff, one below start_native.
+					Its *first* call was the last identifier below the native
+					range and its second was 0x60000000, inside it. Nothing
+					called it, so nothing had gone wrong yet; a second caller
+					would have made a Shell system identifier indistinguishable
+					from a mirrored host item's tracking identifier, and
+					complete_host_contract would have mapped it to a position in
+					a menu it never came from.
+
+					docs/refactor/12-closure-plan.md W10.6 asked for the dead
+					helper to go or for the disjointness to be asserted. Both:
+					`get_sys()` and `is_native_tracking()` are gone (neither had
+					a caller anywhere in the tree), and the assertion is what
+					makes the range boundary survive the next person who needs a
+					system identifier.
+				*/
+				static_assert(start_id < start_sys,
+							  "equals() reads [start_id, start_sys) as Shell's own");
+				static_assert(start_sys < start_native,
+							  "a system identifier must never land in the native "
+							  "tracking range");
+				static_assert(start_native < end_native, "empty native range");
+
 				uint32_t id = start_id;
+				uint32_t native = start_native;
 
 				uint32_t get_id() { return id++; }
-				uint32_t get_sys() { return sys++; }
+
+				// Zero when the range is exhausted, which no real menu reaches;
+				// the caller then leaves the host's own identifier in place.
+				uint32_t get_native()
+				{
+					return native < end_native ? native++ : 0;
+				}
 
 				bool equals(uint32_t ident) const
 				{
@@ -555,24 +662,36 @@ plutovg_move_to(pluto, start.x, start.y);
 			};
 			std::vector<ss_t> _level_bitmap;
 
-			struct {
+			struct Windows
+			{
 				HWND owner{};
 				HWND active{};
 				HWND focus{};
-			}hwnd;
+			};
+			Windows hwnd;
 
-			struct {
+			// Named rather than anonymous, so a type outside this class can hold
+			// a reference to it. Include/Win32MenuPresenter.h needs exactly that
+			// for the four members the paint path reaches for; an anonymous
+			// struct can be a member and cannot be a parameter, which is what
+			// stopped the presenter becoming a class the first time
+			// (docs/refactor/08-handoff.md 3.9, docs/refactor/09 R4).
+			struct Composition
+			{
 				bool activated{};
 				bool DwmEnabled{};
 				explicit operator bool() const { return DwmEnabled && activated; }
-			} composition;
+			};
+			Composition composition;
 
-			struct {
+			struct FontSet
+			{
 				HFONT handle{};
 				LOGFONTW menu{};
 				Font icon;
 				Font icon10;
-			}font;
+			};
+			FontSet font;
 
 			struct symbole_tag 
 			{
@@ -591,11 +710,13 @@ plutovg_move_to(pluto, start.x, start.y);
 				}
 			};
 
-			struct {
+			struct Symbols
+			{
 				symbole_tag chevron;
 				symbole_tag checked;
 				symbole_tag bullet;
-			}symbol;
+			};
+			Symbols symbol;
 			
 			struct {
 
@@ -626,7 +747,7 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			} _settings;
 
-			struct
+			struct Current
 			{
 				HWND hWnd{};
 				HMENU hMenu{};
@@ -653,7 +774,8 @@ plutovg_move_to(pluto, start.x, start.y);
 					hdc = {};
 				}
 
-			} current;
+			};
+			Current current;
 
 			struct oooo
 			{
@@ -687,11 +809,34 @@ plutovg_move_to(pluto, start.x, start.y);
 
 			MenuItemInfo *invoke_item{};
 			std::vector<MenuItemInfo *> _items;
-			std::vector<MenuItemInfo *> _items_command;
-			std::vector<MenuItemInfo *> _items_popup;
 
-			std::vector<MenuItemInfo *> _main_popup;
+			// Every item this menu composed, with where it came from. Replaces
+			// _items_command and _items_popup, which held one fact between them
+			// - membership - and were read back by scanning both. See
+			// Include/MenuModel.h, including why mirrored native items are
+			// deliberately not in here.
+			//
+			// _main_popup went with them and is not replaced: it had been
+			// written on every top-level popup and read by nothing at all.
+			MenuModel<MenuItemInfo> _model;
 			std::unordered_map<HMENU, menu_t> _menus;
+
+			/*
+				By-position replay for the borrowed root.
+
+				`_host_by_position` is the root's MNS_NOTIFYBYPOS style, read once
+				before composition - it is a menu *header* style and "has no
+				effect when applied to individual sub menus", so one read is the
+				whole answer:
+				https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+
+				`_native_origins` maps the tracking identifier Shell gave a
+				mirrored native item back to where that item lives in the host's
+				menu. Only populated in this mode, and only for items the host
+				can be told about.
+			*/
+			bool _host_by_position = false;
+			std::unordered_map<uint32_t, menuitem_t::NativeSource> _native_origins;
 
 			WinEventHook _winEventHook;
 			WindowsHook _keyboardHook;
@@ -721,13 +866,32 @@ plutovg_move_to(pluto, start.x, start.y);
 			DWORD ProcessId{};
 			DWORD ThreadId{};
 
-			std::vector<WND *> _level;
+			// The popups this session has open, innermost last. Entries are
+			// removed by handle rather than by position, so this can never
+			// disagree with _map about which window went away - see
+			// Include/PopupLifecycle.h for the defect that made it a stack of
+			// pointers into a map that erases by key.
+			PopupStack<WND> _level;
 			std::unordered_map<HWND, WND> _map;
-			GC<MenuItemInfo> _gc;
+			// The host repaints its own menu windows, so this menu was ended
+			// unseen and the host gets its own. Include/HostMenuPainter.h.
+			bool _host_paints_menus = false;
+			// Owns every MenuItemInfo; the vector stores unique_ptr, so pointee addresses stay stable across growth.
+			std::vector<std::unique_ptr<MenuItemInfo>> _gc;
 			bool _uninitialized = false;
 
 			NativeTreePolicy _native_policy = NativeTreePolicy::Lazy;
+
+			// Which submenus TargetedDiscovery is allowed to open. Empty for
+			// every other policy, and rebuilt per menu because the rules that
+			// fill it depend on the selection.
+			NativeTargets _native_targets;
 			HMENU _native_notify = nullptr;
+			HMENU _native_uninit_notify = nullptr;
+
+			// Borrowed popups that have been sent WM_INITMENUPOPUP and are owed
+			// the matching WM_UNINITMENUPOPUP.
+			NativePopupNotifications _native_popups;
 
 			menuitem_t *__system_menu_tree = nullptr;
 			std::unordered_map<uint32_t, menuitem_t *> __map_system_menu;
@@ -756,16 +920,66 @@ plutovg_move_to(pluto, start.x, start.y);
 			LRESULT OnInitMenuPopup(HMENU hMenu, uint32_t uPosition);
 			LRESULT OnUninitMenuPopup(HMENU hMenu);
 			LRESULT OnMenuSelect(HMENU hMenu, uint32_t id, uint32_t flags);
+
+			// A character typed while a popup is open. Owner-drawn items give
+			// Windows nothing to match, so this is the only route a mnemonic has
+			// - and, past the first character, the only route type-ahead has.
+			// See Include/Mnemonics.h and Include/TypeAhead.h.
+			LRESULT OnMenuChar(HMENU hMenu, wchar_t pressed);
+
+			// What has been typed into the popup that is open now. Cleared by
+			// its own timeout and by the popup changing.
+			// docs/refactor/05-capabilities.md section 4.
+			TypeAheadBuffer _typed;
+			bool owns_item(const MenuItemInfo *item) const;
 			LRESULT OnDrawItem(DRAWITEMSTRUCT *di);
 			LRESULT OnMeasureItem(MEASUREITEMSTRUCT *mi);
 
-			LRESULT OnDrawItem_D2D(DRAWITEMSTRUCT *di);
-
 			uint32_t invoke(CommandProperty *cmd_prop);
 			bool is_excluded();
+
+			/*
+				Set when Initialize() returns false because Shell *decided* not
+				to compose a menu here, rather than because something went wrong.
+
+				The two look identical to the caller and must not be counted the
+				same way. Declining is the normal answer for a window Shell does
+				not handle, for a configuration that hides the menu in this
+				context, and for a generation that is not currently serving -
+				all deterministic, all cheap, and none of them evidence that
+				takeover is broken. Only a real failure may feed the circuit
+				breaker, or three of a host's own internal popups would switch
+				Shell off for that process permanently.
+				docs/refactor/01-takeover-contract.md section 7.
+			*/
+			bool init_declined = false;
+
 			bool Initialize();
 			int Uninitialize();
 			int InvokeCommand(int id);	
+			// Group-aware column breaks for a menu taller than the screen.
+			// Opt-in through settings.columns; see Include/MenuColumns.h.
+			void apply_smart_columns(HMENU hMenu, menu_t *menu);
+
+			// What this item is called across sessions, or an invalid identity
+			// for one that cannot be named. src/shared/MenuIdentity.h.
+			//
+			// `custom` says an NSS rule built it. It is a parameter rather than
+			// a read of `item->dynamic` because the inspector annotates an item
+			// before the composition loop sets that field, and a caller that
+			// knows which rule it is holding should not have to know the order
+			// the fields happen to be filled in.
+			MenuIdentity::Identity item_identity(const MenuItemInfo *item, bool custom) const;
+			MenuIdentity::Identity item_identity(const MenuItemInfo *item) const;
+
+			// Replace an item's tooltip with where it came from, while
+			// Shift+Alt is composing the menu. Include/MenuInspector.h.
+			void annotate_for_inspection(MenuItemInfo *mii, const NativeMenu *rule,
+										 const std::vector<NativeMenu *> *matched) const;
+
+			// Lift the items this user reaches for to a section at the top.
+			// Opt-in through settings.favorites; see Include/MenuFavorites.h.
+			void apply_favorites(std::vector<MenuItemInfo *> &items);
 			void build_system_menuitems(HMENU hMenu, menuitem_t *menu, bool is_root = false);
 			void build_main_system_menuitems(menuitem_t *menu, bool is_root = false);
 
@@ -775,6 +989,11 @@ plutovg_move_to(pluto, start.x, start.y);
 			bool materialize_native_children(menuitem_t *node);
 			void apply_system_modify_rules(menuitem_t *node, bool is_root);
 			bool has_applicable_native_moveto_rule() const;
+
+			// Fills `targets` with every submenu the applicable parent-moving
+			// rules name. False means one of them could not be reduced to a
+			// literal path, and the menu keeps LegacyEager.
+			bool collect_native_targets(NativeTargets &targets);
 			void append_explorer_commands(menuitem_t *root);
 			bool materialize_explorer_command_children(menuitem_t *node);
 			bool invoke_explorer_command(MenuItemInfo *item);
@@ -788,6 +1007,19 @@ plutovg_move_to(pluto, start.x, start.y);
 				return hMenu && (hMenu == _native_notify || hMenu == _hMenu_original);
 			}
 
+			// The same pass-through, for the outgoing WM_UNINITMENUPOPUP that
+			// pairs with one of those notifications. It needs its own token
+			// rather than sharing the one above: OnUninitMenuPopup destroys the
+			// menu it is handed, and this one belongs to the host.
+			bool is_native_uninit_inflight(HMENU hMenu) const
+			{
+				return hMenu && hMenu == _native_uninit_notify;
+			}
+
+			// Sends the WM_UNINITMENUPOPUP owed to every borrowed popup Shell
+			// told to populate itself. Called once, from Uninitialize().
+			void uninitialize_native_popups();
+
 
 			void backup_native_items(HMENU hMenu, uint32_t id, bool check = false);
 
@@ -799,6 +1031,44 @@ plutovg_move_to(pluto, start.x, start.y);
 			void screenshot();
 
 			HMENU MenuHandle() const;
+
+			/*
+				The presenter's view of this menu.
+
+				Built here and nowhere else, so the list of members the paint
+				path may reach is one struct in one place - Include/
+				Win32MenuPresenter.h - rather than "whatever MenuPresenter.cpp
+				happens to touch". Returned by value; it holds only references
+				to members of this object, which outlives every presenter made
+				from it.
+			*/
+			struct PresenterContext presenter_context();
+
+			/*
+				The borrowed root's MNS_NOTIFYBYPOS style, and where a tracked
+				identifier came from in the host's own menu.
+
+				Both are read by the hook *before* InvokeCommand, because
+				InvokeCommand destroys this object - see the note beside the call
+				in Main.cpp. Nothing here allocates or touches the menu; they are
+				lookups into what composition already recorded.
+			*/
+			bool host_notifies_by_position() const noexcept { return _host_by_position; }
+			bool host_paints_menus() const noexcept { return _host_paints_menus; }
+
+			bool native_origin(int tracked, uint32_t *position, HMENU *menu) const
+			{
+				if(tracked <= 0)
+					return false;
+				auto found = _native_origins.find(static_cast<uint32_t>(tracked));
+				if(found == _native_origins.end())
+					return false;
+				if(position)
+					*position = found->second.position;
+				if(menu)
+					*menu = found->second.menu;
+				return true;
+			}
 
 			/*template<typename T = long>
 			T dpi(auto value) const { return static_cast<T>(std::rint(value * double(_dpi) / 96.0)); }
@@ -856,8 +1126,14 @@ plutovg_move_to(pluto, start.x, start.y);
 				return ::RegisterClassW(&wc_Layer);
 			}
 
-			inline static ContextMenu *CreateAndInitialize(HWND hWnd, HMENU hMenu, Point const &pt, bool explorer, bool contextmenuhandler)
+			// `declined`, when given, is set to true if Initialize() refused on
+			// purpose rather than failed - see init_declined above. Nullptr with
+			// declined == false is the only outcome the circuit breaker counts.
+			inline static ContextMenu *CreateAndInitialize(HWND hWnd, HMENU hMenu, Point const &pt, bool explorer, bool contextmenuhandler, bool *declined = nullptr)
 			{
+				if(declined)
+					*declined = false;
+
 				if(!Initializer::Status.Disabled)
 				{
 					auto ctx = new ContextMenu(hWnd, hMenu, pt);
@@ -866,7 +1142,16 @@ plutovg_move_to(pluto, start.x, start.y);
 					ctx->Selected.hmenu_original = hMenu;
 					if(ctx->Initialize())
 						return ctx;
+
+					// Read before the object goes: it is the only record of why.
+					if(declined)
+						*declined = ctx->init_declined;
 					delete ctx;
+				}
+				else if(declined)
+				{
+					// Switched off is a decision, not a malfunction.
+					*declined = true;
 				}
 				return nullptr;
 			}
@@ -892,3 +1177,7 @@ plutovg_move_to(pluto, start.x, start.y);
 		};
 	}
 }
+
+// After the class, because PresenterContext names ContextMenu's nested types
+// and needs them complete. docs/refactor/09-remediation-plan.md R4.
+#include "Include/Win32MenuPresenter.h"

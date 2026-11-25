@@ -1275,151 +1275,6 @@ namespace Nilesoft
 	};
 	*/
 
-	// Garbage Collection
-	template<typename T = void>
-	class GC
-	{
-		struct Node
-		{
-			T *data;
-			Node *next;
-			Node(T *data) : data{ data }, next{ nullptr } {}
-			~Node() { if(data) delete data; }
-		};
-
-	private:
-
-		Node *head;
-		size_t count;
-
-	public:
-
-		GC() noexcept : head{ nullptr }, count{ 0 } {};
-		~GC() noexcept { clean(); }
-
-		void clean()
-		{
-			while(head)
-			{
-				auto temp = head;
-				head = head->next;
-				delete temp;
-				count--;
-			}
-			head = nullptr;
-			count = 0;
-		}
-
-		size_t size() const { return count; }
-		bool empty() const { return head == nullptr; }
-
-		void pop()
-		{
-			if(head)
-			{
-				auto temp = head;
-				head = temp->next;
-				delete temp;
-				count--;
-			}
-		}
-
-		auto push()
-		{
-			auto temp = new Node(new T);
-			if(head)
-			{
-				temp->next = head;
-				head = temp;
-			}
-			else
-			{
-				head = temp;
-			}
-			count++;
-			return temp->data;
-		}
-
-		auto push(T *data)
-		{
-			auto temp = new Node(data);
-			if(head)
-			{
-				temp->next = head;
-				head = temp;
-			}
-			else
-			{
-				head = temp;
-			}
-			count++;
-			return data;
-		}
-
-		auto push_back(T *data)
-		{
-			auto temp = new Node(data);
-			if(head == nullptr)
-			{
-				head = temp;
-			}
-			else
-			{
-				auto cur = head;
-				while(cur)
-				{
-					if(cur->next == nullptr)
-					{
-						cur->next = temp;
-						break;
-					}
-					cur = cur->next;
-				}
-			}
-			count++;
-			return data;
-		}
-
-		void reverse()
-		{
-			if(head)
-			{
-				auto parent = head;
-				auto me = parent->next;
-				auto child = me->next;
-				// make parent as tail
-				parent->next = nullptr;
-				while(child)
-				{
-					me->next = parent;
-					parent = me;
-					me = child;
-					child = child->next;
-				}
-				me->next = parent;
-				head = me;
-			}
-		}
-
-		T *get(size_t index)
-		{
-			auto currunt = head;
-			size_t i = 0;
-			while(currunt)
-			{
-				if(i++ == index)
-					return currunt->data;
-				currunt = currunt->next;
-			}
-			return nullptr;
-		}
-
-		T *top()
-		{
-			return head ? head->data : nullptr;
-		}
-	};
-
 	static inline void *swab(const void *_src, void *_dest, size_t n)
 	{
 		const auto *src = (uint8_t *)_src;
@@ -2286,16 +2141,13 @@ inline static auto PostMSG(HWND hWnd, uint32_t msg, auto wparam, auto lparam)
 }
 
 #include "System\auto_ptr.h"
-#include "System\MemoryManager.h"
 #include "System\Diagnostics\Thread.h"
 #include "System\DLL.h"
 
 
 // string classes
-#include "System\Text\StringBuffer.h"
 #include "System\Text\Encoding.h"
 #include "System\Text\string.h"
-#include "System\Text\TString.h"
 #include "System\Text\Text.h"
 
 // Win32 buffer-sizing contracts; needs Text::string, used by Path.h and

@@ -5,6 +5,7 @@
 //#include <strsafe.h>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 #include <deque>
 #include "Hash.h"
@@ -603,9 +604,24 @@ for (const char* p = s; *p != 0; p++) {
 				return nullptr;
 			}
 
+			// An empty string answers L"", not nullptr. valid() is
+			// `m_data && m_length > 0`, so the old nullptr return applied to every
+			// legitimately empty string, and std::wstring_view's pointer
+			// constructor calls char_traits::length on whatever it is given - so
+			// `std::wstring_view(s.c_str())` faulted on every empty s. A top-level
+			// menu item's path is empty, which made that the first item of every
+			// menu rather than an edge case, and the fault landed inside the hook's
+			// SEH region where catch(...) under /EHsc does not reach it: a menu
+			// that never appeared, with nothing in any log.
+			//
+			// Nothing depended on the nullptr: of 532 c_str() call sites, none
+			// tested the result against null. A sink that means "absent" must test
+			// emptiness, which is what the codebase already does everywhere it
+			// matters (`if(x && *x)`).
+			// https://learn.microsoft.com/en-us/cpp/standard-library/basic-string-view-class
 			const wchar_t *c_str() const
 			{
-				return valid() ? m_data : nullptr;
+				return valid() ? m_data : L"";
 			}
 
 			wchar_t *data() { return this->m_data; }
@@ -647,10 +663,10 @@ for (const char* p = s; *p != 0; p++) {
 			{
 				if(this != &other)
 				{
+					// Deep copy: stealing other.m_data here left two owners of one
+					// buffer (double free when both destructors run).
 					clear();
-					m_capacity = other.m_capacity;
-					m_length = other.m_length;
-					m_data = other.m_data;
+					assign(other.m_data, other.m_length);
 				}
 				return *this;
 			}
@@ -1928,10 +1944,24 @@ std::wstring replace(std::wstring const &original,
 
 			// operator
 
+			// Both overloads read L'\0' at and beyond m_length, so the `while(s[i])`
+			// idiom still stops at the end of the string:
+			//   - const: at()'s long-standing contract, unchanged.
+			//   - non-const: index m_length is the terminator terminate() always
+			//     writes; past that it clamps there rather than running off the
+			//     buffer, which is what this used to do.
+			// Clamping to the *last character* instead would turn that idiom into an
+			// endless loop, so do not "simplify" this to m_length - 1.
 			template<typename T=size_t>
 			wchar_t &operator [](T index)
 			{
-				return m_data[static_cast<size_t>(index)];
+				// A string that never allocated has no terminator to hand out. The
+				// caller is already wrong; give it a sink rather than dereference null.
+				static wchar_t discard = 0;
+				if(!m_data)
+					return discard;
+				auto i = static_cast<size_t>(index);
+				return m_data[i <= m_length ? i : m_length];
 			}
 
 			const wchar_t &operator [](size_t index) const
@@ -1943,8 +1973,13 @@ std::wstring replace(std::wstring const &original,
 			operator Char() const { return (Char)(valid() ? m_data[0] : 0); }
 			operator char() const { return valid() ? (char)m_data[0] : 0; }
 			operator wchar_t() const { return valid() ? m_data[0] : 0; }
+			// The const conversion matches c_str() above: empty means L"".
+			// The mutable one deliberately does not - handing out a writable
+			// pointer into a shared string literal is worse than handing out
+			// nullptr, and anything writing through it on an empty string is
+			// already wrong.
 			operator wchar_t *() const { return valid() ? m_data : nullptr; }
-			operator wchar_t const *() const { return valid() ? m_data : nullptr; }
+			operator wchar_t const *() const { return valid() ? m_data : L""; }
 			operator string() const { return *this; }
 
 			operator std::wstring() const
@@ -1960,7 +1995,9 @@ std::wstring replace(std::wstring const &original,
 			explicit operator bool() const { return !empty(); }
 			bool operator !() const { return empty(); }
 
-			template<typename T>
+			// Constrained so only types constructible from const wchar_t* use this
+			// catch-all conversion; anything else falls through to other overloads.
+			template<typename T, std::enable_if_t<std::is_constructible_v<T, const wchar_t*>, int> = 0>
 			operator T() const { return T(valid() ? m_data : EMPTY); }
 
 			// Assignment Operators

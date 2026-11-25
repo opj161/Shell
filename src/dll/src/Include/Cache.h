@@ -3,6 +3,8 @@
 #include "Include\Theme.h"
 #include "Include\BitmapCache.h"
 #include "Include\Packages.h"
+#include "Include\PackageCatalogService.h"
+#include "Include\PackagesCache.h"
 #include <Resource.h>
 #include <mutex>
 #include <memory>
@@ -11,53 +13,6 @@ namespace Nilesoft
 {
 	namespace Shell
 	{
-		/*
-			Package (MSIX/AppX) lookup for the appx()/package() NSS functions.
-
-			The lookup itself lives in Packages.h/.cpp, free of Shell types so its
-			cost model can be tested: an identity index built from package
-			repository subkey names, with install paths and localized display
-			names resolved for one matched package on demand. This is only the
-			bridge to the expression evaluator's string type.
-		*/
-		class PackagesCache
-		{
-		public:
-			PackagesCache() { _index.set_source(&_source); }
-
-			bool exists(const wchar_t *name) const { return _index.exists(name); }
-
-			std::optional<PackageIdentity> find_identity(const wchar_t *name) const
-			{
-				return _index.find_identity(name);
-			}
-
-			// The real installation directory. The repository subkey records the
-			// package full name, not a path, so this has to be resolved.
-			string path(const wchar_t *name) const
-			{
-				if(auto p = _index.path(name); p && !p->empty())
-					return string(p->c_str());
-				return {};
-			}
-
-			// The only entry point that touches localized resources.
-			string display_name(const wchar_t *name) const
-			{
-				if(auto n = _index.display_name(name); n && !n->empty())
-					return string(n->c_str());
-				return {};
-			}
-
-			std::vector<PackageIdentity> all() const { return _index.all_identities(); }
-
-			void clear() { _index.clear(); }
-
-		private:
-			mutable RegistryPackageSource _source;
-			mutable PackageIndex _index;
-		};
-
 		class FontCache
 		{
 			std::unordered_map<uint32_t, Font*> fonts;
@@ -237,6 +192,16 @@ namespace Nilesoft
 
 			std::vector<NativeMenu*>	statics;
 			NativeMenu					dynamic;
+
+			// Every file this generation was parsed from, root first, in load
+			// order - Parser::LoadedFiles() copied out before the parser goes
+			// away. `RuleProvenance::file` indexes it.
+			//
+			// Held per generation rather than process-wide because that is what
+			// makes the index meaningful: an open menu holds its own generation
+			// until it closes, so a rule pointer and this vector always come
+			// from the same parse. See Include/RuleProvenance.h.
+			std::vector<std::wstring>	files;
 			FontCache					fonts;
 			PackagesCache				Packages;
 			std::vector<ImageCache>		images;
@@ -256,6 +221,17 @@ namespace Nilesoft
 			~CACHE()
 			{
 				clear();
+			}
+
+			// The path a rule's provenance names, or nullptr. Never an empty
+			// string for a missing entry: a caller printing "" beside a line
+			// number would produce ":41", which reads as a file called nothing
+			// rather than as an answer nobody has.
+			const wchar_t *file_name(const RuleProvenance &at) const
+			{
+				if(!at.known() || at.file >= files.size())
+					return nullptr;
+				return files[at.file].c_str();
 			}
 
 			const MUID* find_muid(uint32_t hash) const
@@ -282,12 +258,19 @@ namespace Nilesoft
 				images.clear();
 				bitmaps.clear();
 				muid.clear();
+				files.clear();
 				
 				variables.global.clear(true);
 				variables.runtime.clear(true);
 				variables.loc.clear(true);
 
-				Packages.clear();
+				// Packages is deliberately not cleared. It holds no state of its
+				// own any more - the answers come from the catalog service, which
+				// is process-lifetime and has nothing to do with which
+				// configuration generation is loaded. Clearing it here threw away
+				// the package index on every config reload, and since the watcher
+				// landed that is every save.
+				// docs/refactor/02-first-paint-latency.md section 2.1 step 4.
 				fonts.clear();
 			}
 

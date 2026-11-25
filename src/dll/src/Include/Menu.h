@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RuleProvenance.h"
+
 namespace Nilesoft
 {
 	namespace Shell
@@ -15,6 +17,19 @@ namespace Nilesoft
 		struct Settings
 		{
 			auto_expr showdelay;
+
+			// The most columns a menu taller than the screen may use before it
+			// falls back to scrolling. Unset, 0 or 1 all keep the scrolling
+			// behaviour every configuration has today.
+			// docs/refactor/05-capabilities.md section 5, Include/MenuColumns.h.
+			auto_expr columns;
+
+			// How many favourite items a menu may lift to a section at the
+			// top. Unset and 0 both mean off, so no configuration that exists
+			// today changes.
+			// docs/refactor/05-capabilities.md section 6, Include/MenuFavorites.h.
+			auto_expr favorites;
+
 			auto_expr priority;
 			struct
 			{
@@ -254,6 +269,12 @@ namespace Nilesoft
 		public:
 			int32_t		MenuId = 0;
 			int32_t		id = 0;
+
+			// The file and line this rule was written on, for the inspector.
+			// Unknown for a rule the parser did not build - see
+			// Include/RuleProvenance.h.
+			RuleProvenance provenance;
+
 			NativeMenuType	type = NativeMenuType::None;
 			NativeMenu *owner{};
 			Scope		variables;

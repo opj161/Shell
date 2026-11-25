@@ -386,7 +386,6 @@ namespace Nilesoft
 		{
 			double val{};
 			bool sign = false;
-			bool isfloat = false;
 
 			if(l->tok == '0' && l->is('x', 1))
 			{
@@ -462,27 +461,25 @@ namespace Nilesoft
 				l->next();
 			}
 
-			int mantissa = 1;
 			while(l->is_digit())
-			{
 				val = val * 10.0 + (l->next() - '0');
-				mantissa = mantissa * 10;
-			}
 
-			if(isfloat)
-				val = val / (double)mantissa;
-			else if(l->tok == '.' && l->is_digit(1))
+			if(l->tok == '.' && l->is_digit(1))
 			{
 				l->next();// skip '.'
-				double mantissa_val = 0;
-				mantissa = 1;
+				double frac = 0, scale = 1;
 				while(l->is_digit())
 				{
-					mantissa_val = mantissa_val * 10.0 + (l->tok - '0');
+					// a double carries ~17 significant digits; further digits are consumed but
+					// cannot change the value, and an int/unbounded scale would overflow.
+					if(scale < 1e18)
+					{
+						frac = frac * 10.0 + (l->tok - '0');
+						scale *= 10.0;
+					}
 					l->next();
-					mantissa = mantissa * 10;
 				}
-				val += mantissa_val / (double)mantissa;
+				val += frac / scale;
 			}
 			
 			if(sign && val == 0) sign = false;
@@ -572,7 +569,15 @@ namespace Nilesoft
 				auto line = l->line;
 				std::unique_ptr<FuncExpression> func(parse_func());
 
-				if(func->Id.equals({ IDENT_COLOR_LIGHT, IDENT_COLOR_DARK, IDENT_COLOR_INVERT, IDENT_OPACITY }))
+				// parse_func returns nullptr whenever parse_ident fails, which is
+				// any non-alphabetic character after the dot - `#ff0000.5` is
+				// enough. Dereferencing it here faulted during config load, and an
+				// access violation on this path is invisible: it happens inside
+				// the hook's SEH region, which catch(...) under /EHsc does not
+				// catch. A null postfix is the same malformed input as a postfix
+				// that is not one of the four colour functions, so it is reported
+				// the same way, at the same column and line.
+				if(func && func->Id.equals({ IDENT_COLOR_LIGHT, IDENT_COLOR_DARK, IDENT_COLOR_INVERT, IDENT_OPACITY }))
 				{
 					auto id = func->Id[0];
 					func->Id.set(0, IDENT_COLOR);
@@ -869,9 +874,28 @@ namespace Nilesoft
 					{
 						skip(true, !inside_quotes);
 
+						// `args` is filled only inside the `if(l->next_is('('))` arm
+						// above, so it is empty for the parenthesis-less form. These
+						// two arms key on Ident::equals(uint32_t), which compares the
+						// LAST segment, and the icon/image/img/svg arms of
+						// verify_ident classify any second segment as an Identifier
+						// with no lower bound on argc - so `icon.foreach` and
+						// `svg.for` reach here with nothing in `args` and indexed
+						// out of range. Check the arity before indexing; a wrong
+						// argument count is already this branch's own error.
 						if(ident.equals(IDENT_FOREACH))
 						{
+							error_if(args.size() < 2, TokenError::IdentifierArgumentsUnexpected, ident_col);
 							error_if(!args[0]->IsVariable(), TokenError::IdentifierArgumentsUnexpected, ident_col);
+
+							// args[1] must also be checked, not only counted.
+							// ident() is an unchecked reinterpret_cast and
+							// IdentExpression's first member is an 800-byte
+							// Ident, so `foreach(@a, 5, 1)` - a NumberExpression
+							// here - read Ident::_size from past the end of a
+							// far smaller object and indexed _items_id with it.
+							// Measured 2026-08-27: the suite exited 0xC0000005.
+							error_if(!args[1]->IsIdentExpression(), TokenError::IdentifierArgumentsUnexpected, ident_col);
 
 							auto id = &args[1]->ident()->Id;
 							if(!id->equals({ IDENT_SEL, IDENT_TYPES, IDENT_PATHS, IDENT_SHORTS,
@@ -883,6 +907,7 @@ namespace Nilesoft
 						}
 						else if(ident.equals(IDENT_FOR))
 						{
+							error_if(args.empty(), TokenError::IdentifierArgumentsUnexpected, ident_col);
 							error_if(!args[0]->IsAssign(), TokenError::IdentifierArgumentsUnexpected, ident_col);
 						}
 						else if(ident.equals(IDENT_IF) && args.size() == 1)
@@ -999,7 +1024,9 @@ namespace Nilesoft
 			start_line = l->line;
 			start_col = l->column;
 
-			while(l->tok != close)
+			// tok is 0 at end of input and never equals close; without the eof exit an
+			// unterminated string spins here forever instead of reaching the error below.
+			while(l->tok != close && !l->eof)
 			{
 				string value;
 				if(l->tok == close) break;

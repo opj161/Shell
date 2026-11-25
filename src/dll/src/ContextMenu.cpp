@@ -1,8 +1,14 @@
-#include <pch.h>
+﻿#include <pch.h>
 #include "Include/Theme.h"
 #include "Include/ContextMenu.h"
+#include "Include/DwmWindow.h"
 #include "Include/stb_image_write.h"
 #include "Include/Diagnostics/MenuPerf.h"
+#include "Include/Mnemonics.h"
+#include "Include/TypeAhead.h"
+#include "Include/MenuColumns.h"
+#include "Include/VerticalBlank.h"
+#include "Include/HostMenuPainter.h"
 #include "RegistryConfig.h"
 
 using namespace Nilesoft::Diagnostics;
@@ -51,91 +57,6 @@ void plutovg_surface_write_to_hdc(plutovg_surface_t *surface, int x, int y, HDC 
 }
 */
 
-struct DWM
-{
-	enum class BackdropType : int
-	{
-		Default = 0,
-		None = 1,
-		Mica = 2,
-		Acrylic = 3,
-		Tabbed = 4,
-	};
-
-	enum class Corner : int
-	{
-		Default = 0,
-		None = 1,
-		Round = 2,
-		RoundSmall = 3,
-		Last = 4,
-	};
-
-	HWND handle{};
-	DWM(HWND hWnd = nullptr) : handle(hWnd) {}
-
-	HRESULT RemoveCorner()
-	{
-		return SetCorner(Corner::None);
-	}
-
-	HRESULT SetCorner(Corner value = Corner::Round)
-	{
-		const auto DWMWA_WINDOW_CORNER_PREFERENCE = 33U;
-		return SetAttribute(DWMWA_WINDOW_CORNER_PREFERENCE, value);
-	}
-
-	HRESULT SetBorderColor(COLORREF color)
-	{
-		const auto DWMWA_BORDER_COLOR = 34U;
-		return SetAttribute(DWMWA_BORDER_COLOR, color);
-	}
-
-	/// <summary>
-	/// Enable or disable immersive dark mode.
-	/// Requires Windows build 19041 or higher.
-	/// </summary>
-	HRESULT SetImmersiveDarkMode(BOOL state = TRUE)
-	{
-		const auto DWMWA_IMMERSIVE_DARK_MODE = 20U;
-		return SetAttribute(DWMWA_IMMERSIVE_DARK_MODE, state);
-	}
-
-	/// <summary>
-	/// Set backdrop type on target window
-	/// Requires Windows build 22523 or higher.
-	/// </summary>
-	HRESULT SetBackdropType(BackdropType backdropType)
-	{
-		const auto DWMWA_SYSTEMBACKDROP_TYPE = 38;
-		return SetAttribute(DWMWA_SYSTEMBACKDROP_TYPE, backdropType);
-	}
-
-	/// <summary>
-	/// Enable or Disable Mica on target window
-	/// Supported on Windows builds from 22000 to 22523. It doesn't work on 22523, use <see cref="SetBackdropType(IntPtr, DWM_SYSTEMBACKDROP_TYPE)"/> instead.
-	/// </summary>
-	HRESULT SetMica(BOOL state = true)
-	{
-		const auto DWMWA_MICA = 1029U;
-		return SetAttribute(DWMWA_MICA, state);
-	}
-
-	template<typename T>
-	HRESULT SetAttribute(DWORD dwAttribute, T pvAttribute)
-	{
-		return ::DwmSetWindowAttribute(handle, dwAttribute, (const void *)&pvAttribute, sizeof(T));
-	}
-
-	auto ExtendFrameIntoClientArea(MARGINS margins = { -1 })
-	{
-		return ::DwmExtendFrameIntoClientArea(handle, &margins);
-	}
-};
-
-inline HMENU GET_HMENU(HWND hWnd) { return SendMSG<HMENU>(hWnd, MN_GETHMENU, 0, 0); }
-
-auto ver = &Windows::Version::Instance();
 
 #pragma endregion
 
@@ -149,29 +70,6 @@ namespace Nilesoft
 		//std::mutex _mutex; // mutex for critical section
 		//std::lock_guard<std::mutex> lock(_mutex);
 
-		inline static MenuItemInfo *get_item(uint32_t id, const std::vector<MenuItemInfo *> &list)
-		{
-			for(auto item : list)
-			{
-				if(item->wID == id) return item;
-			}
-			return nullptr;
-		}
-
-		inline static MenuItemInfo *get_item(uint32_t id, HMENU hMenu, const std::vector<MenuItemInfo *> &list)
-		{
-			for(auto item : list)
-			{
-				if(item->handle == hMenu)
-				{
-					if(item->wID == id)
-					{
-						return item;
-					}
-				}
-			}
-			return nullptr;
-		}
 
 		ContextMenu::ContextMenu(HWND hWnd, HMENU hMenu, Point const &pt)
 		{
@@ -295,7 +193,7 @@ namespace Nilesoft
 					{
 						if(item->is_separator())
 						{
-							auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1));
+							auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1)).get();
 							mii->owner = owner;
 							mii->dynamic = true;
 							mii->type = NativeMenuType::Separator;
@@ -339,7 +237,7 @@ namespace Nilesoft
 						{
 							if(_context.Eval(item->moveto, value, true) && !value.trim(L'/').empty())
 							{
-								auto mii = _gc.push();
+								auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>()).get();
 								mii->dynamic = true;
 								mii->owner_dynamic = item;
 								if(mii->parse_parent(value))
@@ -429,7 +327,7 @@ namespace Nilesoft
 
 					if(item->is_separator())
 					{
-						auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1));
+						auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_FTYPE, MFT_SEPARATOR, -1)).get();
 						mii->type = NativeMenuType::Separator;
 						mii->indexof.val = indexof.move();
 						mii->indexof.pos = indexof_pos;
@@ -477,7 +375,7 @@ namespace Nilesoft
 							}
 						}
 
-						auto mii = _gc.push(new MenuItemInfo(MIIM_STRING | MIIM_ID | MIIM_DATA | MIIM_STATE, 0, ident.get_id()));
+						auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_STRING | MIIM_ID | MIIM_DATA | MIIM_STATE, 0, ident.get_id())).get();
 
 						mii->owner = owner;
 						mii->indexof.val = indexof.move();
@@ -660,6 +558,13 @@ namespace Nilesoft
 							//mii->tip = item->tip;
 							_context.eval_tip(item->tip, mii->tip.text, mii->tip.type, mii->tip.time);
 
+							// After the configured tip, for the reason given at
+							// the other call site: while inspecting, the tip is
+							// the inspector. `item` here is the NSS rule that
+							// built this, so its provenance is the answer to
+							// "why is this here" in one line.
+							annotate_for_inspection(mii, item, nullptr);
+
 							if(item->is_menu())
 							{
 								mii->set_popup_menu();
@@ -821,6 +726,39 @@ namespace Nilesoft
 
 				mii->wID = item->wid;
 				mii->retain_explorer_command(item->explorer_command);
+				mii->explorer_clsid = item->explorer_clsid;
+
+				/*
+					A mirrored native item in a by-position menu is tracked by an
+					identifier of Shell's own, and that identifier is remembered
+					against the position it came from.
+
+					This has to happen before the fallback below, and it has to
+					happen even when the host's wID is non-zero. Both halves are
+					the defect:
+
+					  - wID 0 is the common case in a menu addressed by position,
+					    and the fallback replaces it with an identifier from the
+					    *Shell* range - so InvokeCommand then believes a host item
+					    is one of Shell's, and runs nothing while telling the host
+					    nothing.
+					  - duplicate identifiers across items are legal in such a
+					    menu, and every lookup that matches on wID stops at the
+					    first one, so the wrong position would be reported.
+
+					A range of its own keeps ident.equals() answering false, so
+					the item stays the host's; _native_origins is what turns the
+					identifier back into {position, menu} once the user has
+					chosen. docs/refactor/09-remediation-plan.md R2.
+				*/
+				if(_host_by_position && item->native_source.known)
+				{
+					if(auto tracking = ident.get_native())
+					{
+						mii->wID = tracking;
+						_native_origins[tracking] = item->native_source;
+					}
+				}
 
 				if(mii->wID == 0 || mii->wID == (uint32_t)-1)
 					mii->wID = ident.get_id();
@@ -1029,6 +967,13 @@ namespace Nilesoft
 					continue;
 				ev_si(si, mii, item);
 			}
+
+			// Last, so it wins over any tip the matched rules just set: while
+			// inspecting, the tip is the inspector. item->native_items is
+			// every modify/moveto rule that had a hand in this item, collected
+			// when the rules were applied - so section 07's "matched rule
+			// locations" is a read here rather than a second pass.
+			annotate_for_inspection(mii, nullptr, &item->native_items);
 		}
 
 		bool ContextMenu::prepare_system_items(PositionList &list, menu_t *menu)
@@ -1040,7 +985,7 @@ namespace Nilesoft
 			for(auto item : *menu->std_items)
 			{
 				_context._this = nullptr;
-				auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0));
+				auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0)).get();
 				prepare_system_item(item, mii, menu);
 				list.push(mii);
 			}
@@ -1057,7 +1002,7 @@ namespace Nilesoft
 			{		
 				if(item->path.equals(menu->path))
 				{
-					auto mii = _gc.push(new MenuItemInfo(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0));
+					auto mii = _gc.emplace_back(std::make_unique<MenuItemInfo>(MIIM_ID | MIIM_DATA | MIIM_FTYPE, 0, 0)).get();
 					prepare_system_item(item, mii, menu);
 					list.push(mii);
 				}
@@ -1385,6 +1330,12 @@ namespace Nilesoft
 				}
 			}
 
+			// Before the separator trim below, and after everything that
+			// decides what is in the menu: promoting an item moves it, so the
+			// trim has to run over the order the user will actually see.
+			// docs/refactor/05-capabilities.md section 6.
+			apply_favorites(items);
+
 			// remove duplicate separators
 			while(!items.empty())
 			{
@@ -1399,8 +1350,7 @@ namespace Nilesoft
 			}
 
 			_items.reserve(items.size());
-			_items_command.reserve(items.size());
-			_items_popup.reserve(items.size());
+			_model.reserve(items.size());
 
 			DC dc = hwnd.owner;
 			dc.set_font(font.handle);
@@ -1493,7 +1443,7 @@ namespace Nilesoft
 
 							if(menu->draw.popups)
 								item->size.cx += _theme.image.gap + symbol.chevron.size.cx;
-							
+
 							item->size.cx += rc.right;
 							item->size.cy = rc.bottom;
 
@@ -1502,24 +1452,23 @@ namespace Nilesoft
 						}
 
 						menu->popup_height += item->size.cy +
-							_theme.back.padding.top + _theme.back.padding.bottom + 
+							_theme.back.padding.top + _theme.back.padding.bottom +
 							_theme.back.margin.top + _theme.back.margin.bottom;
 
 						_items.push_back(item);
 					}
 
+					// Exactly the membership the three vectors encoded, said
+					// once instead of three times. A dynamic popup was an
+					// _items_popup entry and a dynamic command an
+					// _items_command one - the same table, different columns -
+					// and a packaged verb joined the commands. The popup flag
+					// is what keeps an identifier lookup off a submenu, which
+					// used to be a property of which vector it was not in.
 					if(item->dynamic && item->is_popup_or_item())
-					{
-						if(item->is_popup())
-							_items_popup.push_back(item);
-						else
-							_items_command.push_back(item);
-					}
+						_model.add(item, ItemOrigin::Custom, item->wID, item->is_popup());
 					else if(item->explorer_command && item->is_item())
-						_items_command.push_back(item);
-
-					if(menu->is_main && item->is_popup())
-						_main_popup.push_back(item);
+						_model.add(item, ItemOrigin::ExplorerCommand, item->wID, false);
 
 					i += res;
 				}
@@ -1539,7 +1488,10 @@ namespace Nilesoft
 				menu->draw.height++;
 
 			menu->popup_height += _theme.border.padding.top + _theme.border.padding.bottom + _theme.border.size + _theme.border.size;
-			
+
+			// Before cyMax is set below, because the two are alternatives: this
+			// either makes the menu fit or leaves it to be scrolled.
+			apply_smart_columns(hMenu, menu);
 
 			MENUINFO mi = { sizeof(mi), MIM_STYLE | MIM_BACKGROUND | MIM_MAXHEIGHT };
 			if(m.get(&mi))
@@ -1599,7 +1551,7 @@ namespace Nilesoft
 			::DestroyMenu(hMenu);
 			
 			__trace(L"ContextMenu.UninitMenuPopup");
-			
+
 			current.hMenu = nullptr;
 			if(menu)
 				menu->wnd = nullptr;
@@ -1626,1189 +1578,116 @@ namespace Nilesoft
 			return msg.invoke();
 		}
 
-		//
-		void ContextMenu::draw_string(HDC hdc, HFONT hFont, const Rect *rc, const Color &color, const wchar_t *text, int length, DWORD format, bool disable_BufferedPaint)
+		/*
+			A typed character, for a menu whose items Windows cannot read.
+
+			The popup is asked for its own state rather than the composed model
+			being consulted, for two reasons. Positions are what the reply is
+			denominated in and the HMENU is the only place they are authoritative
+			- separators occupy them, and a moveto rule can have reordered
+			everything. And the highlight lives in the menu, not in the model:
+			MFS_HILITE is where "which item is the user on" actually is, and it
+			is what decides whether a second press of a duplicated mnemonic moves
+			on or sits still.
+		*/
+		LRESULT ContextMenu::OnMenuChar(HMENU hMenu, wchar_t pressed)
 		{
-			if(color.a == 0)
-				return;
+			if(!hMenu || !pressed)
+				return MnemonicReply{}.to_lresult();
 
-			BufferedPaint bp(hdc, rc);
-			HDC hdcPaint = disable_BufferedPaint ? nullptr : bp.begin(color.a);
+			auto count = ::GetMenuItemCount(hMenu);
+			if(count <= 0)
+				return MnemonicReply{}.to_lresult();
 
-			if(!hdcPaint)
-				hdcPaint = hdc;
-			if(hdcPaint)
+			std::vector<MnemonicItem> candidates;
+			std::vector<TypeAheadItem> labelled;
+			candidates.reserve(static_cast<size_t>(count));
+			labelled.reserve(static_cast<size_t>(count));
+			int current = -1;
+
+			for(int i = 0; i < count; i++)
 			{
-				bp.clear();
-				//::SetTextColor(hdcPaint, color);
-				//::SetBkMode(hdcPaint, TRANSPARENT);
-				auto hFontOld = ::SelectObject(hdcPaint, hFont);
-				DTTOPTS dttOpts = { sizeof(DTTOPTS),  DTT_COMPOSITED | DTT_TEXTCOLOR, color.to_BGR() };
-				//::SetTextAlign(hdcPaint, TA_BASELINE | TA_UPDATECP);
-				::DrawThemeTextEx(_hTheme, hdcPaint, 0, 0, text, length, format, const_cast<Rect *>(rc), &dttOpts);
-				::SelectObject(hdcPaint, hFontOld);
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_DATA | MIIM_STATE | MIIM_FTYPE;
+				// fByPosition TRUE: uiItem is an index, which is the whole point.
+				// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuiteminfow
+				if(!::GetMenuItemInfoW(hMenu, static_cast<UINT>(i), TRUE, &mii))
+					continue;
+
+				if(mii.fState & MFS_HILITE)
+					current = i;
+
+				if(mii.fType & MFT_SEPARATOR)
+					continue;
+
+				auto item = reinterpret_cast<MenuItemInfo *>(mii.dwItemData);
+				if(!owns_item(item))
+					continue;
+
+				// A disabled item is still drawn and still has a title, but
+				// choosing it would do nothing - so it is skipped rather than
+				// swallowing a keystroke a later item could have used.
+				auto selectable = (mii.fState & (MFS_DISABLED | MFS_GRAYED)) == 0;
+				auto title = item->title.text.c_str();
+
+				MnemonicItem candidate;
+				candidate.position = i;
+				candidate.mnemonic = mnemonic_of(title);
+				candidate.selectable = selectable;
+				if(candidate.mnemonic)
+					candidates.push_back(candidate);
+
+				// Every item with a title is a type-ahead candidate, whether or
+				// not it declares a mnemonic - which is the point of Stage 2.
+				if(title && *title)
+					labelled.push_back(TypeAheadItem{ i, title, selectable });
 			}
+
+			// Anything typed longer ago than the timeout, or into a different
+			// popup, is not part of what is being typed now.
+			// docs/refactor/05-capabilities.md section 4.
+			_typed.refresh(::GetTickCount64(), hMenu);
+
+			// Mnemonics keep precedence on the first character, so nothing
+			// Stage 1 shipped changes behaviour. Only a keypress that names no
+			// mnemonic falls through to a prefix.
+			if(_typed.empty())
+			{
+				auto reply = choose_mnemonic(pressed, candidates.data(), candidates.size(), current);
+				if(reply.action != MNC_IGNORE)
+					return reply.to_lresult();
+			}
+
+			wchar_t prefix[TypeAheadBuffer::CAPACITY + 2]{};
+			size_t prefix_length = 0;
+			if(!_typed.would_be(pressed, prefix, ARRAYSIZE(prefix), prefix_length))
+				return MnemonicReply{}.to_lresult();
+
+			auto reply = choose_by_prefix(prefix, prefix_length, labelled.data(), labelled.size());
+			if(reply.action == MNC_IGNORE)
+			{
+				// The longer prefix names nothing. Leave the buffer on the last
+				// one that did, so a typo costs one keystroke rather than the
+				// whole word.
+				return reply.to_lresult();
+			}
+
+			_typed.accept(prefix, prefix_length, ::GetTickCount64(), hMenu);
+			return reply.to_lresult();
 		}
 
-		void ContextMenu::draw_rect(DC *dc, const POINT &pt, const SIZE &size, const Color &color, const Color &border, int radius)
+		// dwItemData on Shell's own composed menu is a MenuItemInfo this object
+		// created - but a borrowed host popup can carry the host's own layout
+		// there, and MenuItem.h already reads foreign ones under SEH for exactly
+		// that reason. Dereferencing whatever is in the field would be reading a
+		// pointer somebody else defined, so it is checked against what this menu
+		// actually owns first.
+		bool ContextMenu::owns_item(const MenuItemInfo *item) const
 		{
-			PlutoVG pluto(size.cx, size.cy);
-
-			if(border.a > 0)
-			{
-				pluto.rect(.5, .5, size.cx - 1, size.cy - 1, radius, radius);
-				if(color.a > 0)
-					pluto.fill(color.to_RGB(), color.a, true);
-				pluto.stroke_width(1)
-					.stroke_fill(border.to_RGB(), border.a);
-			}
-			else
-			{
-				pluto.rect(0, 0, size.cx, size.cy, radius, radius)
-					.fill(color.to_RGB(), color.a, true);
-			}
-
-			auto_gdi<HBITMAP> hbitmap(pluto.tobitmap());
-			dc->draw_image(pt, size, hbitmap.get());
+			return _model.owns(item);
 		}
 
-
-		struct DRAWITEMSTATE
-		{
-			bool selected{};
-			bool disabled{};
-			bool grayed{};
-			bool checked{};
-			bool focus{};
-			bool default${};
-			bool hotlight{};
-			bool inactive{};
-			bool no_accel{};
-			bool no_focus_rect{};
-
-			DRAWITEMSTATE(uint32_t flags)
-			{
-				Flag<uint32_t> fs = flags;
-				selected = fs.has(ODS_SELECTED);
-				grayed = fs.has(ODS_GRAYED);
-				disabled = fs.has(ODS_DISABLED) || grayed;
-				checked = fs.has(ODS_SELECTED);
-			}
-		};
-
-
-		LRESULT ContextMenu::OnDrawItem(DRAWITEMSTRUCT *di)
-		{
-			LRESULT lret = TRUE;
-			//current.selectitem = nullptr;
-			if(di->itemID == 0x5ffffffe)
-				return lret;
-
-
-
-			
-			auto hMenu = reinterpret_cast<HMENU>(di->hwndItem);
-			auto rc = reinterpret_cast<const Rect *>(&di->rcItem);
-
-			Flag<uint32_t> faction = di->itemAction;
-			Flag<uint32_t> fState = di->itemState;
-
-			DRAWITEMSTATE state(di->itemState);
-
-			auto draw_entire = faction.has(ODA_DRAWENTIRE);
-
-			Color back_color = _theme.back.color.nor;
-			Color text_color = _theme.text.color.nor;
-
-			_tip.hide(!draw_entire);
-
-			DC dc = di->hDC;
-
-			dc.set_back_mode();
-			
-			if(state.selected)
-			{
-				if(state.disabled)
-				{
-					back_color = _theme.back.color.sel_dis;
-					text_color = _theme.text.color.sel_dis;
-				}
-				else
-				{
-					back_color = _theme.back.color.sel;
-					text_color = _theme.text.color.sel;
-				}
-			}
-			else if(state.disabled)
-			{
-				back_color = _theme.back.color.nor_dis;
-				text_color = _theme.text.color.nor_dis;
-			}
-
-			if(di->itemID == MF_NOITEM)
-			{
-				auto rect = *rc;
-				rect.left += _theme.separator.margin.left;
-				rect.right -= _theme.separator.margin.right;
-				//rect.top += _theme.separator.margin.top;		
-				rect.top += _theme.separator.margin.top;
-				rect.bottom = rect.top + _theme.separator.size;
-				//draw_rect(&dc, rc->point(), rc->size(), _theme.background.color);
-				dc.fill_rect(*rc, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-				draw_rect(&dc, rect.point(), { rect.width(), _theme.separator.size }, _theme.separator.color);
-				return 1;
-			}
-
-			//dc.draw_fillrect({ rc->left, rc->top, rc->right, rc->bottom }, (composition ? 0x000000 : _theme.background.color));
-			//dc.fill_rect(di->rcItem, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-
-			auto menu = &_menus[hMenu];
-
-			auto mii = get_item(di->itemID, hMenu, _items);
-
-			if(!mii || (mii->title.empty() && !ident.equals(mii->wID)))
-			{
-				if(auto_gdi<HBITMAP> hbitmap(dc.createbitmap(rc->width(), rc->height())); hbitmap)
-				{
-					DC dcmem(dc.CreateCompatibleDC(), 1);
-					auto old_bmp = ::SelectObject(dcmem, hbitmap.get());
-
-					auto old_hdc = di->hDC;
-					di->hDC = dcmem;
-
-					lret = msg.invoke();
-					
-					di->hDC = old_hdc;
-
-					std::vector<COLORREF> pixels(rc->width() * rc->height());
-
-					BITMAPINFOHEADER bmpInfo = { 0 };
-					bmpInfo.biSize = sizeof(bmpInfo);
-					bmpInfo.biWidth = rc->width();
-					bmpInfo.biHeight = -int(rc->height());
-					bmpInfo.biPlanes = 1;
-					bmpInfo.biBitCount = 32;
-					bmpInfo.biCompression = BI_RGB;
-
-					// Deselect bitmap before calling GetDIBits/SetDIBits per Win32 contract
-					::SelectObject(dcmem, old_bmp);
-					::GetDIBits(dc, hbitmap.get(), 0, rc->height(), &pixels[0], (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
-
-					std::for_each(pixels.begin(), pixels.end(), [](COLORREF &pixel) {
-						if(pixel != 0) // black pixels stay transparent
-							pixel |= 0xFF000000; // set alpha channel to 100%
-					});
-
-					::SetDIBits(dc, hbitmap.get(), 0, rc->height(), &pixels[0], (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
-					::SelectObject(dcmem, hbitmap.get());
-					dc.draw_image(rc->point(), rc->size(), dcmem);
-					::SelectObject(dcmem, old_bmp);
-
-					return lret;
-				}
-
-				dc.set_back_mode(true);
-				dc.set_back(back_color);
-				dc.set_text(text_color);
-				dc.fill_rect(di->rcItem, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-
-				lret = msg.invoke();
-
-				return lret;
-			}
-
-			auto is_label = mii->visibility == Visibility::Label;
-			auto is_static = mii->visibility == Visibility::Static;
-			auto is_static_or_label = is_static || is_label;
-
-			if(draw_entire)
-			{
-				mii->index = MENU::get_index(hMenu, mii->wID);
-				::GetMenuItemRect(0, hMenu, mii->index, &mii->rect);
-				dc.fill_rect(di->rcItem, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-			}
-			else
-			{
-				if(state.disabled && is_static_or_label)
-				{
-					dc.exclude_clip_rect(*rc);
-					return true;
-				}
-				
-				dc.fill_rect(di->rcItem, composition ? dc.stock_brush(BLACK_BRUSH) : _hbackground);
-			}
-
-			if(!(state.disabled && is_static_or_label))
-			{
-				if(state.selected)
-				{
-					current.select_previtem = current.selectitem;
-					current.selectitem = mii;
-					if(mii->tip)
-						current.tip = mii;
-				}
-			}
-
-			if(state.disabled)
-			{
-				if(is_static_or_label)
-				{
-					state.disabled = false;
-					back_color = _theme.back.color.nor;
-					text_color = _theme.text.color.nor;
-				}
-			}
-
-			const long image_size = _theme.image.size;
-
-			auto rcblock = *rc;
-			
-			rcblock.top += _theme.back.margin.top;
-			rcblock.bottom -= _theme.back.margin.bottom;
-
-			if(mii->cch > 0 || !menu->has_col)
-			{
-				rcblock.left += _theme.back.margin.left;
-				rcblock.right -= _theme.back.margin.right;
-			}
-			else
-			{
-				rcblock.left += _theme.back.margin.left + dpi(3);
-				rcblock.right -= _theme.back.margin.right + dpi(3);
-			}
-
-			const auto width = rcblock.width();
-			const auto height = rcblock.height();
-
-			auto rcimg = rcblock;
-			auto rcText = rcblock;
-
-			rcimg.top = rcblock.top + ((height - image_size) / 2);
-			rcimg.bottom = rcimg.top + image_size;
-
-			if(mii->cch > 0 || !menu->has_col)
-			{
-				if(mii->cch == 0)
-				{
-				}
-				else 
-				{
-					rcimg.left = rcblock.left + _theme.back.padding.left;
-					rcimg.right = rcimg.left + image_size;
-				}
-			}
-
-			if(!is_static_or_label)
-			{
-				uint8_t op = back_color.a;
-
-				Color border_color = _theme.back.border.nor;
-
-				if(state.selected)
-				{
-					if(state.disabled && _theme.back.color.sel_dis.a > 0)
-						op = _theme.back.color.sel_dis.a;
-					else if(!state.disabled && _theme.back.color.sel_dis.a > 0)
-						op = _theme.back.color.sel.a;
-
-					border_color = state.disabled ? _theme.back.border.sel_dis : _theme.back.border.sel;
-				}
-				else
-				{
-					if(state.disabled && _theme.back.color.nor_dis.a > 0)
-						op = _theme.back.color.nor_dis.a;
-					else if(!state.disabled && _theme.back.color.nor.a > 0)
-						op = _theme.back.color.nor.a;
-
-					if(state.disabled)
-						border_color = _theme.back.border.nor_dis;
-				}
-				
-				//dc.draw_fill_rounded_rect(rcblock, _theme.back.radius+2, 0,0);
-				//draw_rect(&dc, rcblock.point(), { width, height }, 0xff000000, {}, _theme.back.radius);
-				//draw_rect(&dc, rcblock.point(), { width, height }, _theme.background.color, {}, _theme.back.radius);
-				//if(op > 0)
-				{
-					back_color.a = op;
-					draw_rect(&dc, rcblock.point(), { width, height }, back_color, border_color, _theme.back.radius);
-				}
-			}
-
-			auto has_checked_image = menu->draw.checks && menu->draw.images && (_theme.image.display >= 2);
-
-			if(!is_label)
-			{
-				auto rcchekhed = rcimg;
-				if(has_checked_image)
-				{
-					auto offset = _theme.image.size + _theme.image.gap;
-					rcimg.left += offset;
-					rcimg.right += offset;
-				}
-
-				//Draw custom submenu arrow and checked
-				if(mii->is_popup() || mii->is_checked())
-				{
-					auto sy = mii->is_popup() ? &symbol.chevron : mii->is_radiocheck() ? &symbol.bullet : &symbol.checked;
-					auto hbitmap = state.selected ? sy->select : sy->normal;
-					
-					if(state.disabled)
-						hbitmap = state.selected ? sy->select_disabled : sy->normal_disabled;
-
-					if(mii->is_popup())
-					{
-						auto rect = rcblock;
-						auto x = rect.right - (_theme.back.padding.right + symbol.chevron.size.cx);
-						auto y = rcblock.top + ((height - symbol.chevron.size.cy) / 2);
-						dc.draw_image({ x, y }, { symbol.chevron.size.cx, symbol.chevron.size.cy }, hbitmap, state.disabled ? 64 : 255);
-					}
-					else if(mii->is_checked() && (_theme.image.display != 1 || !mii->has_image_or_draw()))
-					{
-						long z = _theme.image.size;
-						dc.draw_image(rcchekhed.point(), { z, z }, hbitmap, state.disabled ? 64 : 255);
-					}
-				}
-
-				auto image = &mii->image;
-
-				if(state.selected && mii->image_select.isvalid())
-					image = &mii->image_select;
-
- 
-				auto color_luma = [](const Color &color)
-				{
-					return (int(color.r()) * 299 + int(color.g()) * 587 + int(color.b()) * 114) / 1000;
-				};
-				auto blended_luma = [](const Color &front, const Color &back)
-				{
-					auto a = int(front.a);
-					auto r = (int(front.r()) * a + int(back.r()) * (255 - a)) / 255;
-					auto g = (int(front.g()) * a + int(back.g()) * (255 - a)) / 255;
-					auto b = (int(front.b()) * a + int(back.b()) * (255 - a)) / 255;
-					return (r * 299 + g * 587 + b * 114) / 1000;
-				};
-
-				auto icon_back_luma = blended_luma(back_color, _theme.background.color);
-
-				auto light_icon_recolor_required = [&](int visible_pixels, int colorful_pixels,
-													   long long visible_luma, long long visible_spread,
-													   int min_luma, int max_luma,
-													   int image_area)
-				{
-					if(visible_pixels <= 0)
-						return false;
-
-					auto avg_luma = visible_luma / visible_pixels;
-					auto avg_spread = visible_spread / visible_pixels;
-					auto min_visible = image_area / 96;
-					if(min_visible < 4)
-						min_visible = 4;
-
-					if(max_luma - min_luma > 96)
-						return false;
-
-					return visible_pixels >= min_visible &&
-						abs(int(avg_luma) - icon_back_luma) < 80 &&
-						avg_spread < 28 &&
-						colorful_pixels <= (visible_pixels / 16 > 2 ? visible_pixels / 16 : 2);
-				};
-
-				auto readable_icon_color = [&]()
-				{
-					Color icon_color = _theme.image.color[0];
-					if(!icon_color)
-					{
-						if(state.disabled && _theme.text.color.nor_dis)
-							icon_color = _theme.text.color.nor_dis;
-						else
-							icon_color = text_color;
-					}
-
-					auto contrast = abs(color_luma(icon_color) - icon_back_luma);
-					if(contrast < 80)
-					{
-						auto text_contrast = abs(color_luma(text_color) - icon_back_luma);
-						if(text_contrast > contrast)
-						{
-							icon_color = text_color;
-							contrast = text_contrast;
-						}
-					}
-
-					if(contrast < 80)
-						icon_color = icon_back_luma > 128 ? Color(0, 0, 0, 0xFF) : Color(0xFF, 0xFF, 0xFF, 0xFF);
-
-					return icon_color;
-				};
-
-				auto recolor_icon_bits = [&](uint32_t *bits, int image_area)
-				{
-					auto icon_color = readable_icon_color();
-					for(auto i = 0; i < image_area; i++)
-					{
-						auto a = int((bits[i] >> 24) & 0xFF);
-						if(a == 0)
-							continue;
-
-						a = a * icon_color.a / 255;
-						auto pre_r = int(icon_color.r()) * a / 255;
-						auto pre_g = int(icon_color.g()) * a / 255;
-						auto pre_b = int(icon_color.b()) * a / 255;
-						bits[i] = (a << 24) | (pre_r << 16) | (pre_g << 8) | pre_b;
-					}
-				};
-
-				if(mii->is_toplevel &&
-				   mii->native_ownerdraw &&
-				   !mii->native_icon_checked &&
-				   !mii->has_image_or_draw())
-				{
-					mii->native_icon_checked = true;
-
-					if(auto_gdi<HBITMAP> hbitmap(dc.createbitmap(rc->width(), rc->height())); hbitmap)
-					{
-						DC dcmem(dc.CreateCompatibleDC(), 1);
-						auto old_bmp = ::SelectObject(dcmem, hbitmap.get());
-
-						BITMAPINFOHEADER bmpInfo = { 0 };
-						bmpInfo.biSize = sizeof(bmpInfo);
-						bmpInfo.biWidth = rc->width();
-						bmpInfo.biHeight = -int(rc->height());
-						bmpInfo.biPlanes = 1;
-						bmpInfo.biBitCount = 32;
-						bmpInfo.biCompression = BI_RGB;
-
-						auto w = rc->width(), h = rc->height();
-						auto count = w * h;
-						auto capture_right = rcimg.right - rc->left + _theme.image.gap;
-						if(capture_right < long(_theme.image.size))
-							capture_right = _theme.image.size;
-						if(capture_right > w)
-							capture_right = w;
-
-						if(auto_gdi<HBRUSH> hbr(CreateSolidBrush(RGB(0x7F, 0x7F, 0x7F))); hbr)
-							dcmem.fill_rect({ 0, 0, w, h }, hbr.get());
-
-						auto_gdi<HRGN> clip(::CreateRectRgn(0, 0, capture_right, h));
-						auto old_clip = ::SaveDC(dcmem);
-						if(clip)
-							::SelectClipRgn(dcmem, clip.get());
-
-						auto old_hdc = di->hDC;
-						auto old_rcItem = di->rcItem;
-						auto old_state = di->itemState;
-						di->hDC = dcmem;
-						di->rcItem = { 0, 0, w, h };
-						di->itemState &= ~(ODS_SELECTED | ODS_FOCUS | ODS_HOTLIGHT);
-						msg.invoke();
-						di->hDC = old_hdc;
-						di->rcItem = old_rcItem;
-						di->itemState = old_state;
-						if(old_clip)
-							::RestoreDC(dcmem, old_clip);
-
-						// Deselect bitmap before GetDIBits
-						::SelectObject(dcmem, old_bmp);
-						std::vector<COLORREF> pixels(count);
-						::GetDIBits(dc, hbitmap.get(), 0, h, &pixels[0],
-									 (LPBITMAPINFO)&bmpInfo, DIB_RGB_COLORS);
-
-						long zone_left = 0;
-						long zone_top = 0;
-						long zone_right = capture_right;
-						long zone_bottom = h;
-						auto icon_padding = long(_theme.image.size) / 8;
-						if(icon_padding < 2)
-							icon_padding = 2;
-
-						auto icon_right = rcimg.right - rc->left;
-						auto icon_search_right = icon_right + icon_padding;
-						if(icon_search_right > zone_right)
-							icon_search_right = zone_right;
-
-						std::vector<int> color_buckets(32768);
-						for(auto y = zone_top; y < zone_bottom; y++)
-						{
-							for(auto x = zone_left; x < zone_right; x++)
-							{
-								uint32_t p = pixels[y * w + x];
-								auto bucket = int((((p >> 16) & 0xFF) >> 3) << 10) |
-									int((((p >> 8) & 0xFF) >> 3) << 5) |
-									int(((p & 0xFF) >> 3));
-								color_buckets[bucket]++;
-							}
-						}
-
-						int bg_bucket = 0;
-						for(auto i = 1; i < int(color_buckets.size()); i++)
-						{
-							if(color_buckets[i] > color_buckets[bg_bucket])
-								bg_bucket = i;
-						}
-
-						int b0 = ((bg_bucket & 0x1F) << 3) + 4;
-						int b1 = (((bg_bucket >> 5) & 0x1F) << 3) + 4;
-						int b2 = (((bg_bucket >> 10) & 0x1F) << 3) + 4;
-
-						int max_diff = 0;
-						for(auto y = zone_top; y < zone_bottom; y++)
-						{
-							for(auto x = zone_left; x < zone_right; x++)
-							{
-								uint32_t p = pixels[y * w + x];
-								int d0 = abs(int(p & 0xFF) - b0);
-								int d1 = abs(int((p >> 8) & 0xFF) - b1);
-								int d2 = abs(int((p >> 16) & 0xFF) - b2);
-								int d = d0 > d1 ? (d0 > d2 ? d0 : d2) : (d1 > d2 ? d1 : d2);
-								if(d > max_diff)
-									max_diff = d;
-							}
-						}
-
-						if(max_diff > 16)
-						{
-							auto threshold = max_diff / 10;
-							if(threshold < 12)
-								threshold = 12;
-
-							std::vector<int> component(count);
-
-							struct Component
-							{
-								long x1{}, y1{}, x2{}, y2{};
-								int pixels{};
-								int id{};
-							};
-
-							std::vector<Component> components;
-							std::vector<int> stack;
-							stack.reserve(size_t(_theme.image.size * _theme.image.size));
-
-							auto foreground = [&](long x, long y)
-							{
-								uint32_t p = pixels[y * w + x];
-								int d0 = abs(int(p & 0xFF) - b0);
-								int d1 = abs(int((p >> 8) & 0xFF) - b1);
-								int d2 = abs(int((p >> 16) & 0xFF) - b2);
-								int d = d0 > d1 ? (d0 > d2 ? d0 : d2) : (d1 > d2 ? d1 : d2);
-								return d > threshold;
-							};
-
-							int component_id = 0;
-							for(auto y = zone_top; y < zone_bottom; y++)
-							{
-								for(auto x = zone_left; x < zone_right; x++)
-								{
-									auto start = int(y * w + x);
-									if(component[start] || !foreground(x, y))
-										continue;
-
-									component_id++;
-									Component c{ x, y, x, y, 0, component_id };
-									component[start] = component_id;
-									stack.clear();
-									stack.push_back(start);
-
-									while(!stack.empty())
-									{
-										auto pos = stack.back();
-										stack.pop_back();
-										auto px = pos % w;
-										auto py = pos / w;
-
-										c.pixels++;
-										if(px < c.x1)
-											c.x1 = px;
-										if(py < c.y1)
-											c.y1 = py;
-										if(px > c.x2)
-											c.x2 = px;
-										if(py > c.y2)
-											c.y2 = py;
-
-										for(auto oy = -1; oy <= 1; oy++)
-										{
-											for(auto ox = -1; ox <= 1; ox++)
-											{
-												if(ox == 0 && oy == 0)
-													continue;
-
-												auto nx = px + ox;
-												auto ny = py + oy;
-												if(nx < zone_left || nx >= zone_right ||
-												   ny < zone_top || ny >= zone_bottom)
-													continue;
-
-												auto np = int(ny * w + nx);
-												if(component[np] || !foreground(nx, ny))
-													continue;
-
-												component[np] = component_id;
-												stack.push_back(np);
-											}
-										}
-									}
-
-									components.push_back(c);
-								}
-							}
-
-							auto image_area = int(_theme.image.size * _theme.image.size);
-							long merged_x1 = zone_right;
-							long merged_y1 = zone_bottom;
-							long merged_x2 = zone_left;
-							long merged_y2 = zone_top;
-							int merged_pixels = 0;
-							int accepted_components = 0;
-
-							for(auto &c : components)
-							{
-								auto bw = c.x2 - c.x1 + 1;
-								auto bh = c.y2 - c.y1 + 1;
-								if(c.x1 >= icon_search_right)
-									continue;
-								if(c.pixels < image_area / 96)
-									continue;
-								if(c.pixels > image_area * 2)
-									continue;
-								if(bw > long(_theme.image.size * 2) ||
-								   bh > long(_theme.image.size + _theme.image.gap))
-									continue;
-
-								accepted_components++;
-								merged_pixels += c.pixels;
-								if(c.x1 < merged_x1)
-									merged_x1 = c.x1;
-								if(c.y1 < merged_y1)
-									merged_y1 = c.y1;
-								if(c.x2 > merged_x2)
-									merged_x2 = c.x2;
-								if(c.y2 > merged_y2)
-									merged_y2 = c.y2;
-							}
-
-							if(accepted_components > 0 && merged_pixels <= image_area * 2)
-							{
-								long bx1 = merged_x1;
-								long by1 = merged_y1;
-								long bx2 = merged_x2;
-								long by2 = merged_y2;
-								auto target_size = long(_theme.image.size);
-
-								for(auto edge = 0; edge < 3; edge++)
-								{
-									if(bx1 > 0 && bx2 - bx1 + 1 < target_size)
-										bx1--;
-									if(by1 > 0 && by2 - by1 + 1 < target_size)
-										by1--;
-									if(bx2 + 1 < w && bx2 - bx1 + 1 < target_size)
-										bx2++;
-									if(by2 + 1 < h && by2 - by1 + 1 < target_size)
-										by2++;
-								}
-
-								BITMAPINFO bmp{};
-								bmp.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-								bmp.bmiHeader.biWidth = _theme.image.size;
-								bmp.bmiHeader.biHeight = -int(_theme.image.size);
-								bmp.bmiHeader.biPlanes = 1;
-								bmp.bmiHeader.biBitCount = 32;
-								bmp.bmiHeader.biCompression = BI_RGB;
-
-								uint32_t *bits{};
-								auto hicon = ::CreateDIBSection(nullptr, &bmp, DIB_RGB_COLORS,
-																 reinterpret_cast<void **>(&bits),
-																 nullptr, 0);
-								if(hicon && bits)
-								{
-									std::fill(bits, bits + image_area, 0);
-
-									auto bw = bx2 - bx1 + 1;
-									auto bh = by2 - by1 + 1;
-									auto target_width = bw;
-									auto target_height = bh;
-
-									if(target_width > target_size || target_height > target_size)
-									{
-										if(target_width >= target_height)
-										{
-											target_width = target_size;
-											target_height = (bh * target_size) / bw;
-										}
-										else
-										{
-											target_height = target_size;
-											target_width = (bw * target_size) / bh;
-										}
-
-										if(target_width < 1)
-											target_width = 1;
-										if(target_height < 1)
-											target_height = 1;
-									}
-
-									auto dx0 = (target_size - target_width) / 2;
-									auto dy0 = (target_size - target_height) / 2;
-
-									int visible_pixels = 0;
-									int colorful_pixels = 0;
-									long long visible_luma = 0;
-									long long visible_spread = 0;
-									int min_luma = 255;
-									int max_luma = 0;
-
-									for(auto dy = 0; dy < target_height; dy++)
-									{
-										auto sy = by1 + (dy * bh) / target_height;
-
-										for(auto dx = 0; dx < target_width; dx++)
-										{
-											auto sx = bx1 + (dx * bw) / target_width;
-											auto dest_x = dx0 + dx;
-											auto dest_y = dy0 + dy;
-
-											uint32_t p = pixels[sy * w + sx];
-											int pb = p & 0xFF;
-											int pg = (p >> 8) & 0xFF;
-											int pr = (p >> 16) & 0xFF;
-											int d0 = abs(pb - b0);
-											int d1 = abs(pg - b1);
-											int d2 = abs(pr - b2);
-											int d = d0 > d1 ? (d0 > d2 ? d0 : d2) : (d1 > d2 ? d1 : d2);
-											if(d <= threshold)
-												continue;
-
-											auto divisor = max_diff - threshold;
-											if(divisor < 1)
-												divisor = 1;
-
-											int a = (d - threshold) * 255 / divisor;
-											if(a < 0)
-												a = 0;
-											if(a > 255)
-												a = 255;
-
-											auto pre_r = pr * a / 255;
-											auto pre_g = pg * a / 255;
-											auto pre_b = pb * a / 255;
-											bits[dest_y * _theme.image.size + dest_x] =
-												(a << 24) | (pre_r << 16) | (pre_g << 8) | pre_b;
-
-											if(a > 32)
-											{
-												auto maxc = pr > pg
-													? (pr > pb ? pr : pb)
-													: (pg > pb ? pg : pb);
-												auto minc = pr < pg
-													? (pr < pb ? pr : pb)
-													: (pg < pb ? pg : pb);
-												auto luma = (pr * 299 + pg * 587 + pb * 114) / 1000;
-												auto spread = maxc - minc;
-												visible_pixels++;
-												visible_luma += luma;
-												visible_spread += spread;
-												if(luma < min_luma)
-													min_luma = luma;
-												if(luma > max_luma)
-													max_luma = luma;
-												if(spread > 48)
-													colorful_pixels++;
-											}
-										}
-									}
-
-									if(light_icon_recolor_required(visible_pixels, colorful_pixels,
-																   visible_luma, visible_spread,
-																   min_luma, max_luma,
-																   image_area))
-										recolor_icon_bits(bits, image_area);
-
-									mii->image.hbitmap = hicon;
-									mii->image.size = { long(_theme.image.size), long(_theme.image.size) };
-									mii->image.import = ImageImport::Image;
-									image = &mii->image;
-								}
-							}
-						}
-					}
-				}
-
-				auto make_readable_light_bitmap = [&](HDC source, SIZE size) -> HBITMAP
-				{
-					if(!source || size.cx <= 0 || size.cy <= 0 || size.cx > 256 || size.cy > 256)
-						return nullptr;
-
-					BITMAPINFO bmp{};
-					bmp.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-					bmp.bmiHeader.biWidth = size.cx;
-					bmp.bmiHeader.biHeight = -int(size.cy);
-					bmp.bmiHeader.biPlanes = 1;
-					bmp.bmiHeader.biBitCount = 32;
-					bmp.bmiHeader.biCompression = BI_RGB;
-
-					uint32_t *bits{};
-					auto_gdi<HBITMAP> hcopy(::CreateDIBSection(nullptr, &bmp, DIB_RGB_COLORS,
-															   reinterpret_cast<void **>(&bits),
-															   nullptr, 0));
-					if(!hcopy || !bits)
-						return nullptr;
-
-					DC copyDC(::CreateCompatibleDC(dc), 1);
-					if(!copyDC || !copyDC.select_bitmap(hcopy.get()))
-						return nullptr;
-
-					::BitBlt(copyDC, 0, 0, size.cx, size.cy, source, 0, 0, SRCCOPY);
-
-					auto unpremultiply = [](int channel, int alpha)
-					{
-						if(alpha > 0 && alpha < 255 && channel <= alpha)
-						{
-							channel = channel * 255 / alpha;
-							if(channel > 255)
-								channel = 255;
-						}
-						return channel;
-					};
-
-					auto image_area = int(size.cx * size.cy);
-					int visible_pixels = 0;
-					int colorful_pixels = 0;
-					long long visible_luma = 0;
-					long long visible_spread = 0;
-					int min_luma = 255;
-					int max_luma = 0;
-
-					for(auto i = 0; i < image_area; i++)
-					{
-						auto p = bits[i];
-						auto a = int((p >> 24) & 0xFF);
-						if(a <= 32)
-							continue;
-
-						auto pb = unpremultiply(int(p & 0xFF), a);
-						auto pg = unpremultiply(int((p >> 8) & 0xFF), a);
-						auto pr = unpremultiply(int((p >> 16) & 0xFF), a);
-						auto maxc = pr > pg
-							? (pr > pb ? pr : pb)
-							: (pg > pb ? pg : pb);
-						auto minc = pr < pg
-							? (pr < pb ? pr : pb)
-							: (pg < pb ? pg : pb);
-						auto luma = (pr * 299 + pg * 587 + pb * 114) / 1000;
-						auto spread = maxc - minc;
-
-						visible_pixels++;
-						visible_luma += luma;
-						visible_spread += spread;
-						if(luma < min_luma)
-							min_luma = luma;
-						if(luma > max_luma)
-							max_luma = luma;
-						if(spread > 48)
-							colorful_pixels++;
-					}
-
-					auto recolor = light_icon_recolor_required(visible_pixels, colorful_pixels,
-																visible_luma, visible_spread,
-																min_luma, max_luma,
-																image_area);
-					if(recolor)
-						recolor_icon_bits(bits, image_area);
-
-					copyDC.reset_bitmap();
-					return recolor ? hcopy.release() : nullptr;
-				};
-
-				if(image->hbitmap)
-				{
-					DC memDC(::CreateCompatibleDC(dc), 1);
-					if(memDC)
-					{
-						if(memDC.select_bitmap(image->hbitmap))
-						{
-							Rect rcim = { rcimg.left + ((image_size - image->size.cx) / 2),
-								(rcblock.top + (rcblock.bottom - image->size.cy)) / 2,
-								image->size.cx, image->size.cy };
-							
-							//if(image->bitsPixel < 32)
-							//	dc.bitblt({ rcim.left,rcim.top,size.cx,size.cy }, memDC, 0, 0);
-							//else
-							{
-								bool is_16 = image->size.cx <= dpi(16) && image->size.cy <= dpi(16);
-								auto draw_bitmap = [&](HDC hdc)
-								{
-									if(image->import == ImageImport::SVG && is_16)
-										dc.draw_image(rcim.point(), image->size, hdc, state.disabled ? 48 : 192);
-									dc.draw_image(rcim.point(), image->size, hdc, state.disabled ? 64 : 255);
-								};
-
-								auto_gdi<HBITMAP> readable_bitmap;
-								if(mii->is_toplevel && image->import != ImageImport::SVG)
-									readable_bitmap.reset(make_readable_light_bitmap(memDC, image->size));
-
-								if(readable_bitmap)
-								{
-									DC readableDC(::CreateCompatibleDC(dc), 1);
-									if(readableDC && readableDC.select_bitmap(readable_bitmap.get()))
-									{
-										draw_bitmap(readableDC);
-										readableDC.reset_bitmap();
-									}
-									else
-										draw_bitmap(memDC);
-								}
-								else
-									draw_bitmap(memDC);
-							}
-							memDC.reset_bitmap();
-						}
-					}
-				}
-				else if(image->import == ImageImport::Draw)
-				{
-					auto draw = &image->draw;
-					Color clr = text_color;
-					SIZE size{};
-
-					Color color_[2];
-					color_[0] = text_color;
-
-					if(draw->type == draw->DT_SHAPE)
-					{
-						auto shape = &draw->shape;
-						size = shape->size;
-
-						if(size.cx > 0 && size.cy > 0)
-						{
-							clr = shape->color[0];
-
-							if(state.disabled) clr.opacities();
-
-							if(size.cx > image_size) size.cx = image_size;
-							if(size.cy > image_size) size.cy = image_size;
-
-							if(shape->solid)
-							{
-								if(size.cx <= 3) size.cx = size.cx + 2;
-								if(size.cy <= 3) size.cy = size.cy + 2;
-							}
-							else
-							{
-								if(size.cx == 1) size.cx = size.cx + 1;
-								if(size.cy == 1) size.cy = size.cy + 1;
-							}
-
-							long left = rcimg.left + ((image_size - size.cx) / 2);
-							if(mii->cch == 0)
-							{
-								left = rcimg.left + ((width - size.cx) / 2);
-							}
-
-							long top = rcimg.top + ((image_size - size.cy) / 2);
-							draw_rect(&dc, { left, top}, size, clr);
-						}
-					}
-					else if(draw->type == draw->DT_GLYPH)
-					{
-						if(mii->cch == 0)
-						{
-							rcimg = *rc;
-							rcimg.left += 3;
-							rcimg.right -= 3;
-						}
-
-						auto g = &draw->glyph;
-						size = { g->size.cx, g->size.cy };
-						if(size.cx > 0 && size.cy > 0 && g->font)
-						{
-							if(size.cx > image_size) size.cx = image_size;
-							if(size.cy > image_size) size.cy = image_size;
-							
-							color_[0] = g->color[0];
-							color_[1] = g->color[1];
-
-							if(!color_[0])
-							{
-								if(_theme.image.color[0])
-									color_[0] = _theme.image.color[0];
-								else
-								{
-									if(state.disabled && (_theme.text.color.nor_dis))
-										color_[0] = _theme.text.color.nor_dis;
-									else
-										color_[0] = text_color;
-								}
-							}
-
-							if(!color_[1])
-								color_[1] = _theme.image.color[0] ? _theme.image.color[1] : text_color;
-
-							if(state.disabled)
-							{
-								color_[0].opacities();
-								color_[1].opacities();
-							}
-
-							auto txtfmt = DT_NOCLIP | DT_SINGLELINE | DT_VCENTER;
-							if(g->code[0])
-								draw_string(dc, g->font, &rcimg, color_[0], &g->code[0], 1, DT_CENTER | txtfmt);
-
-							if(g->code[1])
-								draw_string(dc, g->font, &rcimg, color_[1], &g->code[1], 1, DT_CENTER | txtfmt);
-						}
-					}
-				}
-			}
-
-			if(!mii->title.empty())
-			{
-				Color clrtext = text_color;
-
-				if(!is_label && menu->draw.has_align())
-				{
-					rcText.left = rcblock.left + _theme.image.size + _theme.image.gap + _theme.back.padding.left;
-					if(has_checked_image)
-						rcText.left += _theme.image.size + _theme.image.gap;
-				}
-				else
-				{
-					rcText.left += _theme.back.padding.left;
-				}
-
-				rcText.right -= _theme.back.padding.right;
-
-				if(mii->tab >= 0 && mii->is_popup())
-					rcText.right -= _theme.image.size;
-
-				auto txtfmt = DT_NOCLIP | DT_SINGLELINE | DT_VCENTER;
-
-				if(_theme.text.prefix)
-					txtfmt |= _theme.text.prefix;
-
-				if(_hTheme)
-				{
-					rcText.top = rc->top - dpi(1);
-					rcText.bottom = rc->bottom;
-
-					if(mii->tab <= 0 && mii->keys.empty())
-					{
-						draw_string(dc, font.handle, &rcText, clrtext, mii->title, mii->title.length<int>(), (mii->tab < 0 ? DT_LEFT : DT_RIGHT) | txtfmt);
-					}
-					else
-					{
-						auto ds = [&](const string &left, const string &right)
-						{
-							if(!left.empty())
-								draw_string(dc, font.handle, &rcText, clrtext, left, left.length<int>(), DT_LEFT | txtfmt);
-
-							if(!right.empty())
-							{
-								Color c = clrtext;
-								LOGFONTW lf{};
-								std::memcpy(&lf, &_theme.font.lfHeight, sizeof lf);
-								lf.lfHeight = long(lf.lfHeight * 0.80f);
-								lf.lfWeight = FW_LIGHT;
-								auto_gdi<HFONT> r_hfont(::CreateFontIndirectW(&lf));
-								if(menu->id == IDENT_ID_INSERT_UNICODE_CONTROL_CHARACTER)
-									c.opacity(state.disabled ? 50 : 100);
-								else
-									c.opacity(state.disabled ? 30 : 50);
-
-								draw_string(dc, r_hfont.get(), &rcText, c, right, right.length<int>(), DT_RIGHT | txtfmt);
-							}
-						};
-
-						if(mii->keys.empty())
-						{
-							string left = mii->title.text.substr(0, mii->tab).trim_end().move();
-							string right = mii->title.text.substr(mii->tab).trim_start().move();
-							ds(left, right);
-						}
-						else
-						{
-							ds(mii->title.text, mii->keys);
-						}
-					}
-				}
-			}
-			
-			// exlude menu item rectangle to prevent drawing by windows after us
-			dc.exclude_clip_rect(*rc);
-
-			if(state.selected && mii->tip)
-				//	_tip.show(mii->tip, mii->rect);
-				_tip.show(mii->tip.text, mii->tip.type, mii->tip.time, mii->rect);
-
-			return TRUE;
-		}
-
-		LRESULT ContextMenu::OnMeasureItem(MEASUREITEMSTRUCT *mi)
-		{
-			LRESULT lret = 0;
-			auto menu = current.menu;
-
-			mi->itemHeight = 0;
-			mi->itemWidth = 0;
-			
-			if(mi->itemID == 0x5ffffffe)
-			{
-				mi->itemWidth = 260;
-				mi->itemHeight = 50;
-			}
-			else if(mi->itemID == MF_NOITEM)
-			{
-				mi->itemHeight = _theme.separator.margin.height() + _theme.separator.size;
-			}
-			else
-			{
-				mi->itemWidth = _theme.back.width();
-				auto mii = get_item(mi->itemID, menu->handle, _items);
-				if(mii)
-				{
-					if(mii->cch == 0)
-					{
-						if(!ident.equals(mi->itemID))
-							lret = msg.invoke();
-						else 
-						{
-							auto v = (uint32_t)_theme.view2;
-							if(v < _theme.image.size)
-								v = _theme.image.size;
-
-							mi->itemWidth += v;
-							if(mi->itemWidth >= (v*2))
-							mi->itemWidth /= 2;
-							mi->itemHeight += mii->is_spacer() ? dpi(10u) : v;
-						}
-					}
-					else 
-					{
-						mi->itemHeight += mii->size.cy + _theme.back.height();
-						if(mi->itemHeight % 2)
-							mi->itemHeight++;
-
-						mi->itemWidth += std::max<uint32_t>(menu->draw.length, mii->size.cx);
-
-						// Remove extra space 'Submenu icon size'
-						mi->itemWidth -= dpi.original(14);
-					}
-				}
-			}
-
-			if(_theme.layout.max_width > 0)
-			{
-				if(mi->itemWidth > _theme.layout.max_width)
-					mi->itemWidth = _theme.layout.max_width;
-			}
-
-			if(_theme.layout.min_width > 0)
-			{
-				if(mi->itemWidth < _theme.layout.min_width)
-					mi->itemWidth = _theme.layout.min_width;
-			}
-
-			return lret;
-		}
 
 		LRESULT ContextMenu::OnStart()
 		{
@@ -3871,6 +2750,27 @@ namespace Nilesoft
 			if(_context.eval_number(sets->tip.enabled, obj))
 				_tip.enabled = obj.to_bool();
 
+			// The inspector *is* the tip, so a configuration that switched tips
+			// off has not thereby asked for Shift+Alt to do nothing. Forced on
+			// for this menu only; the setting itself is untouched.
+			// docs/refactor/05-capabilities.md section 7.
+			if(Inspector::active())
+			{
+				_tip.enabled = true;
+
+				// A marker, so `shell.exe -report perf` says the gesture was
+				// seen. Without it the one question a user of this feature
+				// cannot answer is "did Shift+Alt register at all?" - the
+				// answer is otherwise a tooltip they may simply not have
+				// hovered. It also makes the gesture verifiable by machine,
+				// which a tooltip is not.
+				//
+				// An empty scope rather than a bare session_phase call, because
+				// that one is declared in DiagnosticsRing.h and this file only
+				// includes MenuPerf.h. Both spellings record the same phase.
+				{ Diagnostics::MenuPerfScope inspected(L"menu.inspected", 1); }
+			}
+
 			if(_tip.enabled)
 			{
 				eval_color_array(&sets->tip.normal, &_theme.tip.normal.back, &_theme.tip.normal.text);
@@ -3914,15 +2814,47 @@ namespace Nilesoft
 			//New-Item -Path "HKCU:\Software\Control Panel\Desktop" -Name MenuShowDelay -Force -Value 200
 			if(_context.eval_number(sets->showdelay, obj))
 			{
-				::SystemParametersInfoW(SPI_GETMENUSHOWDELAY, 0, &_showdelay[0], 0);
-				_showdelay[1] = obj;
+				/*
+					Read what the system has before overriding it, and give up
+					if that read fails.
 
-				if(_showdelay[1] > 4000)
-					_showdelay[1] = 4000;
+					SystemParametersInfoW "returns a nonzero value if the
+					function succeeds" and does not touch pvParam otherwise
+					https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
 
-				if(_showdelay[1] != _showdelay[0])
+					The result was discarded, straight into `_showdelay[0]`,
+					which is the value Uninitialize replays. A failed read left
+					it at its UINT32_MAX initialiser - and the restore declines
+					to act on UINT32_MAX, precisely so it cannot put a sentinel
+					into a system setting. So the override was applied and never
+					taken back: the host's menu show delay stayed changed for as
+					long as the process lived. Same family as the DwmGetComposition-
+					TimingInfo read in fix_ugly_flicker - an out-parameter used
+					without asking whether it was written.
+				*/
+				uint32_t configured = obj;
+				if(!::SystemParametersInfoW(SPI_GETMENUSHOWDELAY, 0, &_showdelay[0], 0))
+					_showdelay[0] = UINT32_MAX;
+
+				if(_showdelay[0] != UINT32_MAX)
 				{
-					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[1], nullptr, SPIF_SENDCHANGE);
+					_showdelay[1] = configured;
+
+					if(_showdelay[1] > 4000)
+						_showdelay[1] = 4000;
+
+					if(_showdelay[1] != _showdelay[0])
+					{
+						// fWinIni = 0: change this process's view of the setting and
+						// nothing else. It "can be zero if you do not want to update
+						// the user profile or broadcast the WM_SETTINGCHANGE message";
+						// SPIF_SENDCHANGE (== SPIF_SENDWININICHANGE, WinUser.h) does
+						// broadcast it "to all top-level windows", running every one of
+						// their window procedures - and init_cfg() runs per menu, so
+						// that was two desktop-wide broadcasts per right-click.
+						// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
+						::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[1], nullptr, 0);
+					}
 				}
 			}
 
@@ -4503,7 +3435,325 @@ namespace Nilesoft
 				});
 
 			_native_notify = previous;
+
+			// Only a popup that was actually notified is owed the other half.
+			if(sent)
+				_native_popups.record_init(state.handle);
+
 			return sent;
+		}
+
+		/*
+			"If an application receives a WM_INITMENUPOPUP message, it will
+			receive a WM_UNINITMENUPOPUP message."
+			https://learn.microsoft.com/en-us/windows/win32/menurc/wm-uninitmenupopup
+
+			Shell was sending the first and never the second: OnUninitMenuPopup
+			destroys Shell's own synthetic menu and stops there, so a host that
+			allocated state when told to populate a borrowed popup was never told
+			it could release it.
+
+			lParam is zero because the high-order word "identifies the menu that
+			was destroyed. Currently, this parameter can only be MF_SYSMENU (the
+			window menu)" - and none of these is a window menu. That is also what
+			the subclass hook's own WM_UNINITMENUPOPUP case tests, so a nonzero
+			high word here would route Shell's message back into Shell.
+
+			Like the notification it pairs with, this runs arbitrary host and
+			third-party code synchronously, so no lock may be held across it and
+			the target is published in _native_uninit_notify first.
+		*/
+		/*
+			What this item is called across sessions.
+
+			Three kinds, because there are three ways an item reaches this menu
+			and they have nothing in common - src/shared/MenuIdentity.h has the
+			reasoning and the departure from docs/refactor/05-capabilities.md
+			section 6 for the custom case.
+
+			The order of the tests is the order of the evidence. A packaged verb
+			carries the CLSID of its registration, which is knowable without
+			asking the handler anything and does not change when the handler
+			retitles itself for a different selection ("Compress to
+			holiday.zip"). Everything else is signed by where it sits and what
+			it is called, and `dynamic` is what separates an item an NSS rule
+			built from one the host owns - the same test the composition site
+			uses to decide what goes into _model.
+
+			An item with no title cannot be named, which is correct: it has
+			nothing a user could recognise it by either.
+		*/
+		MenuIdentity::Identity ContextMenu::item_identity(const MenuItemInfo *item, bool custom) const
+		{
+			if(!item || item->is_separator())
+				return {};
+
+			if(!::IsEqualGUID(item->explorer_clsid, GUID_NULL))
+			{
+				return MenuIdentity::make(MenuIdentity::Kind::Verb,
+										  MenuIdentity::verb_signature(item->explorer_clsid));
+			}
+
+			if(item->title.normalize.empty())
+				return {};
+
+			auto signature = MenuIdentity::signature_of(item->path.c_str(),
+														item->title.normalize.c_str());
+
+			return MenuIdentity::make(custom ? MenuIdentity::Kind::Item
+											 : MenuIdentity::Kind::Native,
+									  signature);
+		}
+
+		MenuIdentity::Identity ContextMenu::item_identity(const MenuItemInfo *item) const
+		{
+			return item_identity(item, item && item->dynamic);
+		}
+
+		/*
+			Replace an item's tooltip with where it came from.
+
+			Only while Shift+Alt is composing the menu, which is what makes this
+			free for every other right-click: one thread-local bool, tested
+			first, and nothing else runs. docs/refactor/05-capabilities.md
+			section 7, Include/MenuInspector.h.
+
+			`rule` is the NSS rule that built a custom item; `matched` is every
+			modify/moveto rule that had a hand in a native one. Exactly one of
+			them is ever given, and which one is also what says whether this is
+			a configured item or the host's - passed rather than read off
+			`mii->dynamic`, which the composition loop has not set yet at the
+			point the custom branch calls this.
+		*/
+		void ContextMenu::annotate_for_inspection(MenuItemInfo *mii, const NativeMenu *rule,
+												  const std::vector<NativeMenu *> *matched) const
+		{
+			if(!Inspector::active() || !mii || mii->is_separator())
+				return;
+
+			Inspector::Facts facts;
+
+			if(rule)
+				facts.origin = L"your configuration";
+			else if(!::IsEqualGUID(mii->explorer_clsid, GUID_NULL))
+				facts.origin = L"a packaged extension";
+			else
+				facts.origin = L"Windows";
+
+			facts.identity = item_identity(mii, rule != nullptr).text;
+
+			auto add = [&](const NativeMenu *from)
+			{
+				if(!from || !_cache)
+					return;
+				auto where = Inspector::location(_cache->file_name(from->provenance),
+												 from->provenance);
+				if(!where.empty())
+					facts.rules.push_back(std::move(where));
+			};
+
+			add(rule);
+			if(matched)
+			{
+				for(auto si : *matched)
+					add(si);
+			}
+
+			mii->tip.text = Inspector::describe(facts).c_str();
+			mii->tip.type = 0;
+			mii->tip.time = 0;
+		}
+
+		/*
+			Lift the items this user reaches for to a section at the top.
+
+			Opt-in: `settings { favorites = 3 }` says how many. Unset and 0 both
+			mean off, and off is free - no file is read, nothing is stat'd and
+			no identity is built - which is what keeps every configuration that
+			does not use this feature paying nothing for it.
+
+			docs/refactor/05-capabilities.md section 6. The decision is in
+			Include/MenuFavorites.h, which is pure and tested; this is the two
+			halves it cannot do: naming the items, and marking the end of the
+			section.
+
+			The separator is `Separator::Bottom` on the last promoted item
+			rather than a new item. Menu::insert already turns that flag into a
+			real separator when it inserts the item (Include/MenuItem.h), so the
+			section gets its rule with no object created, no ownership question,
+			and nothing for the duplicate-separator trim below to disagree with.
+		*/
+		void ContextMenu::apply_favorites(std::vector<MenuItemInfo *> &items)
+		{
+			if(!_cache || items.empty())
+				return;
+
+			auto cap = _context.eval_number<int>(_cache->settings.favorites, 0);
+			if(cap < 1)
+				return;
+
+			auto ranks = FavoritesStore::instance().ranks();
+			if(ranks.empty())
+				return;
+
+			Diagnostics::MenuPerfScope perf(L"menu.favorites", items.size());
+
+			std::vector<FavoriteCandidate> candidates;
+			candidates.reserve(items.size());
+
+			for(auto item : items)
+			{
+				FavoriteCandidate candidate;
+				candidate.separator = item->is_separator();
+				if(!candidate.separator)
+					candidate.hash = item_identity(item).hash;
+				candidates.push_back(candidate);
+			}
+
+			auto plan = plan_favorites(candidates, ranks, static_cast<size_t>(cap));
+			if(plan.empty())
+			{
+				// Braced because __trace compiles away to nothing in a release
+				// build, and an unbraced `if` over it is C4390.
+				if(plan.refused)
+				{
+					__trace(L"favorites declined: %s", plan.refused);
+				}
+				return;
+			}
+
+			apply_favorite_plan(items, plan);
+
+			// The section needs an end. Bottom rather than Top on the item
+			// after it, because the item after it is somebody else's and may
+			// already carry a separator of its own.
+			items[plan.promoted.size() - 1]->separator |= (int)Separator::Bottom;
+		}
+
+		/*
+			Break a menu taller than the screen into columns instead of scrolling it.
+
+			Opt-in: `settings { columns = 3 }` says how many columns Shell may
+			use. Unset, 0 or 1 all mean "scroll", which is what every existing
+			configuration gets and what this changes nothing about.
+
+			The decision is in Include/MenuColumns.h, which is pure and tested.
+			This is the two halves it cannot do: reading the rows back off the
+			finished HMENU, and asking Windows for the break.
+
+			Reading them back rather than planning during insertion is
+			deliberate. Menu::insert can add separators of its own either side of
+			an item, so the position an item ends up at is not the index the
+			insert loop used, and the plan needs *every* row - separators
+			included - because they take vertical space and are where the good
+			break points are. Walking the finished menu is the only place both
+			facts are available at once, and it costs one GetMenuItemInfo per
+			row with no string retrieval.
+
+			MFT_MENUBREAK "places the item on a new line (for a menu bar) or in a
+			new column (for a drop-down menu, submenu, or shortcut menu)":
+			https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuiteminfow
+		*/
+		void ContextMenu::apply_smart_columns(HMENU hMenu, menu_t *menu)
+		{
+			if(!hMenu || !menu || !_cache)
+				return;
+
+			auto max_columns = _context.eval_number<int>(_cache->settings.columns, 0);
+			if(max_columns < 2)
+				return;
+
+			auto count = ::GetMenuItemCount(hMenu);
+			if(count < 2)
+				return;
+
+			// One row per menu position, in the order Windows lays them out.
+			std::vector<ColumnRow> rows;
+			rows.reserve(static_cast<size_t>(count));
+
+			auto separator_height = _theme.separator.margin.top + _theme.separator.margin.bottom
+				+ _theme.separator.size;
+			auto item_padding = _theme.back.padding.top + _theme.back.padding.bottom
+				+ _theme.back.margin.top + _theme.back.margin.bottom;
+
+			for(int i = 0; i < count; i++)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_FTYPE | MIIM_DATA;
+				if(!::GetMenuItemInfoW(hMenu, static_cast<UINT>(i), TRUE, &mii))
+					return;
+
+				ColumnRow row;
+				row.explicit_break = (mii.fType & (MFT_MENUBREAK | MFT_MENUBARBREAK)) != 0;
+
+				if(mii.fType & MFT_SEPARATOR)
+				{
+					row.separator = true;
+					row.height = separator_height + menu->draw.height;
+				}
+				else
+				{
+					// Shell's own items know their measured height; anything
+					// else - a separator this menu inserted, or an item a host
+					// owns - gets the row height the measure pass settled on.
+					// MenuItemInfo::Signed identifies Shell's own dwItemData by
+					// cbSize at offset 0. Anything else - a host's own item data,
+					// or none at all - gets the row height the measure pass
+					// settled on rather than a reinterpreted pointer.
+					auto item = MenuItemInfo::Signed(mii.dwItemData)
+						? reinterpret_cast<MenuItemInfo *>(mii.dwItemData) : nullptr;
+					auto height = (item && item->size.cy > 0)
+						? item->size.cy : menu->draw.height;
+					row.height = height + item_padding;
+				}
+
+				rows.push_back(row);
+			}
+
+			ColumnBudget budget;
+			// The same budget cyMax is about to be given, so "does it fit" means
+			// the same thing to both.
+			auto monitor_h = _rcMonitor.height();
+			auto margin = dpi(40);
+			budget.available_height = monitor_h > margin ? monitor_h - margin : monitor_h;
+			budget.menu_width = menu->draw.length > 0 ? menu->draw.length : menu->draw.width;
+			budget.available_width = _rcMonitor.width();
+			budget.max_columns = max_columns;
+
+			auto plan = plan_columns(rows, budget);
+			if(!plan.apply)
+				return;
+
+			for(auto at : plan.breaks)
+			{
+				MENUITEMINFOW mii{};
+				mii.cbSize = sizeof(mii);
+				mii.fMask = MIIM_FTYPE;
+				if(!::GetMenuItemInfoW(hMenu, static_cast<UINT>(at), TRUE, &mii))
+					continue;
+
+				// Read-modify-write: MIIM_FTYPE replaces the whole field, and
+				// every item here is MFT_OWNERDRAW.
+				mii.fType |= MFT_MENUBREAK;
+				::SetMenuItemInfoW(hMenu, static_cast<UINT>(at), TRUE, &mii);
+			}
+
+			menu->has_col = true;
+		}
+
+		void ContextMenu::uninitialize_native_popups()
+		{
+			for(auto hMenu : _native_popups.take_for_uninit())
+			{
+				if(!hMenu || !hwnd.owner)
+					continue;
+
+				_native_uninit_notify = hMenu;
+				::SendMessageW(hwnd.owner, WM_UNINITMENUPOPUP,
+							   reinterpret_cast<WPARAM>(hMenu), 0);
+				_native_uninit_notify = nullptr;
+			}
 		}
 
 		// Materialises the children of one already-initialised host popup. Records
@@ -4535,6 +3785,17 @@ namespace Nilesoft
 					item->dwItemData = mii.dwItemData;
 					item->is_toplevel = is_root;
 					item->native_ownerdraw = (mii.fType & MFT_OWNERDRAW) == MFT_OWNERDRAW;
+
+					// Where this came from in the host's own menu. `i` is the
+					// position WM_MENUCOMMAND's wParam is built from and `hMenu`
+					// is what its lParam names - "A handle to the menu for the
+					// item selected", which for a nested item is this level
+					// rather than the root. Recorded for every mirrored item
+					// whether or not this host replays by position, because it
+					// costs two stores and the alternative is a second walk.
+					item->native_source.menu = hMenu;
+					item->native_source.position = static_cast<UINT>(i);
+					item->native_source.known = true;
 
 					if(is_root)
 						;
@@ -4570,17 +3831,12 @@ namespace Nilesoft
 
 							item->ui = _cache ? const_cast<MUID*>(_cache->find_muid(item->hash)) : nullptr;
 
-							if(!item->is_menu() && is_root && item->disabled)
-							{
-								if(item->uid() == IDENT_ID_EMPTY_RECYCLE_BIN)
-								{
-									item->disabled = false;
-									SHQUERYRBINFO sqrbi = { sizeof(SHQUERYRBINFO) };
-									DLL::Invoke<HRESULT>(L"shell32.dll", "SHQueryRecycleBinW", nullptr, &sqrbi);
-									if((sqrbi.i64Size + sqrbi.i64NumItems) == 0)
-										item->disabled = true;
-								}
-							}
+							// Trust the native item's own MFS_DISABLED for "Empty Recycle Bin":
+							// Explorer disables the command exactly when the bin is empty. The
+							// removed SHQueryRecycleBinW(nullptr, ...) recomputation enumerated
+							// all drives' bins synchronously on this thread before first paint
+							// (docs/refactor/02-first-paint-latency.md section 4;
+							// learn.microsoft.com/windows/win32/api/shellapi/nf-shellapi-shqueryrecyclebinw).
 
 							if(_settings.modify_items.remove.duplicate)
 							{
@@ -4620,7 +3876,23 @@ namespace Nilesoft
 							itemPtr->native_popup.handle = mii.hSubMenu;
 							itemPtr->native_popup.parent_position = static_cast<UINT>(i);
 
-							if(_native_policy == NativeTreePolicy::LegacyEager)
+							auto descend = _native_policy == NativeTreePolicy::LegacyEager;
+
+							if(!descend && _native_policy == NativeTreePolicy::TargetedDiscovery)
+							{
+								// The path this submenu would be known by, built
+								// the same way __map_system_menu builds it below,
+								// because that is what the rules are matched
+								// against.
+								string path = item->name;
+								if(!item->path.empty())
+									path = item->path + L'/' + path;
+
+								descend = _native_targets.needs(
+									std::wstring(path.c_str() ? path.c_str() : L""));
+							}
+
+							if(descend)
 							{
 								initialize_native_popup(itemPtr->native_popup);
 								enumerate_native_menu_level(mii.hSubMenu, itemPtr, false);
@@ -4662,6 +3934,35 @@ namespace Nilesoft
 		{
 			if(!hMenu || !menu)
 				return;
+
+			/*
+				How this host expects to be told what was chosen, read once, on
+				the root, before anything is composed.
+
+				MNS_NOTIFYBYPOS "is a menu header style and has no effect when
+				applied to individual sub menus", so the root's answer is the
+				whole answer and asking each level would be both wasted calls and
+				a wrong result for any level whose style happened to differ.
+				https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo
+
+				The return value is checked rather than the style read straight
+				out of the structure: MENUINFO is a caller-allocated struct and a
+				failed GetMenuInfo leaves dwStyle exactly as it was, so an
+				unchecked read of an uninitialised field would decide the whole
+				replay contract on stack garbage. On failure the ordinary
+				identifier contract stands, which is what every host got before
+				this existed.
+			*/
+			if(is_root)
+			{
+				MENUINFO mi{ sizeof(MENUINFO) };
+				mi.fMask = MIM_STYLE;
+				if(MENU::get(hMenu, &mi))
+					_host_by_position = (mi.dwStyle & MNS_NOTIFYBYPOS) != 0;
+				else
+					__trace(L"GetMenuInfo(MIM_STYLE) failed on the borrowed root: %u",
+							static_cast<unsigned>(::GetLastError()));
+			}
 
 			menu->native_popup.handle = hMenu;
 			menu->native_popup.parent_position = 0;
@@ -4741,11 +4042,115 @@ namespace Nilesoft
 			return false;
 		}
 
+		/*
+			Which submenus the applicable parent-moving rules actually name.
+
+			Returns false when any one of them cannot be reduced to a literal
+			path, which is the whole menu's cue to fall back to LegacyEager.
+			docs/refactor/04-code-health.md section 6 and
+			Include/NativeMenuTargets.h have the reasoning; the short version is
+			that a rule which talks about "every level" has to have every level.
+
+			Both ends of a move are collected. `location` says which submenu's
+			children the rule matches against; `moveto` says which submenu an
+			item is moved into, and that destination is resolved through
+			__map_system_menu, which only holds levels that were enumerated.
+			Collecting sources alone would send moved items to
+			__movable_system_items instead - a silent behaviour change rather
+			than a slow menu.
+
+			Evaluated without a `this`: these expressions are read before any
+			native item exists, so a rule whose location depends on the item it
+			is matching cannot be answered here. Eval failing, or answering
+			empty, is treated as "not literal" and takes the eager path.
+		*/
+		bool ContextMenu::collect_native_targets(NativeTargets &targets)
+		{
+			if(!_cache)
+				return false;
+
+			auto previous_this = _context._this;
+			_context._this = nullptr;
+
+			auto literal = true;
+
+			for(auto rule : _cache->statics)
+			{
+				if(!rule || rule->has_clsid
+					|| !native_moveto_requires_descendant_discovery(
+						static_cast<bool>(rule->moveto), static_cast<bool>(rule->location)))
+					continue;
+
+				if(!Selected.verify_types(rule->fso))
+					continue;
+
+				/*
+					Returns false only when the value cannot be reduced to a
+					literal path at all. Two things that are *not* failures, and
+					were written as failures first:
+
+					- an empty value. For a location it means the root level,
+					  which needs no descendant; for a moveto it means the item
+					  moves to the root, which is always materialised. Treating
+					  empty as unknown sent the commonest rule shape there is -
+					  `modify(in="View" find="..." menu="")`, lift an item out to
+					  the top - straight back to the eager walk.
+					- a value that names a submenu which does not exist. Nothing
+					  is opened for it, the rule matches nothing, and that is the
+					  same outcome the eager walk would have reached.
+
+					A wildcard is a real failure: `*` matches every level, so
+					every level has to be there.
+				*/
+				auto collect = [&](Expression *expression)
+				{
+					if(!expression)
+						return true;
+
+					string value;
+					try
+					{
+						if(!_context.Eval(expression, value, true))
+							return false;
+					}
+					catch(...)
+					{
+						return false;
+					}
+
+					std::wstring text(value.c_str() ? value.c_str() : L"");
+					if(NativeTargets::is_wildcard(text))
+						return false;
+
+					targets.add(text);		// no-op for an empty path
+					return true;
+				};
+
+				if(!collect(rule->location) || !collect(rule->moveto))
+				{
+					literal = false;
+					break;
+				}
+			}
+
+			_context._this = previous_this;
+
+			// `literal` alone, not `literal && !targets.empty()`. An empty set
+			// is a legitimate answer - every applicable rule turned out to be
+			// root-only - and it means "descend into nothing", which is
+			// correct and strictly better than the eager walk. Requiring a
+			// non-empty set sent exactly that case back to eager.
+			return literal;
+		}
+
 		bool ContextMenu::Initialize()
 		{
 			try
 			{
-				if(!Initializer::Inited()) return false;
+				// Every refusal below that sets init_declined is a decision rather
+				// than a malfunction, and must not feed the circuit breaker. See the
+				// comment on init_declined in Include/ContextMenu.h.
+				if(!Initializer::Inited()) { init_declined = true; return false; }
 
 				__trace(L"ContextMenu init");
 
@@ -4764,7 +4169,11 @@ namespace Nilesoft
 					Diagnostics::MenuPerfScope perf(L"selection.query_shell_window");
 					if(!Selected.QueryShellWindow())
 					{
+						// Not a window Shell handles. The commonest refusal there is,
+						// and the one that made a third-party host lose takeover for
+						// good after three of its own internal popups.
 						__trace(L"QueryShellWindow");
+						init_declined = true;
 						return false;
 					}
 				}
@@ -4784,7 +4193,11 @@ namespace Nilesoft
 					Diagnostics::MenuPerfScope perf(L"initializer.query");
 					if(!initializer || !initializer->query())
 					{
+						// No generation is being served - a configuration the watcher or
+						// a reload can still fix. Opening the breaker here would make
+						// the recovery invisible.
 						__trace(L"initializer query");
+						init_declined = true;
 						return false;
 					}
 				}
@@ -4793,6 +4206,7 @@ namespace Nilesoft
 				if(!_cache)
 				{
 					__trace(L"acquire_snapshot failed");
+					init_declined = true;
 					return false;
 				}
 
@@ -4830,8 +4244,12 @@ namespace Nilesoft
 
 				_vis = _context.parse_visibility(_cache->dynamic.visibility);
 
+				// The configuration asked for no menu in this context.
 				if(_vis == Visibility::Hidden)
+				{
+					init_declined = true;
 					return false;
+				}
 
 				{
 					Diagnostics::MenuPerfScope perf(L"selection.preparing");
@@ -4843,7 +4261,10 @@ namespace Nilesoft
 				}
 
 				if(is_excluded())
+				{
+					init_declined = true;
 					return false;
+				}
 
 				hInstance = _window.instance();
 
@@ -4907,6 +4328,27 @@ namespace Nilesoft
 					has_applicable_native_moveto_rule(),
 					diagnostic_eager);
 
+				/*
+					Eager means "every submenu of the host's menu, before the
+					first pixel" - measured at 95 ms average against ~13 ms lazy
+					on this machine, with one third-party submenu accounting for
+					22 ms of it. Most of that is avoidable: a rule that names a
+					literal location needs *that* submenu and its ancestors, not
+					the other nine.
+
+					Only downgraded from eager, never up from lazy, and never
+					when the diagnostic override asked for eager on purpose.
+					docs/refactor/04-code-health.md section 6.
+				*/
+				if(_native_policy == NativeTreePolicy::LegacyEager && !diagnostic_eager)
+				{
+					Diagnostics::MenuPerfScope perf(L"native.target_scan");
+					_native_targets = NativeTargets{};
+					if(collect_native_targets(_native_targets))
+						_native_policy = NativeTreePolicy::TargetedDiscovery;
+					perf.annotate(static_cast<long>(_native_targets.size()));
+				}
+
 				if(0 == ::GetPropW(hwnd.owner, UxSubclass))
 				{
 					Diagnostics::MenuPerfScope perf(L"native.root_scan");
@@ -4952,7 +4394,39 @@ namespace Nilesoft
 					_hMenu = nullptr;
 				}
 
+				// Normally empty: MenuSubClassProc's WM_NCDESTROY releases each
+				// popup. A host that re-subclasses menu windows can cut Shell out of
+				// that chain (Include/HostMenuPainter.h), and the popup's backdrop
+				// windows - topmost, click-through, owned by the host - then stayed
+				// on screen until the host exited. This runs on the menu thread,
+				// which created them, so DestroyWindow is allowed here.
+				for(auto &[popup, wnd] : _map)
+				{
+					wnd.destroy();
+					if(::IsWindow(popup))
+					{
+						::RemoveWindowSubclass(popup, MenuSubClassProc, 0);
+						::RemovePropW(popup, L"wnd");
+						Prop::Remove(popup);
+					}
+				}
+				_map.clear();
+
 				_windowSubclass.unhook();
+
+				// Synthetic teardown first, then the borrowed popups are told
+				// they are finished with - and their handles are only dropped,
+				// never destroyed, because the host owns them.
+				//
+				// After the unhook rather than before it. WM_UNINITMENUPOPUP
+				// runs arbitrary host and third-party code synchronously, and
+				// with the subclass gone none of it can re-enter Shell through
+				// this window - which matters most for the message being sent
+				// here, because OnUninitMenuPopup destroys the menu it is handed
+				// and adjusts the popup level counters. The pass-through token
+				// in WindowSubclassProc stays as the second line of defence if
+				// this ever moves back up.
+				uninitialize_native_popups();
 
 				if(_hTheme)
 				{
@@ -4971,15 +4445,35 @@ namespace Nilesoft
 					font.handle = nullptr;
 				}
 
-				if(hCursor)
-				{
-					::DestroyCursor(hCursor);
-					hCursor = nullptr;
-				}
+				/*
+					Dropped, never destroyed.
+
+					hCursor comes from LoadCursorW(nullptr, IDC_ARROW), and
+					DestroyCursor is explicit that it must not be used here:
+					"Do not use this function to destroy a shared cursor. A
+					shared cursor is valid as long as the module from which it
+					was loaded remains in memory. The following functions obtain
+					a shared cursor: LoadCursor [...]"
+					https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroycursor
+
+					And it is genuinely shared rather than a copy per call:
+					"The LoadCursor function loads the cursor resource only if
+					it has not been loaded; otherwise, it retrieves the handle to
+					the existing resource."
+					https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadcursorw
+
+					So this was the process-wide IDC_ARROW, and Uninitialize
+					runs once per menu - every right-click asked USER32 to
+					destroy the standard arrow that every window in the host
+					shares, including the WM_SETCURSOR handler above which sets
+					it again on the next menu.
+				*/
+				hCursor = nullptr;
 
 				if(_showdelay[0] != UINT32_MAX && _showdelay[1] != UINT32_MAX && _showdelay[0] != _showdelay[1])
 				{
-					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[0], nullptr, SPIF_SENDCHANGE);
+					// Transient restore, same reasoning as the set in init_cfg().
+					::SystemParametersInfoW(SPI_SETMENUSHOWDELAY, _showdelay[0], nullptr, 0);
 					_showdelay[0] = UINT32_MAX;
 				}
 
@@ -5020,24 +4514,70 @@ namespace Nilesoft
 			return result;
 		}
 
+		/*
+			Count a use, once the chosen command has been dispatched.
+
+			Writing the file is three file operations, so it must not land
+			between the click and the command running - and it must not land on
+			the composition path at all (R1). A destructor is what gets it after
+			every one of InvokeCommand's exits, including the two that
+			`delete this` first, which is why it holds an identity by value and
+			no pointer to the menu it came from.
+
+			Only when `settings { favorites = N }` is set. Counting for every
+			user of every configuration in order to serve a feature almost none
+			of them has switched on would be a file write per right-click for
+			nothing; a pin placed by `shell.exe -favorites` works whether or not
+			anything is counting. docs/refactor/05-capabilities.md section 6.
+		*/
+		struct RecordFavoriteUse
+		{
+			MenuIdentity::Identity identity;
+
+			~RecordFavoriteUse()
+			{
+				if(identity.valid())
+					FavoritesStore::instance().record_use(identity);
+			}
+		};
+
 		int ContextMenu::InvokeCommand(int id)
 		{
 			Uninitialize();
 
 			invoke_item = nullptr;
 
-			if(id != 0)
+			RecordFavoriteUse record;
+			if(id != 0 && _cache && _context.eval_number<int>(_cache->settings.favorites, 0) > 0)
 			{
-				if(ident.equals(id)) 
+				// _model answers for the items Shell owns; a native keeps the
+				// host's own wID and is not in it, so the fallback is a scan of
+				// what was actually composed. Both are cheap and this runs once
+				// per chosen command, not once per item.
+				auto chosen = _model.command(static_cast<uint32_t>(id));
+				if(!chosen)
 				{
-					for(auto item : _items_command)
+					for(auto item : _items)
 					{
-						if(item->wID == static_cast<uint32_t>(id))
+						if(item->is_item() && item->wID == static_cast<uint32_t>(id))
 						{
-							invoke_item = item;
+							chosen = item;
 							break;
 						}
 					}
+				}
+				record.identity = item_identity(chosen);
+			}
+
+			if(id != 0)
+			{
+				if(ident.equals(id))
+				{
+					// Was a forward scan of _items_command that stopped at the
+					// first match; MenuModel::command keeps both halves of
+					// that - popups are not candidates, and the earliest entry
+					// wins a duplicate identifier.
+					invoke_item = _model.command(static_cast<uint32_t>(id));
 
 					id = 0;
 					if(invoke_item && invoke_item->explorer_command)
@@ -5060,6 +4600,21 @@ namespace Nilesoft
 							if(!_browser_marshal.assign(Selected.ShellBrowser, IID_IShellBrowser))
 								Selected.ShellBrowser = nullptr;
 						}
+
+						// The worker deletes this object, and every COM reference
+						// still held here would be released with it - on the
+						// worker. All of them except the browser marshaled above
+						// came from this thread's apartment, where "it is forbidden
+						// to call an object directly from another thread", Release
+						// included. The worker needs none of them, so let go here.
+						// https://learn.microsoft.com/windows/win32/com/single-threaded-apartments
+						for(auto &mii : _gc)
+							mii->retain_explorer_command(nullptr);
+						if(Selected.ItemArrayOwned && Selected.ItemArray)
+							Selected.ItemArray->Release();
+						Selected.ItemArray = nullptr;
+						Selected.ItemArrayOwned = false;
+
 						std::thread(&Invoke, this).detach();
 						return id;
 					}
@@ -5486,6 +5041,15 @@ namespace Nilesoft
 
 		WND *ContextMenu::OnMenuCreate(HWND hWnd)
 		{
+			// The host paints this window itself, so Shell's owner-drawn items
+			// would never show. Leave it untouched; WinEventProc ends the menu on
+			// show and the hook hands the host its own. Include/HostMenuPainter.h.
+			if(_host_paints_menus || menu_window_replaced_by_host(hWnd))
+			{
+				_host_paints_menus = true;
+				return nullptr;
+			}
+
 			auto wnd = &_map[hWnd];
 
 			wnd->ctx = this;
@@ -5498,7 +5062,16 @@ namespace Nilesoft
 			//	map_menu_wnd[hMenu] = { hMenu, hWnd };
 
 			current.hWnd = hWnd;
-			_level.push_back(wnd);
+
+			// A second EVENT_OBJECT_CREATE for a popup already on the stack is
+			// ignored rather than pushed again: a duplicate entry would make the
+			// root stop answering "I am the root" and be positioned against
+			// itself, and the single removal that eventually arrives would leave
+			// the other entry dangling. Not observed on this machine, but
+			// SetWinEventHook documents that callbacks may reenter -
+			// Include/PopupLifecycle.h has the measurement and the citation.
+			if(PopupAction::Track != _level.on_create(hWnd, wnd))
+				return wnd;
 
 			Flag<ULONG_PTR> cs_style = ::GetClassLongPtrW(hWnd, GCL_STYLE);
 			Flag<LONG_PTR> style = ::GetWindowLongPtrW(hWnd, GWL_STYLE);
@@ -5563,6 +5136,22 @@ namespace Nilesoft
 
 		void ContextMenu::OnMenuShow(HWND hWnd, WND *wnd)
 		{
+			// Only for a popup this session is tracking, and only the first
+			// time. show_layers() is idempotent on its own, so this is the
+			// stack being the one place that answers "is this window ours?"
+			// rather than a second, independent opinion drifting from it.
+			if(PopupAction::Show != _level.on_show(hWnd))
+				return;
+
+			// Replaced after Shell subclassed it, which hides the host from
+			// OnMenuCreate's check: same outcome, before the backdrop shows.
+			if(menu_window_replaced_by_host(hWnd))
+			{
+				_host_paints_menus = true;
+				::EndMenu();
+				return;
+			}
+
 			if(wnd == nullptr)
 				wnd = WND::get_prop(hWnd);
 
@@ -5576,404 +5165,6 @@ namespace Nilesoft
 			}
 		}
 
-		HBITMAP crop_image(const RECT rectangle, const HBITMAP source_image)
-		{
-			return static_cast<HBITMAP>(CopyImage(source_image, IMAGE_BITMAP, rectangle.right - rectangle.left,
-																rectangle.bottom - rectangle.top, LR_CREATEDIBSECTION));
-		}
-
-		void ContextMenu::screenshot()
-		{
-			if(!_level.empty()) try
-			{
-				auto wnd = _level.front();
-				auto hwnd = wnd->handle;
-				auto hdesktop = ::GetDesktopWindow();
-				Rect rc_desktop = hdesktop;
-				SIZE sz = { rc_desktop.right + 100, rc_desktop.bottom + 100 };
-
-				DC dc = hwnd;
-				uint8_t *bits{};
-				auto_gdi<HBITMAP> hbitmap(dc.CreateDIBSection(sz.cx,sz.cy, &bits));
-
-				if(!hbitmap)
-					return;
-
-				DC dc_dst(dc.CreateCompatibleDC(), 1);
-				dc_dst.select_bitmap(hbitmap.get());
-
-				Point pt0 = { sz.cx, sz.cy };
-				Point pt1 = { 0, 0 };
-
-				for(auto &l : _level)
-				{
-					Rect rc = l->handle;
-					if(l->layer.hbitmap)
-					{
-						BITMAP bmp{}; GetObject(l->layer.hbitmap, sizeof(bmp), &bmp);
-						dc_dst.draw_image(rc.point(), { bmp.bmWidth, bmp.bmHeight }, l->layer.hbitmap);
-					}
-
-					if(l->blurry.handle)
-					{
-						DC dc_blurry = l->blurry.handle;
-						dc_dst.draw_image(rc.point(), rc.size(), dc_blurry);
-					}
-
-					dc_dst.draw_image(rc.point(50), rc.size(), l->hdc);
-
-					pt0.x = std::min<long>(rc.left, pt0.x);
-					pt0.y = std::min<long>(rc.top, pt0.y);
-					pt1.x = std::max<long>(rc.right, pt1.x);
-					pt1.y = std::max<long>(rc.bottom, pt1.y);
-				}
-				
-				pt0.x = std::max<long>(0, pt0.x);
-				pt0.y = std::max<long>(0, pt0.y);
-
-				pt1.x = std::min<long>(sz.cx, pt1.x);
-				pt1.y = std::min<long>(sz.cy, pt1.y);
-				
-				sz = { (pt1.x - pt0.x) + 100, (pt1.y - pt0.y) + 100 };
-
-				bits = nullptr;
-				auto_gdi<HBITMAP> hbitmap0(dc_dst.CreateDIBSection(sz.cx, sz.cy, &bits));
-				if(bits)
-				{
-					DC dc0(dc_dst.CreateCompatibleDC(), 1);
-					dc0.select_bitmap(hbitmap0.get());
-					dc0.draw_image({ }, sz, dc_dst, pt0, sz);
-				}
-				
-				auto w = sz.cx, h = sz.cy;
-				
-				auto p = bits;
-				if(bits)
-				{
-					std::unique_ptr< unsigned char[]>flip(new unsigned char[w * h * 4]);
-
-					auto src = p + w * h * 4 - w * 4;
-					auto dst = flip.get();
-
-					for(int y = 0; y < h; y++)
-					{
-						::memcpy(dst, src, static_cast<size_t>(w) * 4);
-						src -= w * 4;
-						dst += w * 4;
-					}
-
-					auto pi = (RGBA *)flip.get();
-					for(int i = 0; i < w * h; i++)
-					{
-						pi[i].prem();
-					}
-
-					SYSTEMTIME lt = { };
-					::GetLocalTime(&lt);
-
-					string tf = string::TimeFormat(&lt, L"ymd_HMS").move();
-					//string::NewGuid().c_str()
-					// FOLDERID_Pictures, FOLDERID_SavedPictures
-					string location = _screenshot;
-
-					if(location.empty())
-						location = IO::Path::GetKnownFolder(FOLDERID_Screenshots).move();
-					
-					if(location.empty())
-						location = Initializer::instance->application.Dirctory;
-					
-					location = Path::Combine(location, L"screenshot_" + tf + L".png");
-
-					plutovg_stbi_write_png(location, w, h, flip.get());
-				}
-			}
-			catch(...) {
-			}
-		}
-
-		bool ContextMenu::draw_layer(WND *wnd, SIZE size, int margin)
-		{
-			//Gradients - box, linear and radial
-			if(!wnd || !wnd->ctx)
-				return false;
-
-			if(wnd->layer.hbitmap)
-			{
-				::DeleteObject(wnd->layer.hbitmap);
-				wnd->layer.hbitmap = nullptr;
-			}
-
-			double radius = _theme.border.radius;
-			//auto border_opacity = double(double(theme->frame.opacity) / 100.0);
-			auto szborder = _theme.border.size;
-			auto szborder2 = _theme.pow(szborder);
-
-			double x = margin;
-			double y = margin;
-			double w = (size.cx - (margin + margin));
-			double h = (size.cy - (margin + margin));
-
-			PlutoVG pluto(size.cx, size.cy);
-
-			bool need_clear = _theme.background.effect > 0;
-
-			if(_theme.shadow.enabled)
-			{
-				uint8_t shadow_opacity = _theme.shadow.color.a;
-				Rect shadow_rect = { 0, 0, size.cx, size.cy };
-
-				auto clr = _theme.shadow.color.to_RGB();
-				//uint8_t offset = 0;
-				auto sz = _theme.shadow.size;
-
-				uint8_t o = shadow_opacity * 20 / 100;
-				need_clear = _theme.background.color.a < 0xFF;
-				sz = sz > 30 ? 30 : sz;
-
-				/*for(uint8_t i = 0; i < sz + 1; i++)
-				{
-					auto b = szborder + i;
-					pluto.rect(x - b,
-							   y - b + _theme.shadow.offset,
-							   w + (b * 2),
-							   h + (b * 2),
-							   radius + b)
-						.fill(clr, o);
-				}*/
-
-				sz += _theme.shadow.offset;
-
-				for(uint8_t i = 0; i < sz + 1; i++)
-				{
-					auto b = szborder + i;
-					pluto.rect((x + _theme.shadow.offset) - b,
-							   (y + _theme.shadow.offset) - b + _theme.shadow.offset,
-							   w + (b * 2) - _theme.shadow.offset - _theme.shadow.offset,
-							   h + (b * 2) - _theme.shadow.offset - _theme.shadow.offset,
-							   radius + (b / static_cast<double>(2)))
-						.fill(clr, o);
-				}
-
-			}
-
-			SIZE back = { wnd->width, wnd->height };
-			Rect border_rect = { margin, margin, wnd->width, wnd->height };
-			Rect back_rect = { margin + szborder , margin + szborder,
-				wnd->width - szborder2, wnd->height - szborder2 };
-
-			if(_theme.background.effect == 0)
-			{
-				auto xb = (szborder % 2) == 0 ? 0.0 : 0.5;
-				xb += (szborder / 2.0);
-				pluto.rect(margin + xb, margin + xb,
-						   back.cx - xb - xb, back.cy - xb - xb, radius)
-					//.fill(0x00ff00, theme->background.color.a, true)
-					.fill(_theme.background.color.to_RGB(), _theme.background.color.a, true)
-					.stroke_width(szborder)
-					.stroke_fill(_theme.border.color.to_RGB(), _theme.border.color.a);
-			}
-			else
-			{
-				if(szborder > 0 && _theme.border.color.a > 0)
-				{
-					need_clear = true;// theme->border.color.a < 0xFF;
-					pluto.rect(border_rect.left, border_rect.top, border_rect.right, border_rect.bottom, radius == 0 ? 0 : radius + szborder)
-						.fill(_theme.border.color.to_RGB(), _theme.border.color.a);
-				}
-
-				if(need_clear)
-					pluto.rect(back_rect.left, back_rect.top, back_rect.right, back_rect.bottom, radius).clear();
-
-				if(_theme.background.opacity > 0)
-				{
-					pluto.save();
-					pluto.rect(back_rect.left, back_rect.top, back_rect.right, back_rect.bottom, radius)
-						//.set_operator(plutovg_operator_src)
-						//.set_fill_rule(plutovg_fill_rule_non_zero)
-						.fill(_theme.background.color.to_RGB(), _theme.background.opacity, true);
-					pluto.restore();
-				}
-			}
-
-			if(_theme.gradient.enabled)
-			{
-				auto to_size = [](double value, double size) ->double { return value * size / 100; };
-				bool render = false;
-				Gradient gradient;
-
-				auto fxx = szborder;
-				auto fyy = margin + szborder;
-
-				w = back_rect.right;
-				h = back_rect.bottom;
-
-				if(_theme.gradient.linear[0] == 1.0)
-				{
-					double x1 = to_size(_theme.gradient.linear[1], w);
-					double y1 = to_size(_theme.gradient.linear[2], h);
-					double x2 = to_size(_theme.gradient.linear[3], w);
-					double y2 = to_size(_theme.gradient.linear[4], h);
-
-					if(x1 > 0) x1 += fxx * 2;
-					if(x2 > 0) x2 += fxx * 2;
-
-					if(y1 > 0) y1 += fyy * 2;
-					if(y2 > 0) y2 += fyy * 2;
-					
-					render = x1 != 0.0 || y1 != 0.0 || x2 != 0.0 || y2 != 0.0;
-					if(render)
-						gradient.create_linear(x1, y1, x2, y2);
-				}
-				else if(_theme.gradient.radial[0] == 1.0)
-				{
-					double cx = to_size(_theme.gradient.radial[1], w / 2 + fxx);
-					double cy = to_size(_theme.gradient.radial[2], h / 2 + fyy);
-					double r  = to_size(_theme.gradient.radial[3], ((h >= w ? w : h) / 2));
-					double fx = to_size(_theme.gradient.radial[4], w / 2 + fxx);
-					double fy = to_size(_theme.gradient.radial[5], h / 2 + fyy);
-
-					render = cx != 0.0 || cy != 0.0 || r != 0.0 || fx != 0.0 || fy != 0.0;
-					if(render)
-						gradient.create_radial(cx, cy, r, fx, fy, 0);
-				}
-
-				if(render)
-				{
-					for(auto &s : _theme.gradient.stpos)
-						gradient.add_stop(s.offset, s.color.to_RGB(), s.color.a);
-					
-					pluto.rect(back_rect.left, back_rect.top, w, h, radius).fill(gradient);
-				}
-			}
-
-			wnd->layer.hbitmap = pluto.tobitmap();
-			return wnd->layer.hbitmap;
-		}
-
-		void ContextMenu::UpdateLayered(WND *wnd, bool update_blurry)
-		{
-			if(!wnd) return;
-
-			int margin = 50;
-
-			SIZE size = {
-				wnd->width + margin + margin,
-				wnd->height + margin + margin
-			};
-
-			if(wnd->layer.handle && draw_layer(wnd, size, margin))
-			{
-				DC dc = wnd->layer.handle;
-				DC dc_layer(dc.CreateCompatibleDC(), 1);
-				dc_layer.select_bitmap(wnd->layer.hbitmap);
-
-				POINT ptZero{ };
-				// use the source image's alpha channel for blending
-				BLENDFUNCTION blend{ AC_SRC_OVER , 0, 0xFF, AC_SRC_ALPHA };
-				// paint the window (in the right location) with the alpha-blended bitmap
-				::UpdateLayeredWindow(wnd->layer.handle, nullptr, nullptr, &size, dc_layer, &ptZero, 0x000000, &blend, ULW_ALPHA);
-				dc_layer.restore_bitmap();
-			}
-
-			if(wnd->blurry.handle)
-			{
-				if(update_blurry)
-				{
-					auto flags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_NOACTIVATE | SWP_SHOWWINDOW;
-					SetWindowPos(wnd->blurry.handle, nullptr, wnd->x, wnd->y, wnd->width, wnd->height, flags);
-				}
-
-				if(_theme.border.radius > 0)
-				{
-					auto border = _theme.border.size;
-					auto w = wnd->width - border - border;
-					auto h = wnd->height - border - border;
-					wnd->Regoin(wnd->blurry.handle, 0, 0, w + 1, h + 1, int(_theme.border.radius / 1.5));
-				}
-			}
-		}
-
-		bool ContextMenu::CreateLayer(WND *wnd)
-		{
-			if(!wnd || !wnd->ctx) return false;
-
-			DWM dwm;
-			auto layer = &wnd->layer;
-			auto blurry = &wnd->blurry;
-			auto border = _theme.border.size;
-			int margin = 50;
-
-			SIZE size = {
-				wnd->width + margin + margin,
-				wnd->height + margin + margin
-			};
-
-			auto w = wnd->width - border - border;
-			auto h = wnd->height - border - border;
-
-			// Blurry is not useful in high contrast mode
-			if(composition &&
-			   _theme.background.effect >= 2 &&
-			   _theme.background.opacity < 0xFF)
-			{
-				/*
-				Enable Acrylic Effects in Hyper-V VM
-				August 17, 2018 (revised September 8, 2018)
-				[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Dwm]
-				"ForceEffectMode"=dword:00000002
-				*/
-
-				//blurry->create(wnd->x + border - 1, wnd->y + border - 1, w + 2, h + 2, hwnd.focus, WS_EX_COMPOSITED);
-				blurry->create(wnd->x + border, wnd->y + border, w, h, hwnd.focus, WS_EX_COMPOSITED /*| WS_EX_NOREDIRECTIONBITMAP*/);
-				if(blurry->handle)
-				{
-					AccentPolicy accent(blurry->handle);
-					// Blur is not useful in high contrast mode
-					// Windows build version less than 16299 does not support acrylic effect
-					// 1903 = 18362
-					// 1803 = 17134
-					// 1709 = 16299
-					// 18362 	TintLuminosityOpacity
-					if(_theme.background.effect >= 3)
-					{
-						if(ver->Major < 10 || (ver->Major == 10 && ver->Build < 17134))
-							_theme.background.effect = 2;
-					}
-
-					uint32_t tintColor = _theme.background.tintcolor;
-
-					if(_theme.background.effect == 2) // blur effect 
-					{
-						accent.state = accent.BlurBehind;
-						if(_theme.border.radius > 0)
-							accent.flags = accent.AllowSetWindowRgn;
-					}
-					else if(_theme.background.effect >= 3) // acrylic effect 
-					{
-						// Windows 10 build 17134
-						accent.state = accent.AcrylicBlurBehind;
-						accent.flags = accent.Luminosity;
-						if(_theme.border.radius > 0)
-							accent.flags |=accent.AllowSetWindowRgn;
-
-						if(tintColor == 0)
-							tintColor = 0x01000000;
-					}
-
-					dwm.handle = blurry->handle;
-					//dwm.SetImmersiveDarkMode();
-					//dwm.ExtendFrameIntoClientArea();
-
-					Compositor::TransparentArea(blurry->handle);
-					accent.color = tintColor;
-					accent.set();
-				}
-			}
-
-			layer->create(wnd->x - margin, wnd->y - margin, size.cx, size.cy, hwnd.focus, WS_EX_LAYERED);
-			UpdateLayered(wnd, false);
-			return wnd->show_layers();
-		}
 
 		struct ooo
 		{
@@ -6049,53 +5240,168 @@ namespace Nilesoft
 
 		HHOOK m_hHook = NULL;
 
+		/*
+			Is the vertical-blank wait wanted?
+
+				HKCU\SOFTWARE\Nilesoft\Shell    flicker    REG_DWORD    0
+
+			docs/refactor/02-first-paint-latency.md section 4 asks for this to be
+			"registry-gated ... benchmark ON/OFF ... delete or capability-gate
+			per build". Default on, because turning it off by default would be
+			deciding the visual question this machine cannot answer.
+
+			What it costs is now measured rather than argued about. The wait is
+			a Sleep to the next vertical blank, so it is bounded by one refresh
+			period and averages half of one. It sits in WM_NCCALCSIZE, which
+			runs inside the tracking call - *after* popup.total_pre_display has
+			already been stopped - so until the phase below existed this was
+			latency the user paid that no report showed.
+
+			A/B on one build, a real Explorer, ten menus each, Windows 11
+			26200.8875 x64 at 59 Hz (2026-08-24):
+
+				                    menu.flicker_wait      popup.total_pre_display
+				flicker = 1 (default)  7.0 ms avg,           15.8 ms avg
+				                       1.9 - 15.1 ms
+				flicker = 0            0 ms                  16.0 ms avg
+
+			So it adds about seven milliseconds to every menu, capped at one
+			refresh period, and pre-display is unchanged either way - which is
+			the point: the cost lands after the phase everybody was measuring.
+			Right-click to pixels is roughly 23 ms with it and 16 ms without.
+
+			It also calls timeBeginPeriod while it waits. That used to be
+			written up here as raising the *system* timer resolution, which was
+			the pre-2020 contract and is no longer true:
+
+			  "Prior to Windows 10, version 2004, this function affects a
+			   global Windows setting. For all processes Windows uses the
+			   lowest value (that is, highest resolution) requested by any
+			   process. Starting with Windows 10, version 2004, this function
+			   no longer affects global timer resolution."
+			  https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod
+
+			So the blast radius is the host process, not the machine - which is
+			a weaker argument for deleting the wait than the one this comment
+			used to make. It is now also only requested when there is actually
+			a vertical blank to sleep to, rather than on every menu.
+
+			Not deleted, and the reason is a limit rather than a preference:
+			what it buys is a visual artefact during window creation. A
+			screenshot cannot show a transient, and nothing here can judge
+			whether the flicker returns without it. So it is measured, it is
+			switchable, and the visual half stays an open question for somebody
+			with the menu in front of them.
+		*/
+		inline bool flicker_fix_enabled()
+		{
+			// -1 = not probed, 0 = off, 1 = on. Read once: it is a developer
+			// switch, and re-reading it inside WM_NCCALCSIZE would put a
+			// registry call on the path being measured.
+			static std::atomic<int> state{ -1 };
+
+			auto value = state.load(std::memory_order_relaxed);
+			if(value < 0)
+			{
+				int configured = 1;
+				try
+				{
+					if(!RegistryConfig::get(nullptr, L"flicker", configured))
+						configured = 1;
+				}
+				catch(...)
+				{
+					configured = 1;
+				}
+				value = configured ? 1 : 0;
+				state.store(value, std::memory_order_relaxed);
+			}
+			return value != 0;
+		}
+
 		inline void fix_ugly_flicker()
 		{
-			LARGE_INTEGER freq, now0, now1;
-			::QueryPerformanceFrequency(&freq); // hz
+			auto enabled = flicker_fix_enabled();
 
-			// this absurd code makes Sleep() more accurate
-			// - without it, Sleep() is not even +-10ms accurate
-			// - with it, Sleep is around +-1.5 ms accurate
-			TIMECAPS tc;
+			// Recorded whether or not the wait happens, with the gate's state as
+			// the count: n=1 waited, n=0 switched off. A phase that vanished
+			// when disabled would leave a report unable to distinguish "this
+			// build does not have the wait" from "this machine turned it off",
+			// which is the one thing somebody comparing two reports needs.
+			//
+			// Inside the tracking call and on the menu thread, so the session
+			// the hook opened is still current and this lands in the same
+			// record as everything else.
+			Diagnostics::MenuPerfScope perf(L"menu.flicker_wait");
+			perf.annotate(enabled ? 1 : 0);
+			if(!enabled)
+				return;
 
-			::timeGetDevCaps(&tc, sizeof(tc));
-			int ms_granularity = tc.wPeriodMin;
-			::timeBeginPeriod(ms_granularity); // begin accurate Sleep() !
+			/*
+				Ask DWM where the vertical blank falls, and believe the answer
+				only if it said it had one.
 
-			::QueryPerformanceCounter(&now0);
+				DWM_TIMING_INFO "receives the current composition timing
+				information" only "when this function returns successfully"
+				https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmgetcompositiontiminginfo
 
-			// ask DWM where the vertical blank falls
-			DWM_TIMING_INFO dti;
-			::memset(&dti, 0, sizeof(dti));
+				This used to be called with the HRESULT discarded, over a
+				structure that had just been zeroed - so a failed call left
+				qpcRefreshPeriod at 0 and the arithmetic below divided by it.
+				An integer divide by zero here is on explorer.exe's UI thread,
+				inside WM_NCCALCSIZE, under no SEH frame; it terminates the
+				host. Include/VerticalBlank.h has the whole account and the
+				tests.
+
+				hwnd must be NULL: "Starting with Windows 8.1, this parameter
+				must be set to NULL. If this parameter is not set to NULL,
+				DwmGetCompositionTimingInfo returns E_INVALIDARG."
+			*/
+			DWM_TIMING_INFO dti{};
 			dti.cbSize = sizeof(dti);
+			if(FAILED(::DwmGetCompositionTimingInfo(nullptr, &dti)))
+				return;
 
-			::DwmGetCompositionTimingInfo(NULL, &dti);
-			::QueryPerformanceCounter(&now1);
+			LARGE_INTEGER freq{}, now{};
+			if(!::QueryPerformanceFrequency(&freq) || !::QueryPerformanceCounter(&now))
+				return;
 
-			// - DWM told us about SOME vertical blank
-			//   - past or future, possibly many frames away
-			// - convert that into the NEXT vertical blank
-			__int64 period = (__int64)dti.qpcRefreshPeriod;
-			__int64 dt = (__int64)dti.qpcVBlank - (__int64)now1.QuadPart;
-			__int64 w, m;
+			// Read after the DWM call, so that call's own cost is inside the
+			// answer rather than added to the sleep.
+			auto wait_ms = vblank_wait_ms(static_cast<long long>(dti.qpcVBlank),
+										  static_cast<long long>(dti.qpcRefreshPeriod),
+										  now.QuadPart, freq.QuadPart);
+			if(wait_ms <= 0)
+				return;
 
-			if(dt >= 0)
-				w = dt / period;
-			else // dt < 0
-			{
-				// reach back to previous period - so m represents consistent position within phase
-				w = -1 + dt / period;
-			}
+			/*
+				Only now raise the timer resolution. Sleep is not even +-10 ms
+				accurate at the default resolution and this whole wait is one
+				refresh period, so it needs the finer timer - but nothing above
+				sleeps, and asking for it before knowing whether there is
+				anything to wait for raised it on every menu that had nothing
+				to do.
 
-			// uncomment this to see worst-case behavior
-			// dt += (sint_64_t)(0.5 * period);
-			m = dt - (period * w);
-			assert(m >= 0);
-			assert(m < period);
-			double m_ms = 1000.0 * m / (double)freq.QuadPart;
-			::Sleep((int)round(m_ms));
-			::timeEndPeriod(ms_granularity);
+				Every timeBeginPeriod must be "matched with a call to
+				timeEndPeriod, specifying the same minimum resolution in both
+				calls", so a request that was refused is not matched, and one
+				that was granted is matched with the value that was granted.
+				https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod
+
+				timeGetDevCaps used to be called with its result discarded over
+				an uninitialised TIMECAPS, which on failure asked for whatever
+				was on the stack.
+			*/
+			TIMECAPS tc{};
+			UINT granularity = 0;
+			if(::timeGetDevCaps(&tc, sizeof(tc)) == TIMERR_NOERROR
+			   && ::timeBeginPeriod(tc.wPeriodMin) == TIMERR_NOERROR)
+				granularity = tc.wPeriodMin;
+
+			::Sleep(static_cast<DWORD>(wait_ms));
+
+			if(granularity)
+				::timeEndPeriod(granularity);
 		}
 		int bbb = 0;
 		int ixi = 0;
@@ -6141,9 +5447,15 @@ namespace Nilesoft
 				case WM_NCDESTROY:
 				{
 					wnd->destroy();
+
+					// By handle, and before the map erases the object it points
+					// at. These used to be two different keys for one removal -
+					// erase by handle, pop by position - and the first time they
+					// disagreed the stack would keep a pointer to a WND the map
+					// had already destroyed, which the next submenu placement
+					// dereferences. Include/PopupLifecycle.h.
+					ctx->_level.on_destroy(hWnd);
 					ctx->_map.erase(hWnd);
-					if(!ctx->_level.empty())
-						ctx->_level.pop_back();
 					ctx->current.zero();
 					break;
 				}
@@ -6281,7 +5593,13 @@ namespace Nilesoft
 						}
 						else if(!flags.has(SWP_NOMOVE))
 						{
-							if(ctx->_level.size() == 1)
+							// The popup that opened this one, which is what a
+							// submenu is placed against. Null means there is no
+							// such thing - this is the root - which used to be
+							// spelled `_level.size() == 1` and so was only right
+							// while the stack was exactly in step.
+							auto prev_window = ctx->_level.parent_of_top();
+							if(prev_window == nullptr)
 							{
 								wp->x += 1;
 								wp->y += 1;
@@ -6290,7 +5608,6 @@ namespace Nilesoft
 							{
 								auto border = &theme->border;
 								auto align = theme->layout.popup.align != 0x7F;
-								auto prev_window = ctx->_level[ctx->_level.size() - 2];
 								auto swap_popup = wp->x < prev_window->x;
 								auto fr = FixedFrame.cx / 2;
 								auto x = bz + theme->border.padding.width();
@@ -6540,9 +5857,16 @@ namespace Nilesoft
 						}
 					}
 
+					// Already fail-safe through the initialiser - a failed read
+					// leaves 0 and the break below declines to touch anything -
+					// but said out loud, because every other SPI_GET in this
+					// file is a read-modify-restore where discarding the result
+					// leaves a system setting changed. The gate in
+					// scripts/check-invariants.ps1 cannot tell the two apart,
+					// and a rule with an exception nobody can see is worse than
+					// one extra operator here.
 					int pvParam{};
-					::SystemParametersInfoW(SPI_GETSELECTIONFADE, 0, &pvParam, 0);
-					if(!pvParam)
+					if(!::SystemParametersInfoW(SPI_GETSELECTIONFADE, 0, &pvParam, 0) || !pvParam)
 					{
 						// Fade out animation is disabled system-wide
 						break;
@@ -6724,23 +6048,27 @@ namespace Nilesoft
 			//idChild == INDEXID_CONTAINER
 			if(Window::IsPopupMenu(hWnd))
 			{
+				ContextMenu *ctx = nullptr;
+				{
+					std::lock_guard<std::mutex> lock(HookMapMutex);
+					auto it = HookMap.find(hWinEventHook);
+					if(it != HookMap.end())
+						ctx = it->second;
+				}
+
 				if(dwEvent == EVENT_OBJECT_CREATE)
 				{
-					ContextMenu *ctx = nullptr;
-					{
-						std::lock_guard<std::mutex> lock(HookMapMutex);
-						auto it = HookMap.find(hWinEventHook);
-						if(it != HookMap.end())
-							ctx = it->second;
-					}
 					if(ctx)
 						ctx->OnMenuCreate(hWnd);
 				}
-				else if(dwEvent == EVENT_OBJECT_SHOW)
-				{
-					if(auto ctx = Prop::Get(hWnd); ctx)
-						ctx->OnMenuShow(hWnd);
-				}
+				// A window OnMenuCreate left to the host that paints it: end the
+				// menu unseen. EndMenu at show was measured to end the tracking
+				// cleanly (scratch probe, Windows 11 26300).
+				// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-endmenu
+				else if(ctx && ctx->_host_paints_menus)
+					::EndMenu();
+				else if(auto owner = Prop::Get(hWnd); owner)
+					owner->OnMenuShow(hWnd);
 			}
 		}
 
@@ -6810,17 +6138,8 @@ namespace Nilesoft
 
 						if(lp == FALSE)
 						{
-							//MENUINFO info{0};
-							//info.cbSize = sizeof(info);
-							//info.fMask = MIM_STYLE | MIM_MAXHEIGHT| MIM_MENUDATA;
-							//GetMenuInfo(reinterpret_cast<HMENU>(wParam), &info);
-							//_log.info(L"WM_INITMENUPOPUP %d 0x%08x 0x%08x", GetMenuItemCount(reinterpret_cast<HMENU>(wParam)), info.dwStyle, info.dwMenuData);
 							if(auto hMenu = reinterpret_cast<HMENU>(wParam); hMenu)
 								return ctx->OnInitMenuPopup(hMenu, LOWORD(lParam));
-						}
-						else if(lp == 100) // preinitmenupopup
-						{
-							lParam = MAKELPARAM(LOWORD(lParam), lp);
 						}
 						break;
 					}
@@ -6828,6 +6147,13 @@ namespace Nilesoft
 					//	The high - order word identifies the menu that was destroyed.Currently, this parameter can only be MF_SYSMENU(the window menu).
 					case WM_UNINITMENUPOPUP:
 					{
+						// Shell's own outgoing half of the INIT/UNINIT pair for a
+						// borrowed host popup. It has to reach the host window
+						// procedure: OnUninitMenuPopup destroys the menu it is
+						// handed, and this one belongs to the host.
+						if(ctx->is_native_uninit_inflight(reinterpret_cast<HMENU>(wParam)))
+							break;
+
 						if(HIWORD(lParam) == FALSE)
 						{
 							if(auto hMenu = reinterpret_cast<HMENU>(wParam); hMenu)
@@ -6856,6 +6182,18 @@ namespace Nilesoft
 					}
 					case WM_MENUSELECT:
 						return ctx->OnMenuSelect(reinterpret_cast<HMENU>(lParam), LOWORD(wParam), HIWORD(wParam));
+					case WM_MENUCHAR:
+					{
+						// Owner-drawn items carry no text for Windows to match,
+						// so this is the only route by which a typed letter can
+						// reach anything. Nothing answered it before, which meant
+						// a beep.
+						// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menuchar
+						if(HIWORD(wParam) == MF_SYSMENU)
+							break;
+						return ctx->OnMenuChar(reinterpret_cast<HMENU>(lParam),
+											   static_cast<wchar_t>(LOWORD(wParam)));
+					}
 					case WM_ENTERIDLE:
 						if(wParam == MSGF_MENU)
 						{

@@ -123,7 +123,9 @@ namespace Nilesoft
 
 			void copy(const WINDOW &src)
 			{
-				::memcpy(this, &src, sizeof(src));
+				// Trivially copyable today; compiler-generated copy keeps this
+				// safe if the type ever grows non-trivial members.
+				*this = src;
 			}
 
 			bool isTaskbar() const
@@ -179,7 +181,13 @@ namespace Nilesoft
 				string get(const string &quote = nullptr, const wchar_t* sep = nullptr) const
 				{
 					string result = Path;
-					if(sep) result.replace(L"\\", sep);
+					// `sep && *sep`, not `sep`: an empty separator must mean "no
+					// replacement", or replace() strips every backslash and hands
+					// back a mangled path. This became reachable when c_str()
+					// started answering L"" for an empty string instead of nullptr
+					// - callers reach this through `eval_arg(1).to_string().c_str()`.
+					// Selections::Sel already guards path_sep the same way.
+					if(sep && *sep) result.replace(L"\\", sep);
 					return !quote.empty() ? Quote(result, quote).move() : result.move();
 				}
 
@@ -237,9 +245,6 @@ namespace Nilesoft
 			IShellItemArray *ItemArray{};
 			bool			ItemArrayOwned{};
 
-			IShellView *ShellView{};
-			IFolderView2 *FolderView{};
-
 			struct
 			{
 				bool		explorer{};
@@ -279,18 +284,10 @@ namespace Nilesoft
 				if(ItemArrayOwned && ItemArray)
 					ItemArray->Release();
 
-				if(ShellView)
-					ShellView->Release();
-
-				if(FolderView)
-					FolderView->Release();
-
 				ShellBrowser = {};
 				ShellBrowserOwned = false;
 				ItemArray = {};
 				ItemArrayOwned = false;
-				ShellView = {};
-				FolderView = {};
 			}
 
 			Selections(const Selections &other) = delete;
@@ -338,8 +335,18 @@ namespace Nilesoft
 
 			void QuerySelectionMode();
 			bool QueryShellWindow();
+
+			// The dispatcher. Decides which of the two providers below is asked
+			// for the selection; docs/refactor/04-code-health.md section 4a.
 			bool QuerySelected();
+
 			HMENU hmenu_original{};
+
+			// The two providers. One reads the selection off Explorer's own
+			// view through IShellBrowser, the other reads the one a host
+			// already handed us through IShellExtInit. Both leave the rest of
+			// the program with the same thing.
+			bool QuerySelectedFromShellBrowser();
 			bool QuerySelectedFromHandler();
 			bool Preparing();
 			bool Parse(IShellItem *shellItem);

@@ -1,163 +1,93 @@
-# PowerShell script to perform Version patching for Shell 
-# ToDo:
-# - adapt $Build number in case of local machine builds
-#powershell -executionpolicy bypass -File .\Test.ps1
-#param([switch]$arg1 = $false,[string]$arg2 = "")
+# Version patching for Shell. Run through version.cmd.
+#
+# The version fields are rewritten where they stand in the live files. This tool
+# used to copy a whole-file template over each target, so every edit to
+# Resource.h, the manifest or Shell.def had to be mirrored into this folder by
+# hand: Shell.def's template lost the ShellCheckConfig export that way, and an
+# earlier template over var.wxi deleted the package identity. A pattern that is
+# no longer found is an error, never a silent skip.
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
-$ScriptPath = $(if ($PSVersionTable.PSVersion.Major -ge 3) { $PSCommandPath } else { & { $MyInvocation.ScriptName } })
+$ScriptPath = $PSCommandPath
 $ScriptDir = Split-Path -Path $ScriptPath -Parent
 
-$location = (Get-Location)
+$ChangeBuild	= 0
+$ChangeRevis	= 0
 
-Set-Location -Path $ScriptDir
+$___Build__	= 20	# auto increase
+$___Revis__	= 0	# auto increase
 
-function Debug-Output($msg)
+$Major	= 1
+$Minor	= 9
+$Build	= $___Build__
+$Revis	= $___Revis__
+$YEAR	= [int](Get-Date -Format yyyy)
+
+if($ChangeBuild) { $Build = $Build + 1 }
+if($ChangeRevis) { $Revis = $Revis + 1 }
+
+$Version = "$Major.$Minor.$Build.$Revis"
+Write-Host "Nilesoft Shell version number: $Version"
+
+# Each edit is a pattern whose group 1 is kept and whose remainder becomes the
+# value. The files are ASCII, so reading and writing them as UTF-8 without a BOM
+# preserves every byte that is not a version field, line endings included.
+function Set-VersionFields([string]$relative, [object[]]$edits)
 {
-	#~return ## disabled debug output
-	if ($msg -ne $null) { 
-      	Write-Host ""
-		Write-Host "$msg"
-	}
-}
-
-function file-copy($from, $to)
-{
-	if ($from -ne $null) { 
-		if ($to -ne $null) { 
-			Copy-Item -LiteralPath $from -Destination $to -Force
+	$path = Join-Path $ScriptDir $relative
+	$text = [IO.File]::ReadAllText($path)
+	$out = $text
+	foreach($edit in $edits)
+	{
+		$regex = [regex]::new($edit[0], 'Multiline')
+		if(-not $regex.IsMatch($out))
+		{
+			throw "version.ps1: '$($edit[0])' matches nothing in $relative"
 		}
+		$out = $regex.Replace($out, '${1}' + $edit[1], 1)
 	}
-}
-
-function replace-direct($content, $key, $val)
-{
-	if ($content -ne $null) { 
-		(Get-Content $content) -replace $key, $val | Set-Content $content
-	}
-}
-
-function replace($content, $key, $val)
-{
-	return $content -replace $key, $val
-}
-
-function update($src, $dest)
-{
-	Copy-Item -LiteralPath $src -Destination $dest -Force
-	$content = (Get-Content $dest)
-	$content = $(replace $content '\$AppCompany\$' "$AppCompany")
-	$content = $(replace $content '\$AppName\$' "$AppName")
-	$content = $(replace $content '\$AppFileName\$' "$AppFileName")
-	$content = $(replace $content '\$AppFileExt\$' "$AppFileExt")
-	$content = $(replace $content '\$AppProcess\$' "$AppProcess")
-	
-	$content = $(replace $content '\$MAJOR\$' "$Major")
-	$content = $(replace $content '\$MINOR\$' "$Minor")
-	$content = $(replace $content '\$BUILD\$' "$Build")
-	$content = $(replace $content '\$MAINT\$' "$Revis")
-	$content = $(replace $content '\$VERSION\$' "$Version")
-	$content = $(replace $content '\$YEAR\$' "$YEAR")
-	$content | Set-Content $dest
-}
-
-function update-regex($content, $key, $val)
-{
-	#$regex = [regex]( '(\$' + $key + ')([\s+]?=[\s+]?)(\d+)$')
-	#$content = $content -replace $regex, ('$1 = ' + $val)
-	
-	$regex = [regex]( '(?<key>\$' + $key + ')([\s]+?=[\s]+?)(\d+)')
-	$content = $content -replace $regex, ('${key}	= ' + $val)
-
-	return $content;
-}
-
-try 
-{
-	$ChangeBuild	= 0
-	$ChangeRevis	= 0
-	
-	$___Build__	= 20	# auto increase
-	$___Revis__	= 0	# auto increase
-	
-	$AppCompany		= "Nilesoft"
-	$AppName		= "Shell"
-	$AppFileName	= "shell"
-	$AppFileExt		= ".dll"
-	$AppProcess		= "64-bit"
-
-	$Major			= 1
-	$Minor			= 9		#[int]$(Get-Date -format yy)
-	$Build 			= $___Build__ #[int](Get-Content "build.txt")
-	$Revis 			= $___Revis__ #[int]$(Get-Date -format Mdd)
-	$YEAR 			= [int]$(Get-Date -format yyyy)
-	
-	if(!$Build) 
+	if($out -ne $text)
 	{
-		$Build = 0
+		[IO.File]::WriteAllText($path, $out, [Text.UTF8Encoding]::new($false))
+		Write-Host "  updated $relative"
 	}
-
-	# locally: increase build number and persit it
-	if($ChangeBuild)
-	{
-		$Build = $Build + 1
-	}
-	
-	if($ChangeRevis)
-	{
-		$Revis = $Revis + 1
-	}
-	
-	#$Build | Set-Content "build.txt"
-	$Version = "$Major.$Minor.$Build.$Revis"
-
-	Debug-Output("Nilesoft Shell version number: $Version")
-
-	# Stable installer identity is not generated data. This tool used to copy a
-	# three-line template over src\setup\wix\var.wxi, which deleted the
-	# per-architecture ProductCodes and all seven component GUIDs with it, and
-	# left setup.wxs referencing variables that no longer existed. Only
-	# version.wxi is generated now; identity.wxi is hashed and checked below.
-	$identityFile = "..\..\setup\wix\identity.wxi"
-	$identityHash = (Get-FileHash -LiteralPath $identityFile -Algorithm SHA256).Hash
-
-	update "Resource.h" "..\..\shared\Resource.h";
-	#update "Shell.rc" "..\..\shared\Resource\Shell.rc";
-	update "manifest.xml" "..\..\shared\Resource\manifest.xml";
-	update "Shell.def" "..\..\dll\src\Shell.def";
-	update "version.wxi" "..\..\setup\wix\version.wxi";
-	
-	if((Get-FileHash -LiteralPath $identityFile -Algorithm SHA256).Hash -ne $identityHash)
-	{
-		throw "version.ps1 modified $identityFile. Package identity is not generated data."
-	}
-
-	$content = (Get-Content $ScriptPath)
-	
-	if($ChangeBuild)
-	{
-		$content = update-regex $content  '___Build__'  $BUILD
-	}
-	
-	if($ChangeRevis)
-	{
-		$content = update-regex $content  '___Revis__'  $Revis
-		#$key = '___Revis__'
-		#$regex = [regex]( '(?<key>\$' + $key + ')([\s]+?=[\s]+?)(\d+)')
-		#$content = $content -replace $regex, ('${key}	= ' + $Revis)
-	}
-	
-	#$content = $content -replace $regex, ('$1 = ' + $BUILD)#  | Set-Content "Version.ps1"
-	$content | Set-Content $ScriptPath
 }
-catch 
+
+# Stable installer identity is not generated data; it must survive this tool.
+$identityFile = Join-Path $ScriptDir '..\..\setup\wix\identity.wxi'
+$identityHash = (Get-FileHash -LiteralPath $identityFile -Algorithm SHA256).Hash
+
+Set-VersionFields '..\..\shared\Resource.h' @(
+	, @('^(#define\s+VERSION_MAJOR\s+)\d+', $Major)
+	, @('^(#define\s+VERSION_MINOR\s+)\d+', $Minor)
+	, @('^(#define\s+VERSION_BUILD\s+)\d+', $Build)
+	, @('^(#define\s+VERSION_REV\s+)\d+', $Revis)
+	, @('^(#define\s+VERSION_YEAR\s+)\d+', $YEAR)
+	, @('^(#define\s+APP_PRODUCT_VERSION\s+L")[^"]*', "$Major.$Minor")
+	, @('^(#define\s+APP_VERSION\s+L")[^"]*', "$Major.$Minor.$Build")
+)
+Set-VersionFields '..\..\shared\Resource\manifest.xml' @(
+	, @('(<assemblyIdentity\s+version=")[^"]*', $Version)
+)
+Set-VersionFields '..\..\dll\src\Shell.def' @(
+	, @('^(VERSION\s+)\d+\.\d+', "$Major.$Minor")
+)
+Set-VersionFields '..\..\setup\wix\version.wxi' @(
+	, @("^(<\?define Version = ')[^']*", "$Major.$Minor.$Build")
+)
+
+if((Get-FileHash -LiteralPath $identityFile -Algorithm SHA256).Hash -ne $identityHash)
 {
-	$errorMessage = $_.Exception.Message
-	Write-Warning "Exception caught: `"$errorMessage`"!"
-	throw $_
+	throw "version.ps1 modified $identityFile. Package identity is not generated data."
 }
-finally
+
+# Persist an auto-increased counter in this script, and only then.
+if($ChangeBuild -or $ChangeRevis)
 {
-	Set-Location -Path $location
+	$self = [IO.File]::ReadAllText($ScriptPath)
+	if($ChangeBuild) { $self = [regex]::Replace($self, '(\$___Build__\s*=\s*)\d+', '${1}' + $Build) }
+	if($ChangeRevis) { $self = [regex]::Replace($self, '(\$___Revis__\s*=\s*)\d+', '${1}' + $Revis) }
+	[IO.File]::WriteAllText($ScriptPath, $self, [Text.UTF8Encoding]::new($false))
 }

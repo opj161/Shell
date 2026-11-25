@@ -46,7 +46,10 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(SolutionDir)shared\VC-LTL.props" Condition="Exists('$(SolutionDir)shared\VC-LTL.props')" />
+    <!-- Unconditional on purpose: this file is checked in, and an Exists() guard
+         here would turn a broken checkout into a silent change of CRT rather
+         than a build error, which is the failure mode SHELL9000 exists to stop. -->
+    <Import Project="$(SolutionDir)shared\VC-LTL.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
@@ -186,14 +189,21 @@
     <ClInclude Include="src\Include\Packages.h" />
     <ClInclude Include="src\Include\ExplorerCommandCatalog.h" />
     <ClInclude Include="src\Include\Diagnostics\MenuPerf.h" />
+    <ClInclude Include="src\Include\Diagnostics\DiagnosticsRing.h" />
     <ClInclude Include="src\Include\BitmapCache.h" />
+    <ClInclude Include="src\Include\ComActivationPolicy.h" />
+    <ClInclude Include="src\Include\HostContract.h" />
+    <ClInclude Include="src\Include\HostMenuPainter.h" />
+    <ClInclude Include="src\Include\ProviderHealth.h" />
+    <ClInclude Include="src\Include\IconResource.h" />
+    <ClInclude Include="src\Include\Mnemonics.h" />
+    <ClInclude Include="src\Include\ConfigLifecycle.h" />
+    <ClInclude Include="src\Include\PackageCatalogService.h" />
     <ClInclude Include="src\Include\ShellExt.h" />
     <ClInclude Include="src\Include\RegistryConfig.h" />
     <ClInclude Include="src\Include\Theme.h" />
     <ClInclude Include="src\Include\Keyboard.h" />
-    <ClInclude Include="src\Include\Styles.h" />
     <ClInclude Include="src\Include\Tip.h" />
-    <ClInclude Include="src\Include\UTheme.h" />
     <ClInclude Include="src\Include\win32_hook.h" />
     <ClInclude Include="src\Parser\IdentHash.h" />
     <ClInclude Include="src\Parser\Lexer.h" />
@@ -224,8 +234,11 @@
     <ClCompile Include="src\Selections.cpp" />
     <ClCompile Include="src\ShellExt.cpp" />
     <ClCompile Include="src\ContextMenu.cpp" />
+    <ClCompile Include="src\MenuPresenter.cpp" />
     <ClCompile Include="src\ExplorerCommand.cpp" />
+    <ClCompile Include="src\PackageCatalogService.cpp" />
     <ClCompile Include="src\MenuPerf.cpp" />
+    <ClCompile Include="src\DiagnosticsRing.cpp" />
     <ClCompile Include="src\Packages.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="src\Initializer.cpp" />

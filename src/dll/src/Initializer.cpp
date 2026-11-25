@@ -2,6 +2,7 @@
 #include <pch.h>
 #include "Include\Hooker.h"
 #include "Include/ContextMenu.h"
+#include "ConfigShadow.h"
 
 namespace Nilesoft
 {
@@ -61,26 +62,471 @@ namespace Nilesoft
 
 		bool Initializer::init()
 		{
+			std::unique_lock<std::mutex> reload_lock(_reload_mutex);
+
+			// Under _reload_mutex on purpose: start() never joins a running
+			// watcher, so re-pointing it from here cannot wait on the watcher
+			// thread, which may itself be blocked on this mutex.
+			ParseOutcome outcome;
+			if(load_generation(nullptr, outcome))
+			{
+				// Watch what was actually read, whichever set that turned out
+				// to be. Re-pointed on every successful load, because an edit
+				// can add or remove an import and the old watch set would then
+				// be watching the wrong directories.
+				// docs/refactor/03-config-safety.md section 3.
+				start_watching(outcome.files, outcome.stamps);
+				return true;
+			}
+
+			// Where and why the file the user edits failed. Captured before
+			// anything else runs, because a successful shadow parse clears it.
+			auto failure = LastError;
+
+			Status.Error.store(true, std::memory_order_relaxed);
+
+			// The publish never ran, so whatever generation was already live is
+			// untouched and still correct. That is the difference between
+			// StaleWithError, which keeps serving menus, and a process that has
+			// genuinely never loaded a configuration.
+			auto served = has_snapshot();
+
+			// A process that starts while the file is broken has nothing in
+			// memory to fall back on, and that is the case the in-memory half of
+			// last-known-good cannot cover. Try the shadow of the last set that
+			// parsed cleanly. If that fails too, there is nothing to serve and
+			// query() refuses, which is the old behaviour and the right one.
+			// docs/refactor/03-config-safety.md section 1b
+			if(!served)
+			{
+				auto shadow = ConfigShadow::resolve(ConfigShadow::default_directory());
+				if(!shadow.empty())
+				{
+					// Its files are the shadow's copies under %LocalAppData%, not
+					// anything the user edits, so its outcome is dropped.
+					string path = shadow.c_str();
+					ParseOutcome shadow_outcome;
+					if(load_generation(&path, shadow_outcome))
+					{
+						served = true;
+						Logger::Warning(L"configuration failed to parse; serving the last known good copy from '%s'",
+										shadow.c_str());
+					}
+				}
+			}
+
+			// Watch the user's own files - the set the failed parse read, or the
+			// root it could not - so fixing or creating them reloads. Pointing
+			// at the shadow's would leave the fix unnoticed.
+			start_watching(outcome.files, outcome.stamps);
+
+			// A successful parse - of the shadow - reports itself as a healthy
+			// load, and that is the wrong story to tell here: the file the user
+			// edits is still broken, and the error is what a UI reports and what
+			// `shell.exe` has to be able to show. Put it back.
+			if(served)
+			{
+				LastError = failure;
+				Status.Error.store(true, std::memory_order_relaxed);
+			}
+
+			Status.Stale.store(served, std::memory_order_relaxed);
+
+			// A reload was requested and has now been attempted. Leaving the flag
+			// set would re-parse the broken file for every menu - which is exactly
+			// right for a file that merely could not be opened: the next menu
+			// retries, and the attempt fails at the open, which costs nothing.
+			Status.Refresh.store(outcome.unreadable, std::memory_order_relaxed);
+
+			// Served, from an older generation or from the shadow. Returning
+			// false here would cost exactly one menu: query() passes this result
+			// straight back to its caller, and only the *next* attempt would see
+			// the snapshot and serve it.
+			return served;
+		}
+
+		namespace
+		{
+			/*
+				Copy into a fixed field, truncating rather than overflowing.
+
+				string::Copy's count-taking overload writes count characters and
+				*then* a terminator, so it needs count + 1 slots - passing the
+				capacity overruns by one. That is the same off-by-one family as
+				the `release(n - 1)` shape AGENTS.md records, so this says the
+				rule in terms of the array's own size and never takes a count.
+			*/
+			template<size_t N>
+			void copy_into(wchar_t (&dst)[N], const wchar_t *src)
+			{
+				dst[0] = L'\0';
+				if(!src)
+					return;
+
+				size_t i = 0;
+				for(; i + 1 < N && src[i]; i++)
+					dst[i] = src[i];
+				dst[i] = L'\0';
+			}
+		}
+
+		/*
+			The compiled COM activation policy, published for the hook to read.
+
+			Separate from the CACHE and from _snapshot_mutex on purpose:
+			CoCreateInstanceHook runs on every in-process and local-server
+			activation in the host, and taking a mutex there to answer "is there
+			anything to do?" would be the cost this compile exists to remove.
+			An atomic shared_ptr swap gives the hook a lock-free read and the
+			same publish-once semantics the config snapshot has.
+
+			docs/refactor/01-takeover-contract.md section 9.
+		*/
+		namespace
+		{
+			std::mutex _policy_mutex;
+			std::shared_ptr<const ComActivationPolicy> _policy;
+		}
+
+		std::shared_ptr<const ComActivationPolicy> current_com_policy()
+		{
+			std::lock_guard<std::mutex> lock(_policy_mutex);
+			return _policy;
+		}
+
+		/*
+			Compile it, from the same rules the hook used to walk per activation.
+
+			Every CLSID any static rule names goes in, whether or not the rule
+			carries a `where` - a mentioned CLSID is worth evaluating, and only
+			the evaluation can say whether it is actually blocked right now. What
+			the set buys is the far commoner answer: this CLSID is named by
+			nothing, so there is no rule to evaluate and no Context to build.
+		*/
+		void Initializer::compile_com_policy(const CACHE *cache)
+		{
+			auto policy = std::make_shared<ComActivationPolicy>();
+
+			if(cache)
+			{
+				for(auto rule : cache->statics)
+				{
+					if(!rule || !rule->has_clsid)
+						continue;
+
+					for(auto &id : rule->clsid)
+					{
+						if(id.empty())
+							continue;
+
+						// Sixteen bytes of GUID, copied. No parsing, no
+						// allocation, and no dependence on GUID's layout beyond
+						// its size - which is what the static_assert checks.
+						static_assert(sizeof(GUID) == 2 * sizeof(unsigned long long),
+									  "a CLSID key is exactly the GUID's bytes");
+						ClsidKey key{};
+						::memcpy(&key, static_cast<const GUID *>(&id), sizeof(GUID));
+						policy->mention(key, rule->where != nullptr);
+					}
+				}
+
+				// The Win11 priority rule matches one Windows CLSID rather than
+				// a configured one, so it needs the hook on its own.
+				policy->set_suppresses_modern_menu(cache->settings.priority != nullptr);
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(_policy_mutex);
+				_policy = policy;
+			}
+		}
+
+		/*
+			The process's one configuration watcher.
+
+			Process lifetime and no destructor, like the other services here.
+			uninit() stops it; nothing destroys it, because a static whose
+			destructor could run while its thread is still in a callback is a
+			crash waiting for an unlucky shutdown.
+		*/
+		ConfigWatcher &config_watcher()
+		{
+			static auto *watcher = new ConfigWatcher();
+			return *watcher;
+		}
+
+		/*
+			What the watcher does when one of the loaded files is written.
+
+			Runs the ordinary init() publish path on the watcher's own thread.
+			That is safe for the reason the snapshot design exists: init()
+			builds a whole new CACHE and swaps a shared_ptr under
+			_snapshot_mutex, and a menu that is already open holds its own copy
+			of the generation it started with. It never touches a live session.
+
+			init() also takes _reload_mutex, which is what serialises this
+			against a menu thread reloading from a keyboard combo at the same
+			moment.
+
+			A failed parse is not an error here: last-known-good keeps the
+			previous generation live and the error surfaces the usual way. That
+			is precisely what makes reloading on every save safe to do at all -
+			a half-typed file mid-edit costs nothing.
+		*/
+		void Initializer::on_config_file_changed()
+		{
+			if(auto *initializer = Initializer::instance)
+			{
+				if(Status.Disabled.load(std::memory_order_relaxed))
+					return;
+
+				initializer->init();
+			}
+		}
+
+		/*
+			Point the watcher at a set of files.
+
+			Best-effort throughout: a configuration on a network share may never
+			notify at all (FindFirstChangeNotification's own page says so), so a
+			watcher that fails to start is not an error and the keyboard combos
+			remain exactly as they were.
+		*/
+		void Initializer::start_watching(const std::vector<std::wstring> &files,
+										 const std::vector<uint64_t> &stamps)
+		{
+			config_watcher().start(files, stamps, &Initializer::on_config_file_changed);
+		}
+
+		/*
+			The setup a Parser needs before Load() can be called.
+
+			Extracted so that check() can build exactly what the publishing path
+			builds - a parse against a half-initialised CACHE is not the same
+			parse, and a `-check` that answered a different question from the one
+			the DLL asks at load time would be worse than not having it.
+		*/
+		std::unique_ptr<Parser> Initializer::prepare_parser(const string *config_path, CACHE *cache)
+		{
+			cache->glyph.name = FontCache::Default;
+			load_mui(cache);
+
+			auto parser = config_path ? std::make_unique<Parser>(*config_path)
+									  : std::make_unique<Parser>();
+			parser->context.Cache = cache;
+			parser->context.variables.global = &cache->variables.global;
+			parser->context.variables.runtime = &cache->variables.runtime;
+			return parser;
+		}
+
+		/*
+			Parse and report. Publishes nothing, bumps no generation, writes no
+			shadow, and leaves Status and LastError exactly as it found them -
+			`shell.exe -check` runs in its own short-lived process, but the
+			export is callable from anywhere and a diagnostic that changed what
+			it was diagnosing would be a trap.
+
+			docs/refactor/03-config-safety.md section 1b step 4.
+		*/
+		int Initializer::check(const wchar_t *config_path, ConfigCheckResult &result)
+		{
+			// cbSize belongs to the caller; everything else is ours to fill.
+			auto size = result.cbSize;
+			result = ConfigCheckResult{};
+			result.cbSize = size;
+
 			try
 			{
-				std::unique_lock<std::mutex> reload_lock(_reload_mutex);
+				// Never published, never handed to a menu. It exists so the
+				// parse has somewhere to build into.
+				auto cache = std::make_shared<CACHE>();
 
+				string path;
+				if(config_path && *config_path)
+					path = config_path;
+
+				auto parser = prepare_parser(path.empty() ? nullptr : &path, cache.get());
+
+				auto loaded = parser->Load();
+
+				// Path() is the file the parser was in when it stopped, which
+				// for a failed import is not the file that was asked about.
+				if(auto where = parser->Path(); where && *where)
+					copy_into(result.path, where);
+
+				if(!loaded || parser->HasError())
+				{
+					auto code = parser->Error();
+					result.error = static_cast<int32_t>(code);
+					result.line = static_cast<uint32_t>(parser->Line());
+					result.column = static_cast<uint32_t>(parser->Column());
+					copy_into(result.message, ParserException::errortostr(code));
+					return CONFIG_CHECK_FAILED;
+				}
+
+				const auto &files = parser->LoadedFiles();
+
+				/*
+					A file that could not be opened is a *successful* parse as
+					far as Load() is concerned - it returns true when the root
+					lexer read nothing (Parser.cpp, the `l->length == 0` early
+					return), because a machine with no shell.nss must still get
+					a working shell rather than an error on every menu.
+
+					For a validator that answer is exactly wrong: somebody who
+					runs -check on a path they typed wrong would be told their
+					configuration is fine. LoadedFiles() is empty in precisely
+					that case - open_root only records the root once load_File
+					has succeeded - so that is the discriminator.
+				*/
+				if(files.empty())
+				{
+					result.error = static_cast<int32_t>(TokenError::CannotFoundConfigFile);
+					copy_into(result.message, path.empty()
+						? L"no configuration file was found"
+						: L"the file could not be read");
+					if(!path.empty())
+						copy_into(result.path, path.c_str());
+					return CONFIG_CHECK_FAILED;
+				}
+
+				result.files = static_cast<uint32_t>(files.size());
+				result.entries = parser->TotalMenuCount;
+
+				/*
+					What `settings { priority }` came to.
+
+					Evaluated the same way CoCreateInstanceHook evaluates it, so
+					the report describes the code's own reading rather than the
+					text. A literal 0 or 1 answers cleanly; anything that
+					depends on the click - `priority = sys.something` - is
+					reported as dynamic rather than guessed at, because a
+					validator that runs on a file has no click to evaluate
+					against.
+
+					The caller pairs this with the machine's TreatAs state:
+					on a machine registered with -treat the setting is inert
+					whatever it says, and saying so is the whole point of
+					carrying it out here.
+					docs/refactor/01-takeover-contract.md section 9b.
+				*/
+				result.priority = CONFIG_CHECK_PRIORITY_UNSET;
+				if(cache->settings.priority)
+				{
+					result.priority = CONFIG_CHECK_PRIORITY_DYNAMIC;
+					try
+					{
+						Context context;
+						Object value = context.Eval(cache->settings.priority).move();
+						if(value.is_number())
+						{
+							// to_bool(), not static_cast<bool>. Object declares
+							// a non-template `explicit operator bool` that means
+							// *not null*, and being non-template it wins the
+							// overload against the numeric conversion template -
+							// so static_cast<bool> on a numeric zero is true.
+							// The hook next door avoids it by assigning to a
+							// bool, where the explicit operator is not a
+							// candidate; this says which one it wants.
+							result.priority = value.to_bool()
+								? CONFIG_CHECK_PRIORITY_ON
+								: CONFIG_CHECK_PRIORITY_OFF;
+						}
+					}
+					catch(...)
+					{
+						// An expression that throws when evaluated without a
+						// selection is exactly the dynamic case.
+					}
+				}
+
+				// The root, which is the file a user asked about even when they
+				// named none. Only overwritten on success: on failure the
+				// erroring file is the more useful answer.
+				copy_into(result.path, files.front().c_str());
+
+				return CONFIG_CHECK_OK;
+			}
+			catch(...)
+			{
+				// A parse can throw ParserException, and anything that escapes
+				// here still has to produce a report rather than a crash in a
+				// process the user ran to be told what is wrong.
+				if(result.message[0] == L'\0')
+					copy_into(result.message, L"the configuration could not be parsed");
+				if(result.error == 0)
+					result.error = static_cast<int32_t>(TokenError::Unknown);
+				return CONFIG_CHECK_FAILED;
+			}
+		}
+
+		/*
+			One parse into one new generation, published only if it succeeds.
+
+			`config_path` is null for the real configuration and set when
+			re-parsing the last-known-good shadow, which is the one case where
+			the file being read is not the one the user edits - so it is also
+			the one case that must not overwrite the shadow with itself.
+		*/
+		bool Initializer::load_generation(const string *config_path, ParseOutcome &outcome)
+		{
+			try
+			{
 				auto new_cache = std::make_shared<CACHE>();
 				new_cache->generation = ++_generation;
-				new_cache->glyph.name = FontCache::Default;
 
-				load_mui(new_cache.get());
+				auto parser = prepare_parser(config_path, new_cache.get());
 
-				Parser parser;
-				parser.context.Cache = new_cache.get();
-				parser.context.variables.global = &new_cache->variables.global;
-				parser.context.variables.runtime = &new_cache->variables.runtime;
+				auto parsed = parser->Load();
 
-				if(!parser.Load())
+				// What to watch, on success and failure alike. A parse that read
+				// no file still names the root it tried, with the stamp taken
+				// before the attempt (zero if absent), so creating or releasing
+				// that file triggers a reload.
+				outcome.files = parser->LoadedFiles();
+				outcome.stamps = parser->LoadedStamps();
+				if(outcome.files.empty() && !parser->RootPath().empty())
 				{
-					Status.Error.store(true, std::memory_order_relaxed);
+					outcome.files.emplace_back(parser->RootPath().c_str());
+					outcome.stamps.push_back(parser->RootStamp());
+				}
+
+				if(!parsed)
+					return false;
+
+				/*
+					A root that does not exist or could not be opened is a
+					*successful* parse as far as Load() is concerned - a machine
+					with no shell.nss must still get a working shell. That holds for
+					a missing file only. One that exists but cannot be opened (an
+					editor holding it for write, measured) is not "no configuration",
+					and neither case may publish an empty one over a generation or
+					shadow already in hand. init() then asks the next menu to retry,
+					because releasing a file changes no stamp the watcher could see -
+					logged once, not once per retry, since a file that stays
+					unreadable would otherwise add a line to shell.log per right-click.
+					An emptied-but-readable file is not this case.
+				*/
+				outcome.unreadable = parser->RootUnavailable() && parser->RootStamp() != 0;
+				if(outcome.unreadable ||
+				   (parser->RootUnavailable() &&
+					(has_snapshot() || !ConfigShadow::resolve(ConfigShadow::default_directory()).empty())))
+				{
+					const bool reported = LastError.code == TokenError::CannotFoundConfigFile;
+					LastError = { TokenError::CannotFoundConfigFile, 0, 0 };
+					if(!reported)
+						Logger::Error(L"error %s, \"%s\"",
+									  ParserException::errortostr(TokenError::CannotFoundConfigFile),
+									  parser->RootPath().c_str());
 					return false;
 				}
+
+				// Carry the file list into the generation before the parser is
+				// destroyed. Every rule's provenance is an index into it, and
+				// the two have to travel together - a rule read from generation
+				// N resolving its file against generation N+1's list would name
+				// a real file that is the wrong one. Include/RuleProvenance.h.
+				new_cache->files = parser->LoadedFiles();
 
 				for(auto &id : new_cache->muid)
 				{
@@ -106,8 +552,28 @@ namespace Nilesoft
 				LastError = {};
 				Status.Loaded.store(true, std::memory_order_relaxed);
 				Status.Error.store(false, std::memory_order_relaxed);
+				Status.Stale.store(false, std::memory_order_relaxed);
 				Status.Refresh.store(false, std::memory_order_relaxed);
-				Status.Disabled.store(false, std::memory_order_relaxed);
+
+				// Shadow the set that just parsed, so a process that starts
+				// after this file is broken still has something to serve. Not
+				// when re-parsing the shadow itself: that would be copying it
+				// over itself, and the paths would be the shadow's own.
+				// save() is a no-op when the manifest would not change, which
+				// is what stops every process on the machine rewriting it.
+				if(!config_path)
+				{
+					const auto &loaded = parser->LoadedFiles();
+					const auto &loaded_stamps = parser->LoadedStamps();
+					if(!loaded.empty())
+						ConfigShadow::save(ConfigShadow::default_directory(), loaded.front(), loaded, loaded_stamps);
+				}
+
+				// Compile the activation policy from the generation that has
+				// just been published, so the hook reads a policy that matches
+				// the configuration serving menus.
+				// docs/refactor/01-takeover-contract.md section 9.
+				compile_com_policy(new_cache.get());
 
 				return true;
 			}
@@ -122,6 +588,10 @@ namespace Nilesoft
 
 		bool Initializer::uninit()
 		{
+			// Before the snapshot goes, so nothing is watching for a
+			// configuration this process has stopped serving.
+			config_watcher().stop();
+
 			try
 			{
 				{
@@ -141,30 +611,28 @@ namespace Nilesoft
 			return true;
 		}
 
-		bool Initializer::query(int ch)
+		bool Initializer::query()
 		{
 			try
 			{
-				if(Status.Disabled.load(std::memory_order_relaxed))
+				switch(decide_config_serve(Status.Disabled.load(std::memory_order_relaxed),
+										   Status.Refresh.load(std::memory_order_relaxed),
+										   Status.Error.load(std::memory_order_relaxed),
+										   has_snapshot()))
 				{
-					uninit();
-					return false;
-				}
+					case ConfigVerdict::Refuse:
+						if(Status.Disabled.load(std::memory_order_relaxed))
+							uninit();
+						return false;
 
-				if(Status.Error.load(std::memory_order_relaxed) && ch < 2)
-					return false;
+					case ConfigVerdict::Reparse:
+						return init();
 
-				if(Status.Refresh.load(std::memory_order_relaxed))
-					return init();
-
-				{
-					std::lock_guard<std::mutex> lock(_snapshot_mutex);
-					if(_snapshot)
+					case ConfigVerdict::Serve:
 						return true;
 				}
 
-				return init();
-
+				return false;
 			}
 			catch(...)
 			{
@@ -210,6 +678,15 @@ namespace Nilesoft
 		{
 			if(Status.Error.load(std::memory_order_relaxed))
 			{
+				// StaleWithError. The newest parse failed, but a generation
+				// published by an earlier one is still in memory, so there is
+				// something to serve and the callers that use this to decide
+				// whether to take the menu over should keep taking it. Refusing
+				// here is what made one typo in shell.nss remove the context
+				// menu from every process on the desktop.
+				if(has_snapshot())
+					return false;
+
 				return detect_changes ? !config_has_changed() : true;
 			}
 			return false;
@@ -783,17 +1260,18 @@ namespace Nilesoft
 		// enabled/reload
 		// disabled
 		// mix
-		bool Initializer::OnState(bool istaskbar)
+		/*
+			Read the keyboard once, into plain data.
+
+			The count the classifier wants is "keys the user is deliberately
+			holding", so the buttons that caused this click come off first: the
+			right button itself, and the Shift+F10 pair when the click arrived
+			as the context-menu key rather than as a mouse click.
+		*/
+		GestureState Initializer::read_gesture(bool istaskbar)
 		{
-			bool reloaded = false;
-
-			int changed = 0;
-
 			Keyboard kb;
-			auto count = kb.get_keys_state();
-
-			if(istaskbar && kb.is_lbutton())
-				return false;
+			int count = kb.get_keys_state();
 
 			if(kb.is_rbutton())
 				count--;
@@ -801,48 +1279,67 @@ namespace Nilesoft
 			if(kb.is_contextmenu())
 				count -= 2;
 
-			if(count == 0 || count > 2)
-				return changed;
+			GestureState state;
+			state.held = count;
+			state.ctrl = kb.key_ctrl();
+			state.shift = kb.key_shift();
+			state.win = kb.key_win();
+			state.alt = kb.key_alt();
+			state.lbutton = kb.is_lbutton();
+			state.f5 = kb.key(VK_F5);
+			state.taskbar_lbutton = istaskbar && kb.is_lbutton();
+			return state;
+		}
 
-			auto kwin = kb.key_win();
-			auto kctrl = kb.key_ctrl();
-			auto kshift = kb.key_shift();
+		bool Initializer::OnState(bool istaskbar)
+		{
+			return OnState(classify_click(istaskbar));
+		}
 
-			//int key = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+		/*
+			Act on an already-classified gesture.
 
-			if(count == 1)
+			The hook classifies once and passes the result to both this and its
+			own bypass check, so the two cannot disagree about what the user
+			pressed - which they could when each read the keyboard for itself.
+			See Include/TakeoverGesture.h.
+		*/
+		bool Initializer::OnState(Gesture gesture)
+		{
+			bool reloaded = false;
+
+			int changed = 0;
+
+			switch(gesture)
 			{
-				if(kctrl || kb.is_lbutton() || kb.key(VK_F5)) // reload/enabled shell
-				{
-					//Modern(1);
+				case Gesture::ReloadConfig:
 					Status.Disabled = false;
 					Status.Refresh = true;
 					changed = 1;
-				}
-				else if(kwin) // modern + shell
-				{
-					//if(Status.Unload)
-					//	Status.Unload = false;
-					//Modern(0);
+					break;
+
+				case Gesture::PreferModern:
 					Status.Refresh = false;
 					changed = 1;
-				}
-			}
-			else if(count == 2)
-			{
-				if(kctrl && kwin) // disabled shell/modern
-				{
-					//Modern(2);
+					break;
+
+				case Gesture::DisableShell:
 					Status.Disabled = true;
 					Status.Refresh = false;
 					changed = 1;
-				}
-				else if(kshift && kctrl) // reload/enabled shell
-				{
-					Status.Disabled = false;
-					Status.Refresh = true;
-					changed = 2;
-				}
+					break;
+
+				// Handled by the caller, before any Shell work runs. It
+				// deliberately changes no configuration state - the whole point
+				// is that this one click leaves everything as it was.
+				// Both are handled by the caller, before any Shell work runs,
+				// and both deliberately change no configuration state - the
+				// point of each is that this one click leaves everything as it
+				// was.
+				case Gesture::BypassOnce:
+				case Gesture::Inspect:
+				case Gesture::None:
+					break;
 			}
 
 			if(changed > 0)
@@ -851,7 +1348,12 @@ namespace Nilesoft
 					Initializer::instance->uninit();
 				else if(Status.Refresh)
 				{
-					Initializer::instance->query(changed);
+					// Status.Refresh is already set, and that is what makes
+					// query() re-parse. It used to also need `changed` to be 2
+					// to get past the error gate, so Ctrl+right-click could not
+					// recover a configuration that had failed to parse and
+					// Shift+Ctrl+right-click was the only way back.
+					Initializer::instance->query();
 					reloaded = true;
 				}
 			}

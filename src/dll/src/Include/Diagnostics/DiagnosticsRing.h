@@ -1,0 +1,391 @@
+﻿#pragma once
+
+/*
+	Where a menu's time went, recorded whether or not anybody asked.
+
+	MenuPerf is opt-in for a good reason: Logger opens, appends and closes the
+	log file for every line, so leaving it on would put file I/O on the exact
+	path it exists to measure. But that reason is about the *sink*, not about the
+	measurement, and it has a cost of its own - the phase timings only exist on a
+	machine where somebody has already reproduced the problem and set a registry
+	value. Everything built on top of them (provider health, a regression budget,
+	an answer to "why is my menu slow?") needs the numbers to be there the first
+	time.
+
+	So: keep the phases, change the sink. Timing goes into a fixed-size ring in
+	memory, always. The log file is written only when the perf value is set, and
+	only for phases that breach its floor, exactly as before.
+
+	What that costs, per phase: two QueryPerformanceCounter calls and a store
+	into a thread-local array. No lock, no allocation, no formatting. The only
+	lock is taken once per menu, after it has closed, to copy one record into the
+	process-wide ring.
+
+	Measured rather than asserted, on this machine (Windows 11 26200.8875 x64,
+	2026-08-24), against the budget of 1 us per phase record that
+	docs/refactor/02-first-paint-latency.md section 7 sets:
+
+		session_phase(), the store alone           2.7 ns
+		a full phase, two QPC calls plus the store  47.8 ns
+		a whole menu, twelve phases and publish    ~0.6 us
+
+	So publishing costs about 70 ns, and an entire menu's worth of always-on
+	timing costs less than one phase was budgeted. The ring itself is 30 KB of
+	fixed storage - 600 bytes a record, fifty of them - allocated once.
+
+	Concurrency. Menu sessions run on several threads at once - Explorer windows,
+	each taskbar - so the ring is many-writer. Rather than guard it per phase,
+	each session accumulates into thread-local storage, where it has exactly one
+	writer and needs no synchronisation at all, and publishes once at the end.
+
+	Nesting. A menu can open while another is up (TPM_RECURSE), and Shell's own
+	hook can re-enter. Sessions therefore nest by depth: the inner ones fold
+	their phases into the outer record and only the outermost publishes. Losing
+	the inner boundary is better than either clobbering the outer session or
+	allocating.
+
+	Overflow is counted, not hidden. There are more distinct phase names in the
+	menu path than the eight the plan sketched, and a session that recorded eight
+	and silently dropped the rest would be worse than useless - the phases that
+	go missing under load are exactly the slow ones. dropped_phases says how many
+	did not fit.
+*/
+
+#include <windows.h>
+#include <cstdint>
+#include <mutex>
+
+namespace Nilesoft
+{
+	namespace Shell
+	{
+		namespace Diagnostics
+		{
+			// How the hook resolved one interception. docs/refactor/01 section 2
+			// requires every exit path to map to one of these.
+			enum class TakeoverDecision : uint8_t
+			{
+				Unknown,
+				TakeOver,
+				BypassOnce,
+				Degraded,
+				FailOpen,
+
+				// Shell looked and chose not to compose a menu here: not a
+				// window it handles, a configuration that hides the menu in
+				// this context, or no generation currently being served.
+				//
+				// Separate from FailOpen because the two need opposite
+				// responses. A fail-open is evidence that takeover is broken
+				// and feeds the circuit breaker; a decline is the normal
+				// answer for most popups in a host that is not Explorer, and
+				// counting it switched Shell off for the whole process.
+				// docs/refactor/01-takeover-contract.md section 7a.
+				Declined,
+			};
+
+			enum class ProviderResult : uint8_t
+			{
+				Ok,
+				Pending,		// GetState answered E_PENDING
+				Failed,			// activation or a metadata call failed
+
+				/*
+					Two ways to be left out, and they call for opposite actions.
+
+					DeferredSlow is a judgement about the handler: it has never
+					once answered quickly, so Shell stopped asking until the
+					re-probe interval comes round. The remedy is to quarantine
+					it, or to accept it.
+
+					DeferredBudget is a statement about the *menu*: this handler
+					was never judged at all, the menu simply ran out before
+					reaching it. The remedy is a larger budget or fewer
+					handlers, and quarantining the provider would be punishing
+					it for something it did not do.
+
+					They were one word until docs/refactor/09-remediation-plan.md
+					finding D. Collapsed, a report could not tell "this extension
+					is slow" from "your menu is full", and the Reliability Center
+					offered quarantine for both.
+				*/
+				DeferredSlow,
+
+				// The user quarantined it (docs/refactor/05 section 1b). A
+				// separate word from the deferrals on purpose: "it has never
+				// once been quick" and "you told me to stop asking" are
+				// different answers, and only one of them is Shell's own
+				// judgement.
+				Quarantined,
+
+				// Appended rather than inserted beside DeferredSlow, because
+				// the numeric value is the wire format - see PerfExport.h,
+				// perf_export_result_name. Inserting would have renumbered
+				// Quarantined under a reader that still called 4 by its old
+				// name.
+				DeferredBudget,
+
+				/*
+					The provider answered, and declined this selection.
+
+					FillResult::Hidden used to be reported as Ok, because the
+					call site asked only whether the call had *failed*. Half the
+					handlers on a normal machine decline any given selection -
+					the comment on CommandStateVerdict::Hidden says so - which
+					made Ok the answer for both "this verb is in the menu" and
+					"this verb looked and had nothing to offer", and those are
+					the two states a reader of the report most needs to tell
+					apart. It is what made "Resize with Image Resizer  Ok" on a
+					.json unreadable: equally consistent with the verb being
+					shown and with it being correctly dropped.
+
+					Appended for the same reason DeferredBudget was, and
+					PERF_EXPORT_VERSION moves with it so an older reader refuses
+					the block rather than calling 6 by a name it does not have.
+				*/
+				Hidden,
+
+				/*
+					Skipped without being activated, because the item it would have
+					produced is already in this menu as a native item.
+
+					Its own word rather than silence, and rather than one of the
+					deferrals. A deferral means the user lost an item; this means the
+					user lost nothing and the menu saved a provider's whole cost - so
+					it calls for no remedy at all, and offering quarantine for it
+					would be exactly the confusion DeferredSlow and DeferredBudget
+					were split apart to avoid.
+				*/
+				Duplicate,
+			};
+
+			struct PhaseRecord
+			{
+				// A literal. Every phase name in the tree is a string literal
+				// with static storage, so this is a pointer rather than a copy -
+				// which is what makes recording a phase free of allocation.
+				const wchar_t *name{};
+				uint32_t microseconds{};
+				int32_t count{ -1 };	// items, depth, whatever the phase counts
+			};
+
+			struct ProviderRecord
+			{
+				uint32_t clsid_hash{};
+				uint32_t microseconds{};
+				ProviderResult result{ ProviderResult::Ok };
+			};
+
+			// Sized from the phases that exist rather than from a round number:
+			// the menu path currently names eleven, plus three SEH-safe marks in
+			// the hook, and a nested session folds its own in on top.
+			inline constexpr uint8_t MAX_PHASES = 24;
+			// 16 was fewer than this machine's 23 registered handlers, so a
+			// menu that asked them all dropped the tail before the export
+			// even saw it. Measured on a 200-file selection, 2026-08-25.
+			inline constexpr uint8_t MAX_PROVIDERS = 32;
+			inline constexpr size_t RING_CAPACITY = 50;
+
+			struct MenuSessionRecord
+			{
+				uint64_t tick{};			// GetTickCount64 at session start
+				uint32_t host_hash{};
+
+				// The uFlags the host passed to its own tracking call, verbatim,
+				// before Shell touched them.
+				//
+				// This is what says which half of complete_host_contract a host
+				// exercises. A host that sets TPM_RETURNCMD gets an identifier
+				// back; one that does not is told TRUE and notified separately,
+				// and until a real third-party host was measured there was no way
+				// to know which of those two paths had ever run outside a test.
+				// docs/refactor/01-takeover-contract.md section 3.
+				uint32_t host_flags{};
+				uint32_t total_microseconds{};
+				TakeoverDecision decision{ TakeoverDecision::Unknown };
+				uint8_t phase_count{};
+				uint8_t provider_count{};
+				uint8_t dropped_phases{};
+				uint8_t dropped_providers{};
+				PhaseRecord phases[MAX_PHASES]{};
+				ProviderRecord providers[MAX_PROVIDERS]{};
+
+				void reset()
+				{
+					*this = MenuSessionRecord{};
+				}
+
+				void add_phase(const wchar_t *name, uint32_t microseconds, int32_t count)
+				{
+					if(phase_count >= MAX_PHASES)
+					{
+						if(dropped_phases < 255)
+							dropped_phases++;
+						return;
+					}
+					phases[phase_count].name = name;
+					phases[phase_count].microseconds = microseconds;
+					phases[phase_count].count = count;
+					phase_count++;
+				}
+
+				void add_provider(uint32_t clsid_hash, uint32_t microseconds, ProviderResult result)
+				{
+					if(provider_count >= MAX_PROVIDERS)
+					{
+						if(dropped_providers < 255)
+							dropped_providers++;
+						return;
+					}
+					providers[provider_count].clsid_hash = clsid_hash;
+					providers[provider_count].microseconds = microseconds;
+					providers[provider_count].result = result;
+					provider_count++;
+				}
+			};
+
+			/*
+				The process-wide ring. Fixed storage, one lock, taken only by
+				publish() and by a reader - never on the measured path.
+
+				Process lifetime and no destructor, like every other service here:
+				the module is pinned for the life of the host, and a static whose
+				destructor could run while a menu thread is still publishing is a
+				crash waiting for an unlucky shutdown.
+			*/
+			class DiagnosticsRing
+			{
+			public:
+				// Constructible on its own as well as through instance(): the
+				// wrap and ordering rules are worth testing without reaching for
+				// process-wide state a previous test may have written to.
+				DiagnosticsRing() = default;
+
+				DiagnosticsRing(const DiagnosticsRing &) = delete;
+				DiagnosticsRing &operator=(const DiagnosticsRing &) = delete;
+
+				static DiagnosticsRing &instance()
+				{
+					static DiagnosticsRing *ring = new DiagnosticsRing();
+					return *ring;
+				}
+
+				void publish(const MenuSessionRecord &record)
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					_records[_next] = record;
+					_next = (_next + 1) % RING_CAPACITY;
+					if(_size < RING_CAPACITY)
+						_size++;
+					_published++;
+				}
+
+				// Copies out the most recent sessions, newest first. Returns how
+				// many were written. The caller owns the buffer; nothing here
+				// hands out a pointer into the ring, because a reader that walked
+				// it while a menu closed would read a half-written record.
+				size_t snapshot(MenuSessionRecord *out, size_t capacity) const
+				{
+					if(!out || capacity == 0)
+						return 0;
+
+					std::lock_guard<std::mutex> lock(_mutex);
+					auto want = capacity < _size ? capacity : _size;
+					for(size_t i = 0; i < want; i++)
+					{
+						// _next is one past the newest, so walk backwards from
+						// there, wrapping.
+						auto index = (_next + RING_CAPACITY - 1 - i) % RING_CAPACITY;
+						out[i] = _records[index];
+					}
+					return want;
+				}
+
+				size_t size() const
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					return _size;
+				}
+
+				// Total ever published, which keeps counting after the ring wraps.
+				uint64_t published() const
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					return _published;
+				}
+
+				void clear()
+				{
+					std::lock_guard<std::mutex> lock(_mutex);
+					_next = 0;
+					_size = 0;
+					_published = 0;
+				}
+
+			private:
+				mutable std::mutex _mutex;
+				MenuSessionRecord _records[RING_CAPACITY]{};
+				size_t _next{};
+				size_t _size{};
+				uint64_t _published{};
+			};
+
+			/*
+				The current session on this thread.
+
+				Thread-local, so the accumulate path has one writer and takes no
+				lock. begin()/end() nest by depth; only the outermost end()
+				publishes.
+			*/
+			struct SessionSlot
+			{
+				MenuSessionRecord record;
+				int depth{};
+				LARGE_INTEGER started{};
+			};
+
+			SessionSlot &current_session() noexcept;
+
+			void session_begin(uint32_t host_hash, uint32_t host_flags) noexcept;
+			void session_phase(const wchar_t *name, uint32_t microseconds, int32_t count) noexcept;
+			void session_provider(uint32_t clsid_hash, uint32_t microseconds, ProviderResult result) noexcept;
+			void session_decision(TakeoverDecision decision) noexcept;
+
+			/*
+				A provider the menu considered, for the export's directory.
+
+				Two calls rather than one, because identity and presentation
+				are known at different moments and one of them may never be
+				known at all - see docs/refactor/05-capabilities.md section 1c
+				for the report line that made this distinction necessary.
+
+				`provider_identity` is what makes a provider *actionable*: the
+				CLSID is what `shell.exe -quarantine:add` takes, and it is
+				knowable from the registration alone. Call it for every
+				candidate, including the ones about to be skipped - a
+				quarantined or deferred provider is exactly the one a user
+				wants to name to a command.
+
+				`provider_name` is the label, from IExplorerCommand::GetTitle,
+				and only exists after a successful activation.
+
+				Neither is part of the session record. A record carries a hash
+				so the measured path never copies a string and so a report can
+				say "these forty menus were all the same handler"; both of
+				these belong to the *provider* rather than to the menu, so they
+				are written once per distinct CLSID per process and read beside
+				the records.
+
+				Each costs a scan of at most 32 integers after the first
+				sighting.
+			*/
+			void provider_identity(uint32_t clsid_hash, const GUID &clsid) noexcept;
+			void provider_name(uint32_t clsid_hash, const GUID &clsid, const wchar_t *name) noexcept;
+
+			// Publishes if this was the outermost begin(). Safe to call without a
+			// matching begin() - it does nothing, which is what a hook path that
+			// bailed before starting a session needs.
+			void session_end() noexcept;
+		}
+	}
+}

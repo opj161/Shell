@@ -8,7 +8,6 @@ namespace Nilesoft
 		bool UNREGISTER{};
 		bool TREAT{};
 		bool CONTEXTMENU{};
-		bool FOLDEREXTENSIONS{};
 		bool ICONOVERLAY{};
 		bool RESTART{};
 		bool SILENT{};
@@ -40,16 +39,6 @@ namespace Nilesoft
 		//reg.exe add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve
 
 		public:
-			static const wchar_t *GetKeyPath()
-			{/*
-#ifndef _WIN64
-				//if(Is64BitWindows())
-				return L"Software\\Classes\\Wow6432Node";
-#endif
-*/
-				return L"Software\\Classes";
-			}
-
 			static bool IsRegistered()
 			{
 				return IsContextMenu() || IsIconOverlay() || IsFolderExtensions();
@@ -69,6 +58,62 @@ namespace Nilesoft
 				}
 
 				bool state = IsRegistered();
+				cached_state.store(state, std::memory_order_relaxed);
+				cached_tick.store(now, std::memory_order_relaxed);
+				return state;
+			}
+
+			/*
+				Is the Windows 11 modern context menu redirected to us?
+
+				`shell.exe -register -treat` writes a TreatAs on
+				{86ca1aa0-...} naming Shell's CLSID, and from then on COM
+				substitutes Shell for the modern menu class. HKCR rather than
+				either hive on its own, because HKCR is the merged view COM
+				itself resolves against - a per-user redirect shadows the
+				machine one, and reading only HKLM would miss it.
+
+				Why this exists, rather than the code just assuming: two
+				separate mechanisms suppress the modern menu and only one of
+				them is a setting. See CoCreateInstanceHook and
+				docs/refactor/01-takeover-contract.md section 9b.
+			*/
+			static bool ModernMenuRedirectedToUs()
+			{
+				string key;
+				key.format(L"CLSID\\%s\\TreatAs",
+						   string::ToString(IID_FileExplorerContextMenu, 2).c_str());
+
+				wchar_t treatas[64]{};
+				DWORD cb = sizeof(treatas);
+				if(ERROR_SUCCESS != ::RegGetValueW(HKCR, key.c_str(), nullptr,
+												   RRF_RT_REG_SZ, nullptr, treatas, &cb))
+					return false;
+
+				// RegGetValueW with RRF_RT_REG_SZ terminates for us - unlike
+				// RegQueryValueEx, whose page says a REG_SZ "is NOT guaranteed
+				// to be null-terminated". The buffer is still bounded and the
+				// comparison is against a fixed string, so a value longer than
+				// this simply is not ours.
+				return string(treatas).equals(CLS_ContextMenu);
+			}
+
+			// Read on every modern-menu activation, so it is cached on the same
+			// two-second terms as IsRegisteredCached. Registration is an
+			// installer-time act; two seconds is far tighter than it needs to be
+			// and keeps a machine that was just registered from looking stale.
+			static bool ModernMenuRedirectedToUsCached()
+			{
+				static std::atomic<uint64_t> cached_tick{ 0 };
+				static std::atomic<bool> cached_state{ false };
+
+				auto now = ::GetTickCount64();
+				auto last = cached_tick.load(std::memory_order_relaxed);
+
+				if(last != 0 && (now - last) < 2000)
+					return cached_state.load(std::memory_order_relaxed);
+
+				bool state = ModernMenuRedirectedToUs();
 				cached_state.store(state, std::memory_order_relaxed);
 				cached_tick.store(now, std::memory_order_relaxed);
 				return state;
@@ -138,26 +183,6 @@ namespace Nilesoft
 
 				int ret = 0;
 
-				if(reg.FOLDEREXTENSIONS)
-				{
-					if(RegisterInprocServer(dllPath, CLS_FolderExtensions, APP_COMP_NAME))
-					{
-						ret++;
-						auto key = Registry::LocalMachine.CreateSubKey(HKLM_DRIVE_FolderExtensions, false);
-						if(key)
-						{
-							ret += key.SetString(nullptr, APP_COMP_NAME);
-							ret += key.SetInt(L"DriveMask", 0xff);
-							key.Close();
-						}
-						else
-						{
-							Registry::DeleteSubKey(HKCR, L"CLSID\\" CLS_FolderExtensions);
-							ret = 0;
-						}
-					}
-				}
-				
 				if(reg.ICONOVERLAY)
 				{
 					// register COM-object for overlay icon handler
@@ -205,8 +230,23 @@ namespace Nilesoft
 			{
 				int ret = 0;
 
+				// Servicing only. No build can write either of these any more - the
+				// register branch and the -f/-force option that reached it are gone.
+				// They are still deleted because `shell.exe -register -force` did
+				// write both, until upstream ed826e1 (2024-12-03) replaced the
+				// passed-through flags with a fresh REGOP setting only CONTEXTMENU
+				// and ICONOVERLAY. A machine registered before then still carries
+				// them, so uninstall has to remove them.
+				//
+				// The HKLM line was commented out, which meant -unregister deleted
+				// the CLSID above and left Drive\shellex\FolderExtensions pointing
+				// at a server that no longer resolves. Restoring it is safe: a
+				// deletion API "report[s] success only when they delete an existing
+				// resource", so an absent key adds 0 to ret, and Unregister returns
+				// ret > 0 - it cannot turn a success into a failure.
+				// https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regdeletetreew
 				ret += Registry::DeleteSubKey(HKCR, L"CLSID\\" CLS_FolderExtensions);
-				//ret += Registry::DeleteSubKey(HKLM, HKLM_DRIVE_FolderExtensions);
+				ret += Registry::DeleteSubKey(HKLM, HKLM_DRIVE_FolderExtensions);
 
 				ret += Registry::DeleteSubKey(HKLM, HKLM_ICONOVERLAY);
 				// unregister COM-object Delete the HKCR\CLSID\{<CLSID>} key.
@@ -217,29 +257,11 @@ namespace Nilesoft
 				ret += Registry::DeleteSubKey(HKCR, L"CLSID\\" CLS_ContextMenu);
 				ret += RegisterContextMenuHandler(false);
 
-				// The Windows 11 modern menu reaches us through a TreatAs redirect on
-				// {86ca1aa0-...}. Deleting our CLSID above without clearing it strands
-				// the redirect on a class that no longer resolves, so the user
-				// uninstalls and is left on the classic menu with nothing to explain
-				// it. This used to be handled only by shell.exe -unregister -treat, so
-				// a bare -unregister left the machine modified.
-				//
-				// Only removed when it actually names our server. The key is closed
-				// before the delete rather than deleted through a live handle.
-				{
-					string key_treatas;
-					key_treatas.format(L"CLSID\\%s\\TreatAs",
-									   string::ToString(IID_FileExplorerContextMenu, 2).c_str());
-
-					wchar_t treatas[64]{};
-					DWORD cb = sizeof(treatas);
-					auto ours = ERROR_SUCCESS == ::RegGetValueW(HKCR, key_treatas.c_str(), nullptr,
-																RRF_RT_REG_SZ, nullptr, treatas, &cb)
-							 && string(treatas).equals(CLS_ContextMenu);
-
-					if(ours)
-						Registry::DeleteSubKey(HKCR, key_treatas);
-				}
+				// The Windows 11 TreatAs redirect is deliberately not touched here.
+				// The key's stock ACL gives Administrators only ReadKey, so a delete
+				// through HKCR fails and this used to ignore the result; removing it
+				// needs the borrowing path in src/shared/TreatAsRegistry.h, which
+				// shell.exe runs on every unregister before it calls this.
 				/*
 					Remove what registration put under .nss, not the whole key.
 
@@ -279,20 +301,6 @@ namespace Nilesoft
 			{
 				if(!fileType || !fileType[0])
 					return false;
-
-				wchar_t default_value[MAX_PATH] { 0 };
-				if(*fileType == L'.')
-				{
-					auto key = Registry::ClassesRoot.OpenSubKey(fileType);
-					// If the key exists and its default value is not empty,
-					// use the ProgID as the file type.
-					if(key)
-					{
-						if(key.GetString(nullptr, default_value, MAX_PATH))
-							fileType = default_value;
-						key.Close();
-					}
-				}
 
 				string subKey = fileType;
 				subKey += HKCR_CONTEXTMENUHANDLERS;

@@ -162,6 +162,7 @@ CString Registry::GetDataAsString(CRegKey& key, const RegistryItem& item) {
 	RegistryKey::RegistryKey(const nullptr_t&) { }
 
 	//RegKey(const RegKey&)=delete;
+	// A copy aliases the source's HKEY and must never close it (m_autoclose stays false).
 	RegistryKey::RegistryKey(const RegistryKey & key)
 	{
 		m_hkey = key.m_hkey;
@@ -169,7 +170,6 @@ CString Registry::GetDataAsString(CRegKey& key, const RegistryItem& item) {
 		m_view = key.m_view;
 		m_writable = key.m_writable;
 		m_autoclose = false;
-		m_ref++;
 	}
 
 	RegistryKey::RegistryKey(HKEY hkeybase, bool writable)
@@ -613,8 +613,7 @@ CString Registry::GetDataAsString(CRegKey& key, const RegistryItem& item) {
 		{
 			if(!is_system_key(m_hkey))
 			{
-				if(m_ref == 0)
-					::RegCloseKey(m_hkey);
+				::RegCloseKey(m_hkey);
 			}
 			m_hkey = nullptr;
 		}

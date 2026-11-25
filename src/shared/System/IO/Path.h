@@ -354,13 +354,35 @@ namespace Nilesoft
 							hres = pf->QueryInterface(IID_IShellLinkDataList, sldl);
 							if(SUCCEEDED(hres))
 							{
-								DWORD dwFlags = 0;
-								sldl->GetFlags(&dwFlags);
+								/*
+									SetFlags takes the whole set, not one flag to
+									merge in: it "Sets the current option settings"
+									and its parameter is "One or more of the
+									SHELL_LINK_DATA_FLAGS that indicate the option
+									settings".
+									https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishelllinkdatalist-setflags
 
-								if(!(dwFlags & SLDF_RUNAS_USER))
+									So `dwFlags |= SLDF_RUNAS_USER` was computed and
+									then thrown away - the call passed the bare
+									literal, which replaced every other option the
+									link carried with just that one. Same family as
+									the `Environment::Expand(value).move()` statements
+									AGENTS.md records: the right value is worked out
+									and never handed over.
+
+									GetFlags is checked now as well. Its out-parameter
+									holds the settings only when it succeeds
+									(https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishelllinkdatalist-getflags),
+									and on failure dwFlags keeps its 0 initialiser -
+									which reads as "no flags set" and would have made
+									the write below clear the link either way.
+								*/
+								DWORD dwFlags = 0;
+								if(SUCCEEDED(sldl->GetFlags(&dwFlags))
+								   && !(dwFlags & SLDF_RUNAS_USER))
 								{
 									dwFlags |= SLDF_RUNAS_USER;
-									sldl->SetFlags(SLDF_RUNAS_USER);
+									sldl->SetFlags(dwFlags);
 								}
 							}
 						}
@@ -482,7 +504,19 @@ namespace Nilesoft
 			{
 				string fixed(path.length() + 1);
 				bool last = false;
-				for(size_t i = 0; i < path.length(); i++)
+				size_t i = 0;
+
+				// A leading pair is the UNC / "\\?\" prefix, not a run to collapse: "\\nas\cfg" must
+				// not become "\nas\cfg". https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+				if(IsSlash(path, 0) && IsSlash(path, 1))
+				{
+					fixed.append(separator);
+					fixed.append(separator);
+					last = true;
+					i = 2;
+				}
+
+				for(; i < path.length(); i++)
 				{
 					if(path[i] == L'/' || path[i] == L'\\')
 					{
@@ -609,7 +643,9 @@ namespace Nilesoft
 				return name.substr(0, p).move();
 			}
 
-			static std::wstring_view Extension(const std::wstring_view &path)
+			// Owns what it returns: a view of the substring built below would point into a
+			// temporary freed at the end of the return statement.
+			static string Extension(const std::wstring_view &path)
 			{
 				if(path.length() == 3 && path[1] == L':')
 					return {};
@@ -627,24 +663,7 @@ namespace Nilesoft
 				return {};
 			}
 
-			/*static std::wstring_view Extension(const std::wstring_view &path)
-			{
-				if(path.length() == 3 && path[1] == ':')
-					return {};
 
-				auto p = path.find_last_of(Path::Separator);
-				p = p == path.npos ? 0 : p + 1;
-
-				auto name = path.substr(p);
-				if(!name.empty())
-				{
-					p = name.find_last_of(L'.');
-					if(p != name.npos)
-						return name.substr(p);
-				}
-				return {};
-			}*/
-			
 			static bool IsAbsolute(const std::wstring_view &path)
 			{
 				if(path.length() >= 3)

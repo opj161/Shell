@@ -1,0 +1,15 @@
+# read-open: popup 00000000000E024C visible=0 owner=0000000000000000 class=(none)
+# depth	pos	id	kind	title	verb
+0	0	268435455	submenu	Term&inal	
+0	1	4294967295	sep		
+0	2	268435456	submenu	&Go To	
+0	3	4294967295	sep		
+0	4	268435458	submenu	Apps	
+0	5	268435459	submenu	windows	
+0	6	268435460	ownerdraw	Desktop	
+0	7	268435461	ownerdraw	Settings	
+0	8	4294967295	sep		
+0	9	268435462	ownerdraw	Task Manager	
+0	10	4294967295	sep		
+0	11	268435463	ownerdraw	Taskbar Settings	
+# top-level items: 12

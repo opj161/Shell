@@ -6,6 +6,15 @@
 	// show menu delay value from 0 to 4000
 	showdelay = 200
 
+	// The most columns a menu taller than the screen may be laid out in
+	// before it falls back to scrolling. Unset, 0 or 1 means "always
+	// scroll", which is the default. Breaks are placed between groups
+	// where one is close enough to the ideal split; a menu whose columns
+	// would not fit side by side, or would still overflow, keeps its
+	// scrollbar instead. An explicit `column` on any item switches this
+	// off for that menu - a hand-made layout is never second-guessed.
+	columns = 3
+
 	// Prevent interaction with these windows or processes
 	exclude
 	{

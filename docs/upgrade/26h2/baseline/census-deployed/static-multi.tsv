@@ -1,0 +1,37 @@
+# depth	pos	id	kind	title	verb
+0	0	209	item	Add to &Favourites	pintohomefile
+0	1	211	item	Send with Tailscale...	tailscale
+0	2	174	item	&Move to OneDrive	
+0	3	0	sep		
+0	4	103	item	Sign and encrypt	
+0	5	109	submenu	More GpgEX options	
+1	0	101	item	Decrypt	
+1	1	102	item	Verify	
+1	2	100	item	Decrypt and verify	
+1	3	104	item	Encrypt	
+1	4	105	item	Sign	
+1	5	103	item	Sign and encrypt	
+1	6	106	item	Import keys	
+1	7	107	item	Create checksums	
+1	8	108	item	Verify checksums	
+1	9	0	sep		
+1	10	110	item	About GpgEX	
+0	6	0	sep		
+0	7	98	submenu	&Give access to	Windows.Share
+1	0	83	item		
+0	8	80	item	Copy &as path	copyaspath
+0	9	79	item	Unlock with File Locksmith	
+0	10	78	item	&Share	Windows.ModernShare
+0	11	77	item	Rename with Pow&erRename	
+0	12	32765	sep		
+0	13	76	submenu	Se&nd to	
+1	0	29	item		
+0	14	32764	sep		
+0	15	25	item	Cu&t	cut
+0	16	26	item	&Copy	copy
+0	17	4294967295	sep		
+0	18	17	item	Create &shortcut	link
+0	19	18	item	&Delete	delete
+0	20	32766	sep		
+0	21	20	item	Pr&operties	properties
+# top-level items: 22

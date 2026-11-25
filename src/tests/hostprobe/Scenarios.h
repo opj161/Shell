@@ -1,0 +1,234 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include "Probe.h"
+
+namespace hostprobe
+{
+	// Invalid is not a shape so much as the absence of one: it tracks a handle
+	// that is not a menu, to find out how a *failed* call differs from a
+	// cancelled one.
+	//
+	// ShellItem is the odd one out and the only shape Shell will take over: the
+	// menu is filled by the shell namespace rather than by AppendMenu, which is
+	// how a file manager builds one. See ShellMenu.h.
+	enum class MenuShape { Flat, WithSubmenu, WithOwnerDraw, Invalid, ShellItem };
+
+	enum class ScriptKind { SelectSecond, SelectInSubmenu, Cancel, UnmatchedChar,
+							UnmatchedCharAfterNavigating,
+							// For ShellItem, whose item identifiers are not
+							// known until the handlers have filled the menu.
+							SelectDrivableCommand,
+						// Steers by title. The only way to reach a mirrored
+						// native item in a by-position menu, where Shell tracks
+						// those under identifiers of its own.
+						SelectByPositionTarget,
+						// The same, one level down: into a submenu the host built,
+						// and to an item inside it. Steered by title at both levels
+						// because neither an identifier nor a position survives
+						// mirroring into a composed menu.
+						SelectNestedByPositionTarget,
+						CancelWhatever,
+							// Reads the menu back through MSAA instead of
+							// choosing anything from it. See MenuReader.h.
+							ReadComposedMenu };
+
+	// Whether a scenario needs Shell in the process. Requiring the flag rather
+	// than detecting the mode is deliberate: QueryContextMenu loads Shell
+	// through COM whether or not anybody asked for it, so a "native" run of a
+	// ShellItem scenario would quietly be a takeover run.
+	enum class Requires { Any, Takeover };
+
+	// What a question scenario asserts. Matrix scenarios use Record and assert
+	// nothing - their output is the baseline, not a verdict.
+	enum class Expect
+	{
+		Record,
+		ReturnEquals,
+		ReturnDiffers,
+		NoCommandMessage,
+		OwnerDrawReachesTheOwner,
+		MenuCommandPositionEquals,
+		FailedWithLastError,
+
+		// Takeover-only. Each is a property rather than a recorded stream,
+		// because a shell menu's contents depend on the machine.
+		ShellTrackedItsOwnMenu,
+		EveryInitPopupHasOneUninit,
+		CommandCarriesTheNativeIdentifier,
+
+		// A host that set MNS_NOTIFYBYPOS is owed WM_MENUCOMMAND carrying the
+		// position of the item in *its own* menu, and no WM_COMMAND at all.
+		// docs/refactor/09-remediation-plan.md R2.
+		MenuCommandNamesTheHostPosition,
+
+		// Rendering, read back off the live menu through MSAA. These are the
+		// properties docs/refactor/08-handoff.md section 3.8 asks for before
+		// paint code moves out of ContextMenu.cpp, and none of them is
+		// reachable from the message stream the other expectations read.
+		EveryComposedItemIsReadable,
+		ComposedOrderSurvivesToTheScreen,
+		ThePopupContainsTheItemsItMeasured,
+		ASubmenuOpensAgainstItsParent,
+
+		// A host that replaces every menu window's procedure (Delphi VCL Styles
+		// does; WizTree) is handed its own menu, and no backdrop of Shell's is
+		// left on screen. Include/HostMenuPainter.h.
+		HostShowsItsOwnMenu,
+	};
+
+	struct Scenario
+	{
+		std::wstring name;
+		UINT flags{ TPM_LEFTALIGN | TPM_RIGHTBUTTON };
+		bool use_ex{};
+		bool notify_by_pos{};
+		MenuShape shape{ MenuShape::Flat };
+		ScriptKind script{ ScriptKind::SelectSecond };
+
+		bool handle_menuchar{};
+		UINT menuchar_action{ MNC_IGNORE };
+		UINT menuchar_operand{};
+
+		Expect expectation{ Expect::Record };
+		UINT expected{};
+		const wchar_t *why{};
+
+		Requires needs{ Requires::Any };
+
+		// Its trace depends on what this machine has installed, so --record and
+		// --verify skip it. The expectation is the whole test.
+		bool machine_specific{};
+
+		// Act like a VCL-styled host: replace the procedure of every #32768 this
+		// thread creates (SetWindowLongPtr at HCBT_CREATEWND) and restore it at
+		// HCBT_DESTROYWND.
+		bool host_replaces_menu_procs{};
+	};
+
+	struct Result
+	{
+		std::wstring name;
+		std::wstring trace;
+		int returned{};
+		DWORD last_error{};
+
+		size_t command_ids{};
+		size_t menu_commands{};
+		size_t measure_items{};
+		size_t draw_items{};
+		size_t menu_selects{};
+		size_t init_popups{};
+		size_t uninit_popups{};
+
+		UINT command_id{};
+		UINT command_position{};
+		HMENU command_menu{};
+
+		// Where the item the script chose sits in the host's own menu, and the
+		// menu that holds it. Read off the host's HMENU before tracking, so the
+		// expectation compares what Shell replayed against what the host built
+		// rather than against a number this file made up.
+		UINT expected_position{ 0xFFFFFFFF };
+
+		// The host menu the chosen item actually lives in, which is what
+		// WM_MENUCOMMAND's lParam has to name: the root for a root selection,
+		// the submenu for a nested one. It was called host_root_menu while only
+		// the root case existed, and the name was the assumption.
+		HMENU host_expected_menu{};
+
+		// What the host's own menu says at the position Shell replayed, and
+		// what it says at the position the script actually chose. Compared as
+		// well as the numbers, because the two menus tend to be the same length
+		// around the end and an index can agree by accident.
+		std::wstring replayed_title;
+		std::wstring expected_title;
+
+		// The driver could not put the highlight where the script asked. Always
+		// a harness fault, never a finding about Windows, so it is reported
+		// separately rather than folded into the scenario's own verdict.
+		bool navigation_failed{};
+
+		// The scenario could not be set up at all - no shell menu, no drivable
+		// item. Reported like a navigation failure, and for the same reason.
+		bool setup_failed{};
+		std::wstring setup_detail;
+
+		// Which menu the host handed over, and whether anything other than that
+		// one was initialised - the difference between Shell tracking the host's
+		// menu and Shell tracking one it composed.
+		bool tracked_a_different_menu{};
+
+		// host_replaces_menu_procs: a menu window painted the host's own HMENU,
+		// and how many of Shell's windows were still visible once tracking
+		// returned.
+		bool host_menu_painted{};
+		size_t shell_windows_left{};
+
+		// Every popup that received a WM_INITMENUPOPUP got exactly one
+		// WM_UNINITMENUPOPUP. The pairing commit a634ab6 landed, asserted
+		// against a real borrowed menu rather than against a unit fake.
+		bool init_uninit_paired{};
+		size_t unpaired_popups{};
+
+		// The identifier the host was told to run, and whether the menu it
+		// created actually contains it.
+		bool command_is_native{};
+
+		// ---- rendering, read through MSAA while the menu was up ----------
+		//
+		// Each verdict is computed where the snapshot is still in hand, and
+		// carries its own detail string, because "the order did not match" is
+		// useless without saying at which position and with what on each side.
+		bool render_attempted{};
+		size_t render_popups_seen{};
+		size_t render_items{};
+		std::wstring render_detail;
+
+		// Printed rather than asserted, and the distinction is the point. The
+		// geometry expectation catches a popup and its items *disagreeing*;
+		// it cannot catch a measure pass that changed every number by the
+		// same amount, because the result is still internally consistent.
+		// Section 05.5a caught exactly that shape by hand - 239x1031 against
+		// 938x990 - so the reading is reported for a person to compare
+		// across builds, which is what that comparison needed.
+		RECT render_popup_rect{};
+
+		bool render_readable{};
+		bool render_order_matches{};
+		bool render_geometry_ok{};
+
+		// A composed menu only has a submenu if this machine's handlers gave it
+		// one, so "was not attempted" is a legitimate outcome and is reported
+		// rather than counted as a pass.
+		bool render_submenu_attempted{};
+		bool render_submenu_opened{};
+		bool render_submenu_placed{};
+	};
+
+	// The canonical cardinality of an unfiltered run, in one place so that
+	// main.cpp, the plans and the handoffs all cite the same number instead of
+	// each carrying a copy.
+	//
+	// kTakeoverScenarios is the whole table. kNativeScenarios is what runs
+	// without --takeover against the registered copy; the difference is the
+	// Requires::Takeover set, which a native run skips and reports as skipped.
+	//
+	// This exists because `ran == 0` was the only cardinality check the harness
+	// had. Deleting a scenario, or mis-tagging one Requires::Takeover, still
+	// exited 0 - and four places in docs/refactor/09-remediation-plan.md
+	// recorded "23/31" against a harness that had been 23/32 since the
+	// ShellItem scenarios landed. A count that lives only in prose drifts away
+	// from the thing it counts, and the drift is invisible precisely because
+	// the run still passes.
+	inline constexpr int kTakeoverScenarios = 34;
+	inline constexpr int kNativeScenarios = 23;
+	inline constexpr int kSkippedWithoutTakeover =
+		kTakeoverScenarios - kNativeScenarios;
+
+	const std::vector<Scenario> &scenarios();
+	Result run_scenario(const Scenario &scenario);
+	std::wstring flag_names(UINT flags);
+}

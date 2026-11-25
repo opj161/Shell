@@ -18,8 +18,31 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+# Returns the rows as a single array object, never unrolled.
+#
+# The @(...) here is not enough on its own. A function that writes a
+# collection to the output stream has it enumerated: "When you return a
+# collection from your scriptblock or function, PowerShell automatically
+# unrolls the members and passes them one at a time through the pipeline"
+# https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_return#return-values-and-the-pipeline
+# So a query matching exactly one row handed the caller a bare
+# [pscustomobject] - and msi-query.ps1 emits [pscustomobject] rows.
+#
+# That is fine under PowerShell 7 and wrong under Windows PowerShell 5.1,
+# which is the edition build.ps1 and AGENTS.md both invoke: "In Windows
+# PowerShell, objects created by casting a Hashtable to [pscustomobject]
+# don't have the Length or Count properties. Attempting to access these
+# members returns $null."
+# https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_pscustomobject#notes
+# So every `$rows.Count -eq 1` assertion below compared $null against 1
+# and threw, and the first one is the REGISTRATION component - meaning the
+# whole gate failed on line one under 5.1 and passed under 7.
+#
+# The unary comma is the documented fix, from the same about_Return page:
+# "Utilizing a unary expression you can send your return value down the
+# pipeline as a single object".
 function Query-Msi([string]$Msi, [string]$Sql) {
-    @(& $queryTool $Msi $Sql)
+    return ,@(& $queryTool $Msi $Sql)
 }
 
 $contextClsid = "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
@@ -65,7 +88,12 @@ foreach ($item in $Path) {
     Assert-True ($component[0].Directory_ -eq "INSTALLFOLDER") "${name}: registration component is not rooted at INSTALLFOLDER."
     Assert-True ($component[0].KeyPath -eq "ContextClassName") "${name}: registration key path changed."
 
-    $registry = Query-Msi $msi 'SELECT `Registry`, `Root`, `Key`, `Name`, `Value`, `Component_` FROM `Registry` WHERE `Component_` = ''REGISTRATION'''
+    $registryRows = Query-Msi $msi 'SELECT `Registry`, `Root`, `Key`, `Name`, `Value`, `Component_` FROM `Registry` WHERE `Component_` = ''REGISTRATION'''
+    # Name '-' is not a value: "The key is to be deleted, if present, with all of
+    # its values and subkeys" when the component is uninstalled.
+    # https://learn.microsoft.com/windows/win32/msi/registry-table
+    $removals = @($registryRows | Where-Object { [string]$_.Name -ceq "-" })
+    $registry = @($registryRows | Where-Object { [string]$_.Name -cne "-" })
     $actualRegistryIds = @($registry.Registry | Sort-Object)
     $expectedRegistryIds = @($expectedRegistry.Id | Sort-Object)
     Assert-True ($registry.Count -eq $expectedRegistry.Count -and
@@ -80,6 +108,19 @@ foreach ($item in $Path) {
     }
     Assert-True (@($registry | Where-Object { $_.Registry -like "ContextHandler*" }).Count -eq 8) "${name}: expected exactly eight context-menu handlers."
     Assert-True (@($registry | Where-Object { $_.Key -like "*FolderExtensions*" }).Count -eq 0) "${name}: FolderExtensions must not be registered."
+    # Servicing only: machines registered by `shell.exe -register -force` before upstream
+    # ed826e1 keep these, and the MSI no longer runs `shell.exe -unregister`. Exactly
+    # Shell's own two keys - never the shared FolderExtensions parent.
+    $folderExtensionsClsid = "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF3}"
+    $expectedRemovals = @(
+        @{ Id = "LegacyFolderExtensionsClass"; Root = "0"; Key = "CLSID\$folderExtensionsClsid" }
+        @{ Id = "LegacyFolderExtensionsDrive"; Root = "2"; Key = "SOFTWARE\Classes\Drive\shellex\FolderExtensions\$folderExtensionsClsid" }
+    )
+    Assert-True ($removals.Count -eq $expectedRemovals.Count) "${name}: expected exactly the two FolderExtensions removal rows."
+    foreach ($expected in $expectedRemovals) {
+        $row = @($removals | Where-Object Registry -eq $expected.Id)
+        Assert-True ($row.Count -eq 1 -and [string]$row[0].Root -ceq $expected.Root -and [string]$row[0].Key -ceq $expected.Key) "${name}: $($expected.Id) removal row changed."
+    }
     Assert-True (@($registry | Where-Object { $_.Registry -in @("ContextServer", "OverlayServer") -and $_.Value -ne '[$REGISTRATION]shell.dll' }).Count -eq 0) "${name}: InprocServer32 no longer resolves from the registration component directory."
 
     $sequence = Query-Msi $msi 'SELECT `Action`, `Sequence`, `Condition` FROM `InstallExecuteSequence`'
@@ -108,6 +149,18 @@ foreach ($item in $Path) {
         "TreatAsCommit" = "11841"
         "NotifyShellChanged" = "65"
     }
+    # The x86 package must not carry the redirect: it is refused on 64-bit Windows,
+    # and a redirect written for a CLSID registered only in the 32-bit view would
+    # dangle. Everything below that is about TreatAs is skipped for it, after
+    # proving it really is absent.
+    $treatAsActions = @("PrepareTreatAs", "TreatAsRollback", "TreatAsApply", "TreatAsCommit")
+    if ($arch -eq "x86") {
+        foreach ($action in $treatAsActions) {
+            Assert-True (@($customActions | Where-Object Action -eq $action).Count -eq 0) "${name}: x86 package carries the $action custom action."
+            Assert-True (@($sequence | Where-Object Action -eq $action).Count -eq 0) "${name}: x86 package schedules $action."
+            $expectedActions.Remove($action)
+        }
+    }
     foreach ($entry in $expectedActions.GetEnumerator()) {
         $row = @($customActions | Where-Object Action -eq $entry.Key)
         Assert-True ($row.Count -eq 1 -and $row[0].Type -eq $entry.Value) "${name}: $($entry.Key) custom-action type changed."
@@ -127,21 +180,79 @@ foreach ($item in $Path) {
         "InstallFinalize" = 6600
         "NotifyShellChanged" = 6601
     }
+    if ($arch -eq "x86") {
+        foreach ($action in $treatAsActions) { $expectedOrder.Remove($action) }
+    }
     foreach ($entry in $expectedOrder.GetEnumerator()) {
         $row = @($sequence | Where-Object Action -eq $entry.Key)
         Assert-True ($row.Count -eq 1 -and [int]$row[0].Sequence -eq $entry.Value) "${name}: $($entry.Key) sequence changed."
     }
 
     $legacyCondition = '(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE'
-    $treatAsCondition = 'VersionNT64 AND (WindowsBuild >= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE="ALL") AND (NOT UPGRADINGPRODUCTCODE)))'
+    # WINDOWSCURRENTBUILD, not WindowsBuild: Windows Installer reports WindowsBuild =
+    # 9600 and VersionNT = 603 on Windows 10 and 11, so the old condition was never
+    # true and no TreatAs action ever ran. The registry holds the real build number.
+    # https://learn.microsoft.com/windows/win32/msi/operating-system-property-values
+    $treatAsCondition = 'VersionNT64 AND (WINDOWSCURRENTBUILD >= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE="ALL") AND (NOT UPGRADINGPRODUCTCODE)))'
     foreach ($action in @("BackupLegacyConfig", "RestoreLegacyConfigRollback", "RestoreLegacyConfig", "CleanupLegacyConfig")) {
         $row = @($sequence | Where-Object Action -eq $action)
         Assert-True ($row[0].Condition -ceq $legacyCondition) "${name}: $action condition no longer isolates pre-1.9.20 upgrades."
     }
-    foreach ($action in @("PrepareTreatAs", "TreatAsRollback", "TreatAsApply", "TreatAsCommit")) {
-        $row = @($sequence | Where-Object Action -eq $action)
-        Assert-True ($row[0].Condition -ceq $treatAsCondition) "${name}: $action condition changed."
+    if ($arch -ne "x86") {
+        foreach ($action in $treatAsActions) {
+            $row = @($sequence | Where-Object Action -eq $action)
+            Assert-True ($row[0].Condition -ceq $treatAsCondition) "${name}: $action condition changed."
+        }
+        Assert-True (-not (($sequence | ForEach-Object { [string]$_.Condition }) -match 'WindowsBuild')) "${name}: a condition reads WindowsBuild, which Windows Installer reports as 9600 on Windows 10 and 11."
+
+        $build = Query-Msi $msi 'SELECT `Property`, `Signature_` FROM `AppSearch` WHERE `Property` = ''WINDOWSCURRENTBUILD'''
+        Assert-True ($build.Count -eq 1) "${name}: WINDOWSCURRENTBUILD has no AppSearch row."
+        $locator = Query-Msi $msi ('SELECT `Root`, `Key`, `Name`, `Type` FROM `RegLocator` WHERE `Signature_` = ''' + $build[0].Signature_ + '''')
+        # Root 2 = HKLM; Type 2 = raw, plus 16 = the 64-bit registry view.
+        Assert-True ($locator.Count -eq 1 -and $locator[0].Root -eq "2" -and $locator[0].Key -ceq 'SOFTWARE\Microsoft\Windows NT\CurrentVersion' -and $locator[0].Name -ceq "CurrentBuildNumber" -and $locator[0].Type -eq "18") "${name}: WINDOWSCURRENTBUILD no longer reads CurrentBuildNumber raw from the 64-bit HKLM view."
+        # Set in the UI sequence by AppSearch, read in the execute sequence: only a
+        # secure property crosses to the elevated server side.
+        # https://learn.microsoft.com/windows/win32/msi/securecustomproperties
+        $secureProperty = Query-Msi $msi 'SELECT `Value` FROM `Property` WHERE `Property` = ''SecureCustomProperties'''
+        Assert-True ($secureProperty.Count -eq 1 -and "WINDOWSCURRENTBUILD" -in $secureProperty[0].Value.Split(';')) "${name}: WINDOWSCURRENTBUILD is not a secure property."
     }
+    else {
+        $launch = Query-Msi $msi 'SELECT `Condition` FROM `LaunchCondition`'
+        Assert-True ($launch.Count -eq 1 -and $launch[0].Condition -ceq 'Installed OR NOT VersionNT64') "${name}: the x86 package must refuse 64-bit Windows, and only when not already installed."
+    }
+
+    # An upgrade from a custom install folder: nothing else seeds INSTALLFOLDER from
+    # the installed product, so the default would be used and the old product's
+    # removal would delete the user's shell.nss in the real folder.
+    $previous = Query-Msi $msi 'SELECT `Property`, `Signature_` FROM `AppSearch` WHERE `Property` = ''PREVIOUSINSTALLFOLDER'''
+    $applicationGuids = @{
+        "x64"   = @("{ED9EFE4B-E83D-42BB-8938-F72B13A2FAD2}")
+        "arm64" = @("{8FA5A26E-3122-49E8-8EFA-3533DB4E4C55}", "{ED9EFE4B-E83D-42BB-8938-F72B13A2FAD2}")
+        "x86"   = @("{B4125EFB-BFA8-456A-9928-46761D87655C}", "{ED9EFE4B-E83D-42BB-8938-F72B13A2FAD2}")
+    }
+    Assert-True ($previous.Count -eq $applicationGuids[$arch].Count) "${name}: PREVIOUSINSTALLFOLDER does not search this architecture's APPLICATION component and upstream's."
+    $foundGuids = @($previous | ForEach-Object { (Query-Msi $msi ('SELECT `ComponentId` FROM `CompLocator` WHERE `Signature_` = ''' + $_.Signature_ + ''''))[0].ComponentId })
+    Assert-True (@(Compare-Object ($applicationGuids[$arch] | Sort-Object) ($foundGuids | Sort-Object)).Count -eq 0) "${name}: PREVIOUSINSTALLFOLDER searches the wrong component codes."
+    $secureAll = (Query-Msi $msi 'SELECT `Value` FROM `Property` WHERE `Property` = ''SecureCustomProperties''')[0].Value.Split(';')
+    Assert-True ("PREVIOUSINSTALLFOLDER" -in $secureAll) "${name}: PREVIOUSINSTALLFOLDER is not a secure property."
+    foreach ($table in @("InstallUISequence", "InstallExecuteSequence")) {
+        $seed = Query-Msi $msi ('SELECT `Action`, `Sequence`, `Condition` FROM `' + $table + '`')
+        $seedRow = @($seed | Where-Object Action -eq "SetINSTALLFOLDER")
+        $search = @($seed | Where-Object Action -eq "AppSearch")
+        $costFinalize = @($seed | Where-Object Action -eq "CostFinalize")
+        Assert-True ($seedRow.Count -eq 1 -and $seedRow[0].Condition -ceq 'NOT Installed AND PREVIOUSINSTALLFOLDER AND NOT INSTALLFOLDER') "${name}: $table seeding of INSTALLFOLDER changed."
+        Assert-True ([int]$seedRow[0].Sequence -gt [int]$search[0].Sequence -and [int]$seedRow[0].Sequence -lt [int]$costFinalize[0].Sequence) "${name}: $table must seed INSTALLFOLDER after AppSearch and before CostFinalize."
+    }
+    $seedAction = @($customActions | Where-Object Action -eq "SetINSTALLFOLDER")
+    # 51 = set a property from formatted text, 256 = first sequence only.
+    Assert-True ($seedAction.Count -eq 1 -and $seedAction[0].Type -eq "307" -and $seedAction[0].Source -ceq "INSTALLFOLDER" -and $seedAction[0].Target -ceq "[PREVIOUSINSTALLFOLDER]") "${name}: SetINSTALLFOLDER is not a type 51, first-sequence property action."
+
+    # A major upgrade "needs a change of the ProductCode Property"; a fixed one makes
+    # the next release fail with 1638. WiX generates one per build.
+    # https://learn.microsoft.com/windows/win32/msi/major-upgrades
+    $productCode = (Query-Msi $msi 'SELECT `Value` FROM `Property` WHERE `Property` = ''ProductCode''')[0].Value
+    $retiredProductCodes = @("{7BCA6512-254B-456F-8F08-AAD7508BE640}", "{7BCA6512-254B-456F-8F08-AAD7508BEAA0}", "{7BCA6512-254B-456F-8F08-AAD7508BE320}")
+    Assert-True ($productCode -notin $retiredProductCodes) "${name}: ProductCode is one of the retired fixed codes, so the next release could not upgrade this one."
     Assert-True (@($notify | Where-Object { [string]$_.Condition -ne "" }).Count -eq 0) "${name}: Shell notification unexpectedly became conditional."
 
     $upgrade = Query-Msi $msi 'SELECT `VersionMin`, `VersionMax`, `Attributes`, `ActionProperty` FROM `Upgrade`'
@@ -153,7 +264,9 @@ foreach ($item in $Path) {
 
     $hidden = Query-Msi $msi 'SELECT `Property`, `Value` FROM `Property` WHERE `Property` = ''MsiHiddenProperties'''
     Assert-True ($hidden.Count -eq 1) "${name}: hidden custom-action data property is missing."
-    foreach ($action in @("RestoreLegacyConfigRollback", "RestoreLegacyConfig", "CleanupLegacyConfig", "TreatAsRollback", "TreatAsApply", "TreatAsCommit")) {
+    $hiddenActions = @("RestoreLegacyConfigRollback", "RestoreLegacyConfig", "CleanupLegacyConfig")
+    if ($arch -ne "x86") { $hiddenActions += @("TreatAsRollback", "TreatAsApply", "TreatAsCommit") }
+    foreach ($action in $hiddenActions) {
         Assert-True ($action -in $hidden[0].Value.Split(';')) "${name}: $action data is not hidden from MSI logs."
     }
 

@@ -2,8 +2,15 @@
 #include <unordered_set>
 #include "Include/ContextMenu.h"
 #include "Include/ShellExt.h"
+#include "Include/ComActivationPolicy.h"
+#include "Include/HostContract.h"
+#include "Include/Diagnostics/DiagnosticsRing.h"
+#include "Include/PackageCatalogService.h"
 #include "Include/Diagnostics/MenuPerf.h"
 #include "Include/TaskbarHitCache.h"
+#include "Include/TaskbarHitStats.h"
+#include "Include/TakeoverBreaker.h"
+#include "Include/InterceptionStatus.h"
 #include "Include/TaskbarOrigin.h"
 #include "Library/detours.h"
 #include "RegistryConfig.h"
@@ -47,8 +54,6 @@ Version Build
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "WindowsCodecs.lib")
-#pragma comment(lib, "d2d1")
-#pragma comment(lib, "dwrite")
 #pragma comment(lib, "Winmm.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -197,10 +202,8 @@ struct RuntimeState
 	Initializer initializer;
 	LoaderState loader;
 
-	WindowsHook taskbar_mouse;
 	IATHook ntuser_popup_hook;
 	std::vector<IATHook> popup_hooks;
-	Detours<decltype(::DllGetClassObject)> dll_get_class_object_hook;
 	Detours<decltype(::CoCreateInstance)> co_create_instance_hook;
 
 	std::unordered_map<HWND, Window> taskbar_windows;
@@ -222,13 +225,57 @@ inline const Windows::Version* Ver() { return &Windows::Version::Instance(); }
 #define ver Ver()
 #define _initializer (Runtime().initializer)
 #define _loader (Runtime().loader)
-#define _taskbar_mouse (Runtime().taskbar_mouse)
 #define iathook_NtUserTrackPopupMenuEx (Runtime().ntuser_popup_hook)
 #define iathook_TrackPopupMenu (Runtime().popup_hooks)
-#define _DllGetClassObject (Runtime().dll_get_class_object_hook)
 #define _CoCreateInstance (Runtime().co_create_instance_hook)
 
 void BootstrapOnce();
+
+/*
+	Re-read which mechanism is carrying this process's popups.
+
+	Two pointer compares and one relaxed store, which is what lets this be
+	called from the hook body - an SEH function that cannot hold anything
+	needing unwinding, so this deliberately touches no object with a
+	destructor.
+
+	Calling it from the hook is not the tautology docs/refactor/01 section 9
+	proposed. That section wanted the *entered* hook to check whether it was
+	installed, which cannot answer no: if the thunk did not point here, this
+	code would not be running. What is asked here is a different question -
+	which of the two mechanisms is live at this moment - and the primary's
+	thunk can perfectly well have gone while the fallback keeps delivering.
+	Include/InterceptionStatus.h.
+*/
+inline void refresh_interception_status() noexcept
+{
+	auto &rt = Runtime();
+
+	if(rt.ntuser_popup_hook.installed())
+	{
+		Interception::publish(Interception::Win32uImport, true);
+		return;
+	}
+
+	// The fallback is a vector of per-module patches. One surviving patch is
+	// enough for this process to still see popups from that module, so the
+	// health question is "is any of them still ours", not "are all of them".
+	for(const auto &h : rt.popup_hooks)
+	{
+		if(h.installed())
+		{
+			Interception::publish(Interception::PerModuleImports, true);
+			return;
+		}
+	}
+
+	// Patches were made and none is still ours, or none was ever made. The
+	// first is a displacement, the second is a process Shell never hooked;
+	// they are distinguished by whether the vector is empty.
+	Interception::publish(rt.popup_hooks.empty() ? Interception::None
+												 : Interception::PerModuleImports,
+						  false);
+}
 
 inline bool PinModule()
 {
@@ -300,17 +347,26 @@ public:
 	}
 
 	Nilesoft::Shell::TaskbarHitCache &cache() { return _cache; }
+	Nilesoft::Shell::TaskbarHitStats &stats() { return _stats; }
 
 	// Called on the taskbar's UI thread. Returns the cached answer when there is
 	// one, otherwise hands the point to the worker and waits out the budget.
 	bool query(HWND taskbar, POINT pt, bool secondary)
 	{
+		using Outcome = Nilesoft::Shell::TaskbarHitStats::Outcome;
+
 		auto now = ::GetTickCount64();
 		if(auto hit = _cache.lookup(taskbar, pt, now); hit)
+		{
+			_stats.record(Outcome::CacheHit, 0);
 			return *hit;
+		}
 
 		if(!ensure_started())
+		{
+			_stats.record(Outcome::Unavailable, 0);
 			return false;
+		}
 
 		// One question at a time. Taskbars on several monitors can be serviced by
 		// different threads, and without this the second caller would overwrite
@@ -329,29 +385,64 @@ public:
 			_answered_ticket = 0;
 		}
 
-		::ResetEvent(_done);
 		::SetEvent(_work);
 
-		DWORD index = 0;
-		::SetLastError(ERROR_SUCCESS);
-		auto hr = ::CoWaitForMultipleHandles(0, BUDGET_MS, 1, &_done, &index);
+		// The wait is the thing docs/refactor/02 section 5 asks to be counted,
+		// so it is timed whether or not anybody has turned logging on.
+		LARGE_INTEGER wait_start{};
+		::QueryPerformanceCounter(&wait_start);
 
+		// _done is manual-reset and the worker may still be finishing an earlier,
+		// abandoned request: its late SetEvent can land after this call's reset and
+		// wake the wait with somebody else's ticket on the slot. So the event is
+		// only a hint. Reset it, then look at the ticket under the mutex - the
+		// worker publishes the ticket before SetEvent, so an answer that arrives
+		// after the check also arrives after the reset and wakes the wait - and
+		// wait again with whatever budget is left.
+		// CoWaitForMultipleHandles returns S_OK when the handle was signaled and
+		// RPC_S_CALLPENDING (a failure code) when the timeout elapsed.
+		// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cowaitformultiplehandles
+		const auto deadline = ::GetTickCount64() + BUDGET_MS;
+		HRESULT hr = S_OK;
 		bool answer = false;
 		bool answered = false;
+		for(;;)
 		{
-			std::lock_guard<std::mutex> lock(_mutex);
-			answered = (_answered_ticket == ticket);
-			answer = _answer;
+			::ResetEvent(_done);
+			{
+				std::lock_guard<std::mutex> lock(_mutex);
+				answered = (_answered_ticket == ticket);
+				answer = _answer;
+			}
+			if(answered)
+				break;
+
+			const auto tick = ::GetTickCount64();
+			if(tick >= deadline)
+				break;
+
+			DWORD index = 0;
+			::SetLastError(ERROR_SUCCESS);
+			hr = ::CoWaitForMultipleHandles(0, static_cast<DWORD>(deadline - tick), 1, &_done, &index);
+			if(FAILED(hr))
+				break;
 		}
+
+		auto waited_us = elapsed_microseconds(wait_start);
 
 		if(FAILED(hr) || !answered)
 		{
 			// Timed out, or the wait could not run, or what is on the slot
 			// belongs to an earlier request. Let Windows handle this click; the
 			// worker still publishes its answer to the cache for next time.
+			//
+			// This is the outcome that costs the user a menu, and until it was
+			// counted there was no way to know it had ever happened.
+			_stats.record(Outcome::TimedOut, waited_us);
 			return false;
 		}
 
+		_stats.record(Outcome::Answered, waited_us);
 		_cache.store(taskbar, pt, answer, ::GetTickCount64());
 		return answer;
 	}
@@ -366,6 +457,20 @@ private:
 	};
 
 	TaskbarUiaWorker() = default;
+
+	static uint32_t elapsed_microseconds(const LARGE_INTEGER &start) noexcept
+	{
+		auto per_ms = perf::MenuPerf::ticks_per_ms();
+		if(per_ms <= 0.0)
+			return 0;
+
+		LARGE_INTEGER now{};
+		::QueryPerformanceCounter(&now);
+		auto us = static_cast<double>(now.QuadPart - start.QuadPart) / per_ms * 1000.0;
+		if(us < 0.0)
+			return 0;
+		return static_cast<uint32_t>(us);
+	}
 
 	bool ensure_started()
 	{
@@ -425,6 +530,13 @@ private:
 		if(SUCCEEDED(com))
 			uia.CreateInstance(__uuidof(CUIAutomation), CLSCTX_INPROC_SERVER);
 
+		// Built once, used for every question. Asking for the three properties
+		// up front turns four marshalled calls to the provider into one; see
+		// evaluate() for the measurement and for why that is worth doing.
+		IComPtr<IUIAutomationCacheRequest> properties;
+		if(uia)
+			build_property_request(uia, properties);
+
 		for(;;)
 		{
 			::WaitForSingleObject(_work, INFINITE);
@@ -435,7 +547,7 @@ private:
 				request = _request;
 			}
 
-			auto allowed = uia ? evaluate(uia, request) : false;
+			auto allowed = uia ? evaluate(uia, properties, request) : false;
 
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
@@ -450,13 +562,63 @@ private:
 		}
 	}
 
-	// Everything UI Automation touches stays inside this function, on this
-	// thread. No element pointer is stored or returned.
-	static bool evaluate(IComPtr<IUIAutomation> &uia, const Request &request)
+	/*
+		The three properties the verdict depends on, asked for in advance.
+
+		A cache request names the properties an element should carry when it
+		comes back, so the element and its properties arrive in one call instead
+		of one call for the element and one per property. AutomationElementMode_None
+		is what the docs call for when only cached data will be read - the
+		element "has no reference to the underlying UI and contains only cached
+		information", which is exactly this case and is cheaper to produce:
+
+			https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation-elementfrompointbuildcache
+			https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/ne-uiautomationclient-automationelementmode
+	*/
+	static void build_property_request(IComPtr<IUIAutomation> &uia,
+									   IComPtr<IUIAutomationCacheRequest> &request)
+	{
+		if(FAILED(uia->CreateCacheRequest(request)) || !request)
+			return;
+
+		request->AddProperty(UIA_AutomationIdPropertyId);
+		request->AddProperty(UIA_ClassNamePropertyId);
+		request->AddProperty(UIA_NamePropertyId);
+		request->put_TreeScope(TreeScope_Element);
+		request->put_AutomationElementMode(AutomationElementMode_None);
+	}
+
+	/*
+		Everything UI Automation touches stays inside this function, on this
+		thread. No element pointer is stored or returned.
+
+		Measured on this machine (Windows 11 26200.8875 x64, 2026-08-24) over a
+		1440-point grid covering the whole taskbar, out of process:
+
+			ElementFromPoint + three get_Current* reads   p50 2.78 ms, p95 4.28 ms
+			ElementFromPointBuildCache + cached reads     p50 2.25 ms, p95 3.25 ms
+
+		Half a millisecond is not why this is written the way it is - the win is
+		that a wedged provider now has one call to hang in rather than four,
+		which is what the 250 ms budget above exists to survive. The two forms
+		were checked to agree on the verdict at all 1440 points, and neither
+		returns a NULL BSTR for the TaskbarFrame's empty name, so the guard
+		below keeps its meaning.
+	*/
+	static bool evaluate(IComPtr<IUIAutomation> &uia,
+						 IComPtr<IUIAutomationCacheRequest> &properties,
+						 const Request &request)
 	{
 		IComPtr<IUIAutomationElement> element;
-		if(FAILED(uia->ElementFromPoint(request.pt, element)) || !element)
+		if(properties)
+		{
+			if(FAILED(uia->ElementFromPointBuildCache(request.pt, properties, element)) || !element)
+				return false;
+		}
+		else if(FAILED(uia->ElementFromPoint(request.pt, element)) || !element)
+		{
 			return false;
+		}
 
 		struct elem_t
 		{
@@ -483,9 +645,21 @@ private:
 		id=[SystemTrayIcon], type=[SystemTray.OmniButton], name=[Clock 7:04 PM 3/20/2023]
 		id=[SystemTrayIcon], type=[SystemTray.ShowDesktopButton], name=[Show Desktop]
 		*/
-		element->get_CurrentAutomationId(&elem.id);
-		element->get_CurrentClassName(&elem.type);
-		element->get_CurrentName(&elem.name);
+		// Cached reads when the element was built with the request, live ones
+		// when it was not - AutomationElementMode_None means a cached element
+		// has nothing to read a Current property from.
+		if(properties)
+		{
+			element->get_CachedAutomationId(&elem.id);
+			element->get_CachedClassName(&elem.type);
+			element->get_CachedName(&elem.name);
+		}
+		else
+		{
+			element->get_CurrentAutomationId(&elem.id);
+			element->get_CurrentClassName(&elem.type);
+			element->get_CurrentName(&elem.name);
+		}
 
 		if(!elem.name || !elem.type || !elem.id)
 			return false;
@@ -510,6 +684,7 @@ private:
 	}
 
 	Nilesoft::Shell::TaskbarHitCache _cache;
+	Nilesoft::Shell::TaskbarHitStats _stats;
 
 	std::mutex _start_mutex;
 	std::atomic<bool> _started{ false };
@@ -527,7 +702,51 @@ private:
 	bool _answer{};
 };
 
-LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+/*
+	The takeover circuit breaker, one per process.
+
+	Process lifetime and no destructor, like every other service here: the
+	module is pinned for the life of the host, and a static whose destructor
+	could run while a menu thread is still recording would be a crash waiting
+	for an unlucky shutdown.
+*/
+inline Nilesoft::Shell::TakeoverBreaker &takeover_breaker()
+{
+	static auto *breaker = new Nilesoft::Shell::TakeoverBreaker();
+	return *breaker;
+}
+
+/*
+	Says, once, that the breaker has opened.
+
+	Its own function rather than a line in the hook's __finally, for the reason
+	AGENTS.md records: Logger::write is a variadic template whose
+	string::Argument temporaries require unwinding, and MSVC refuses (C2712) to
+	compile a function that mixes those with __try/__finally. Keeping the
+	temporaries in this frame keeps the hook a plain-old-data function - the
+	same shape as menu_perf_begin/menu_perf_end.
+*/
+void log_breaker_opened() noexcept
+{
+	_log.warning(L"takeover failed %u times in a row; this process will use the host's own menus from now on",
+				 Nilesoft::Shell::TakeoverBreaker::THRESHOLD);
+}
+
+/*
+	Set once a menu window turns out to be painted by the host itself
+	(Include/HostMenuPainter.h). From then on the hook hands this process its own
+	menus without composing one it could not show. Process lifetime, like the
+	breaker above.
+*/
+std::atomic<bool> g_host_paints_menus{ false };
+
+// Its own function for the same C2712 reason as log_breaker_opened().
+void log_host_paints_menus() noexcept
+{
+	_log.warning(L"this host paints its own menu windows (Delphi VCL Styles does); "
+				 L"it gets its own menus from now on");
+}
+
 LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 __inline auto is_registered(bool force_refresh = false) -> bool
@@ -548,41 +767,21 @@ struct taskbar_t
 		return msg;
 	}
 
-	static bool hook(HWND hTaskbar, UINT_PTR id)
-	{
-		Window window = Window::Find(Windows::WC_Composition_DesktopWindowContentBridge, hTaskbar);
-		if(window && !window.is_prop(UxSubclass))
-		{
-			auto &rt = Runtime();
-			std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
-			if(!rt.taskbar_windows.contains(window))
-			{
-				if(window.subclass(TaskbarSubclassProc, id, hTaskbar))
-				{
-					window.prop(UxSubclass, CONTEXTMENUSUBCLASS);
-					rt.taskbar_windows[window] = window;
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	static void try_hook(HWND hTaskbar, UINT_PTR id, int time = 500)
-	{
-		if(hTaskbar)
-		{
-			::SetTimer(hTaskbar, id, time, [](HWND hWnd, UINT, UINT_PTR id, DWORD)
-			{
-				static int atttempt = 0;
-				if(hook(hWnd, id))
-					atttempt = 50;
-				if(atttempt++ >= 50)
-					::KillTimer(hWnd, id);
-			});
-		}
-	}
-
+	// The only taskbar interception mechanism, and the only writer of UxSubclass
+	// on a taskbar: the prop holds the ORIGINAL WNDPROC, which is what unhook
+	// restores and what TaskbarProc calls through. A second, never-called
+	// mechanism used to store the CONTEXTMENUSUBCLASS sentinel in the same prop
+	// while unhook restored whatever it found - so had it ever run, it would
+	// have installed a constant as the taskbar's window procedure. It is gone;
+	// the prop now has exactly one meaning, which is what lets
+	// ContextMenu.cpp's `0 == GetPropW(hwnd.owner, UxSubclass)` gate read as
+	// "this window is not one we intercept".
+	//
+	// GWLP_WNDPROC subclassing requires that unhandled messages reach the
+	// previous procedure - "An application must pass any messages not processed
+	// by the new window procedure to the previous window procedure" - which
+	// TaskbarProc does through the prop.
+	// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowlongptrw
 	static void hook_all()
 	{
 		::EnumWindows([](HWND hWnd, LPARAM)->BOOL {
@@ -635,19 +834,6 @@ struct taskbar_t
 			}
 		}
 	}
-	static void unhook_all()
-	{
-		auto &rt = Runtime();
-		std::lock_guard<std::mutex> lock(rt.taskbar_mutex);
-		for(auto &window : rt.taskbar_windows)
-		{
-			window.second.set_long(GWLP_WNDPROC, window.second.prop(UxSubclass));
-			window.second.remove_prop(UxSubclass);
-			rt.taskbar_windows.erase(window.first);
-			break;
-		}
-		rt.taskbar_windows.clear();
-	}
 
 	// No UI Automation call is made on this thread; see TaskbarUiaWorker.
 	static bool is_allowed_area(HWND hTaskbar, const Point &pt)
@@ -695,6 +881,45 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 
 		if(rclsid == IID_FileExplorerContextMenu /*&& riid == {706461D1-AC5F-4730-BFE3-CAC6CAD5EF5E}*/)
 		{
+			/*
+				Two mechanisms suppress the Windows 11 modern menu, and only one
+				of them is a setting. Measured on this machine 2026-08-24,
+				Windows 11 26200.8875 x64, by raising the desktop menu and
+				looking at which window class appeared:
+
+					TreatAs   priority   menu
+					ours      1          classic (Shell)
+					ours      0          classic (Shell)   <- the setting is inert
+					absent    0          modern (Microsoft.UI.Content...)
+					absent    1          classic (Shell)
+
+				So `priority` does exactly what it says when there is no
+				redirect, and nothing at all when there is one: COM substitutes
+				Shell for the modern menu class, Shell's object does not
+				implement the interface the modern menu wants, and Explorer
+				falls back to the classic menu it was going to get anyway.
+
+				That cannot be fixed from here, and it is worth being explicit
+				about why rather than leaving the next reader to re-derive it.
+				A per-call opt-out of TreatAs does not exist; refusing the
+				redirected activation lands on the classic menu too, because
+				COM does not fall back to the original class when a TreatAs
+				substitute fails. Restoring the modern menu means removing the
+				redirect - `shell.exe -unregister` - which is machine-wide
+				HKLM state and an elevated act, not something a config file read
+				by every host process gets to do.
+
+				What *is* fixable is the waste and the silence. When the
+				redirect is ours the answer is already decided, so this stops
+				building a Context and evaluating an expression on every
+				activation to reach it - docs/refactor/01-takeover-contract.md
+				section 9's "router de-dup". And `shell.exe -check` now says so,
+				which is where somebody who has just written priority = 0 will
+				find out that it did nothing.
+			*/
+			if(RegistryConfig::ModernMenuRedirectedToUsCached())
+				return hr;
+
 			if(cache->settings.priority)
 			{
 				Context context;
@@ -756,23 +981,42 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 
 			if(process)
 			{
+				auto timing = Keyboard::IsKeyDown(VK_MENU);
+
+				/*
+					The fast path. docs/refactor/01-takeover-contract.md
+					section 9: "if(!policy->may_affect(rclsid)) return
+					original(...)".
+
+					This detour sees every in-process and local-server
+					activation in the host. Everything below it - a Context, a
+					stringified CLSID, a walk of the rule list evaluating
+					`where` expressions - used to run for each one whose IID was
+					one of the four, on a machine whose configuration names no
+					CLSID at all. Sixteen bytes copied and compared against a
+					list that is usually empty replaces all of it.
+
+					The timing probe is deliberately *not* gated by this. It
+					exists to time every activation and find the slow one, so
+					narrowing it to the CLSIDs a blocklist already names would
+					destroy the diagnostic while appearing to optimise it.
+				*/
+				ClsidKey key{};
+				::memcpy(&key, &rclsid, sizeof(GUID));
+
+				auto policy = current_com_policy();
+				if(!timing && (!policy || !policy->may_affect(key)))
+					return _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+
 				Context context;
 				this_item _this; context._this = &_this;
 				_this.is_uwp = is_UWP;
 				_this.clsid = Guid(rclsid).to_string(2);
 
-				bool test = Keyboard::IsKeyDown(VK_MENU);
-				if(test)
-				{
-					Timer t;
-					t.start();
-					hr = _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
-					t.stop();
-					auto elapsed = (int)t.elapsed_milliseconds();
-					_log.write(L"%d%s\t%s\t%s\r\n", elapsed, elapsed > 0 ? L"ms" : L"" , _this.clsid.c_str(), is_UWP ? L"UWP":L"");
-					return hr;
-				}
-
+				// Policy first, diagnostics second - see ComActivationPolicy.h.
+				// The Alt-held timing probe used to sit in front of this loop and
+				// return from it, so the blocklist did nothing while Alt was down.
+				auto blocked = false;
 				for(auto si : cache->statics)
 				{
 					if(si->clsid.empty() || (si->where && !context.eval_bool(si->where)))
@@ -784,19 +1028,43 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 						{
 							if(id.equals(rclsid))
 							{
-								if(test && *ppv)
-								{
-									((IUnknown *)*ppv)->Release();
-									*ppv = nullptr;
-								}
-								return E_NOINTERFACE;
+								blocked = true;
+								break;
 							}
 						}
 					}
+
+					if(blocked)
+						break;
 				}
 
-				if(test)
-					return hr;
+				switch(decide_com_activation(true, blocked, timing))
+				{
+					case ComActivationVerdict::Block:
+						// Nothing was activated, so there is nothing to release.
+						// Set the out parameter the way a failing CoCreateInstance
+						// would rather than leaving the caller's uninitialised
+						// pointer in place - the old code read *ppv here, which it
+						// had no right to do on a path that never called through.
+						// https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstance
+						if(ppv)
+							*ppv = nullptr;
+						return E_NOINTERFACE;
+
+					case ComActivationVerdict::TimeAndReturn:
+					{
+						Timer t;
+						t.start();
+						hr = _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+						t.stop();
+						auto elapsed = (int)t.elapsed_milliseconds();
+						_log.write(L"%d%s\t%s\t%s\r\n", elapsed, elapsed > 0 ? L"ms" : L"" , _this.clsid.c_str(), is_UWP ? L"UWP":L"");
+						return hr;
+					}
+
+					case ComActivationVerdict::PassThrough:
+						break;
+				}
 			}
 		}
 	}
@@ -804,16 +1072,38 @@ HRESULT __stdcall CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWO
 	return _CoCreateInstance.invoke(rclsid, pUnkOuter, dwClsContext, riid, ppv);
 }
 
-STDAPI WINAPI DllGetClassObjectHook(REFCLSID rclsid, _In_ REFIID riid, LPVOID *ppv)
-{
-	auto hr = CLASS_E_CLASSNOTAVAILABLE;
-	if(IID_FileExplorerContextMenu == rclsid/* || rclsid == IID_FileExplorerCommandBar*/)
-		return hr;
-	hr = _DllGetClassObject.invoke(rclsid, riid, ppv);
-	return hr;
-}
-
 #define TPM_SYSMENU	0x0200L
+
+// Identifies the host process in a diagnostics record without keeping its name.
+// Computed once - the module never moves - because this runs on the path
+// between a right-click and the first pixel.
+static uint32_t host_identity_hash()
+{
+	static const uint32_t hash = []
+	{
+		wchar_t path[MAX_PATH]{};
+		auto length = ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+		if(length == 0 || length >= MAX_PATH)
+			return 0u;
+
+		// FNV-1a over the lowercased path. Not a security boundary - it exists
+		// so a report can say "these forty menus were all the same host"
+		// without carrying the path around.
+		uint32_t h = 2166136261u;
+		for(DWORD i = 0; i < length; i++)
+		{
+			auto c = path[i];
+			if(c >= L'A' && c <= L'Z')
+				c = static_cast<wchar_t>(c - L'A' + L'a');
+			h ^= static_cast<uint32_t>(c & 0xFF);
+			h *= 16777619u;
+			h ^= static_cast<uint32_t>((c >> 8) & 0xFF);
+			h *= 16777619u;
+		}
+		return h;
+	}();
+	return hash;
+}
 
 
 BOOL WINAPI TrackPopupMenuProc(HMENU hMenu, uint32_t uFlags, int x, int y, int nReserved, HWND hWnd, const RECT *prcRect);
@@ -836,13 +1126,87 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	auto result = FALSE;
 	auto invoked = false;
 
+	// The point the host asked for. Shell's own placement moves x/y below, and a
+	// menu handed back to the host after that must open where it was clicked.
+	const int host_x = x;
+	const int host_y = y;
+
+	// Whether this click got as far as trying to build Shell's menu. Only then
+	// is a fail-open a *failure* rather than a decision - an unregistered
+	// process, a disabled shell, a bypass gesture and an open breaker all reach
+	// the fallback deliberately and must not count against the host.
+	auto attempted_takeover = false;
+
+	// One diagnostics session per intercepted popup, always on. Phases recorded
+	// anywhere below this land in it; session_end() in the __finally publishes
+	// it into the process ring. Both are plain functions on plain data, which is
+	// what an SEH function can hold.
+	// uFlags as the host passed them, before anything below rewrites them.
+	// Which half of complete_host_contract a host exercises turns on
+	// TPM_RETURNCMD, and this is the only place the original value exists.
+	perf::session_begin(host_identity_hash(), uFlags);
+
+	// Two pointer compares and a relaxed store, so it can live on this path
+	// and give the report an answer that is current as of the last menu rather
+	// than as of bootstrap. Plain data only - this is an SEH function.
+	refresh_interception_status();
+
+	/*
+		How long the host took to get here, which is the half of the latency
+		no report has ever shown.
+
+		Every phase below measures from this point on. But the user's stopwatch
+		starts at the right-click, and between the click and this hook the host
+		builds the classic menu: it instantiates every registered IContextMenu
+		handler and calls QueryContextMenu on each. On this machine that is
+		twenty distinct CLSIDs. None of it is Shell's, and until now none of it
+		was visible either - so a menu that felt slow could be blamed on the
+		only numbers that existed, which were Shell's.
+
+		GetMessageTime "specifies the elapsed time, in milliseconds, from the
+		time the system was started to the time the message was created (that
+		is, placed in the thread's message queue)" for "the last message
+		retrieved by the GetMessage function"
+		(https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessagetime),
+		and GetTickCount is the same origin and unit
+		(https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-winuser-gettickcount).
+		Inside this hook the thread is still dispatching the message the
+		right-click produced, so the difference is input-to-hook.
+
+		Two things make it honest rather than a plausible-looking number.
+		The documented subtraction is the one to use - "To calculate time
+		delays between messages, subtract the time of the first message from
+		the time of the second message (ignoring overflow)" - so it is done in
+		int32 and allowed to wrap. And a host that calls TrackPopupMenu from
+		somewhere other than message dispatch leaves GetMessageTime describing
+		an unrelated message; a delta outside a plausible window is reported as
+		-1 rather than as a measurement, because "we cannot tell" and "it was
+		fast" must not print the same.
+	*/
+	{
+		const auto msg_time = static_cast<int32_t>(::GetMessageTime());
+		const auto now_time = static_cast<int32_t>(::GetTickCount());
+		const auto delta = now_time - msg_time;		// wraps correctly in int32
+		perf::session_phase(L"host.input_to_hook",
+							(delta >= 0 && delta < 10000)
+								? static_cast<uint32_t>(delta) * 1000u
+								: 0u,
+							(delta >= 0 && delta < 10000) ? delta : -1);
+	}
+
 	// SEH function: cannot hold an object that requires unwinding.
 	auto perf_pre_display = perf::menu_perf_begin();
+
+	// Distinguishes a menu the user dismissed from a call that never showed one.
+	// Both return zero once TPM_RETURNCMD is set, and the last-error code is what
+	// tells them apart - measured, not documented. See Include/HostContract.h.
+	auto track_error = static_cast<DWORD>(ERROR_SUCCESS);
 
 	auto invoke = [&](HMENU hmenu, uint32_t flag, Point pt)
 	{
 		if(!invoked)
 		{
+			::SetLastError(ERROR_SUCCESS);
 			if(tfunc == 0)
 			{
 				// Calling the real TrackPopupMenu here would re-enter this hook:
@@ -862,6 +1226,7 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 				result = iathook_NtUserTrackPopupMenuEx.invoke<decltype(TrackPopupMenuExProc)>(hmenu, flag, pt.x, pt.y, hWnd, lptpm);
 			else
 				result = ::TrackPopupMenuEx(hmenu, flag, pt.x, pt.y, hWnd, lptpm);
+			track_error = ::GetLastError();
 			invoked = true;
 		}
 	};
@@ -878,31 +1243,104 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 			}
 
 			//cs.lock();
-			auto has_inited = 0;
 			auto perf_onstate = perf::menu_perf_begin();
-			Initializer::OnState(Nilesoft::Shell::in_taskbar());
+
+			// Classified once, from one read of the keyboard, and used by both
+			// OnState and the bypass check below. Two reads could disagree -
+			// the user is releasing keys while this runs - and the plan (QA-04)
+			// requires that reload and bypass can never both fire from one
+			// click. One classification of one snapshot is what makes that
+			// true by construction. Include/TakeoverGesture.h.
+			auto gesture = Initializer::classify_click(Nilesoft::Shell::in_taskbar());
+			Initializer::OnState(gesture);
 			perf::menu_perf_end(perf_onstate, L"popup.initializer_onstate");
+
+			// "Windows menu, this time." Before any Shell work at all: no
+			// context, no selection, no composition. __leave hands control to
+			// the __finally, whose fail-open call tracks the host's own menu
+			// with the host's own flags - which is exactly what a bypass is.
+			// docs/refactor/01-takeover-contract.md section 7,
+			// docs/refactor/05-capabilities.md section 2.
+			if(gesture == Gesture::BypassOnce)
+			{
+				perf::session_decision(perf::TakeoverDecision::BypassOnce);
+				__leave;
+			}
+
+			// "Why is this here?" - compose the menu as usual and annotate
+			// every item with where it came from. Armed here, from the same
+			// single classification as everything else, and cleared for every
+			// other click so an inspected menu cannot leak into the next one.
+			// A plain thread-local bool because this is an SEH function.
+			// docs/refactor/05-capabilities.md section 7,
+			// Include/MenuInspector.h.
+			Inspector::arm(gesture == Gesture::Inspect);
+
+			// The host has refused takeover often enough in a row that trying
+			// again just costs the user latency on every click. Hand it the
+			// menu it would have got anyway, without the attempt.
+			// docs/refactor/01-takeover-contract.md section 7.
+			if(!takeover_breaker().should_attempt())
+			{
+				takeover_breaker().record_skipped();
+				perf::session_decision(perf::TakeoverDecision::Degraded);
+				__leave;
+			}
+
+			// A decision about this host, not a failure, so not the breaker's.
+			if(g_host_paints_menus.load(std::memory_order_relaxed))
+			{
+				perf::session_decision(perf::TakeoverDecision::Declined);
+				__leave;
+			}
 
 			if(!_initializer.Status.Disabled)
 			{
 				// is injected from explorer
 				if(!_initializer.Status.Loaded)
 				{
-					if(_initializer.has_error() || has_inited)
+					if(_initializer.has_error())
 						__leave; //goto skip;
 					_initializer.init();
 				}
 
+				// From here on a failure to show Shell's menu is a takeover
+				// failure rather than a decision not to try, and the breaker
+				// counts it. Set before the call, so an exception inside it
+				// counts too.
+				attempted_takeover = true;
+
+				// ...but only a failure. Initialize() also refuses on purpose -
+				// for a window Shell does not handle, a configuration that hides
+				// the menu here, or a generation that is not being served - and
+				// counting those opened the breaker on hosts where Shell works.
+				// Found by running the trace harness through the hook: three of
+				// the probe's own plain popups were enough to switch takeover
+				// off for the process, after which a shell-namespace menu that
+				// Shell handles perfectly well was handed straight back.
+				// A third-party file manager raising three of its own internal
+				// popups would lose Shell for the rest of the session.
+				// docs/refactor/01-takeover-contract.md section 7a.
+				bool declined = false;
+
 				auto perf_ctx = perf::menu_perf_begin();
-				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, ShellExtCapture::has(hMenu));
+				auto ctx = ContextMenu::CreateAndInitialize(hWnd, hMenu, { x, y }, _loader.explorer, ShellExtCapture::has(hMenu), &declined);
 				perf::menu_perf_end(perf_ctx, L"popup.context_construct_initialize");
+
+				if(!ctx && declined)
+				{
+					attempted_takeover = false;
+					perf::session_decision(perf::TakeoverDecision::Declined);
+				}
 				if(ctx != nullptr)
 				{
 
-					Flag<uint32_t> flag(uFlags);
-					//Selections::point = { x, y };
-					//	flag.remove(TPM_RETURNCMD);
-					flag.remove(TPM_NONOTIFY);
+					// Add TPM_RETURNCMD, drop TPM_NONOTIFY. Both halves and the
+					// reasons are in Include/HostContract.h; the short version
+					// is that without RETURNCMD the tracked menu answers TRUE
+					// instead of an identifier, so InvokeCommand matches nothing
+					// and the user's own command silently does not run.
+					Flag<uint32_t> flag(plan_host_track(uFlags).flags);
 					//	flag.remove(TPM_NOANIMATION);
 
 				//	flag.add(TPM_HORPOSANIMATION);
@@ -993,12 +1431,100 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 					// Everything above this line is latency the user pays before the
 					// first pixel of the menu appears.
 					perf::menu_perf_end(perf_pre_display, L"popup.total_pre_display");
+					perf::session_decision(perf::TakeoverDecision::TakeOver);
+
+					// A menu Shell composed and is about to track. Whatever the
+					// run of failures before it, this host works.
+					takeover_breaker().record_success();
 
 					invoke(ctx->MenuHandle(), flag, { x, y });
-				
+
+					// The host painted the menu window itself and Shell ended its
+					// menu unseen (Include/HostMenuPainter.h). Hand the host the menu
+					// it built - the __finally tracks it with its own flags - and every
+					// later one. Composition only read the host's menu, so it is intact.
+					if(ctx->host_paints_menus())
+					{
+						ctx->InvokeCommand(0);		// destroys ctx; nothing was chosen
+						ctx = nullptr;
+						if(!g_host_paints_menus.exchange(true))
+							log_host_paints_menus();
+						perf::session_decision(perf::TakeoverDecision::Declined);
+						attempted_takeover = false;
+						invoked = false;
+						x = host_x;
+						y = host_y;
+						__leave;
+					}
+
 					// v = 0;
 					// SystemParametersInfoW(SPI_SETMENUANIMATION, 0, &v, SPIF_SENDCHANGE);
+
+					// With TPM_RETURNCMD now always set, this is the identifier
+					// of the chosen item rather than TRUE.
+					auto selected = result;
+					auto failed = selected == 0 && track_error != ERROR_SUCCESS;
+
+					HostSelection sel;
+					sel.selected = selected;
+					sel.tracking_failed = failed;
+
+					/*
+						Read out of ctx while it still exists, because
+						InvokeCommand destroys it.
+
+						By-position replay applies only to a host that did not
+						ask for TPM_RETURNCMD: one that did is expecting an
+						identifier back from the call, and giving it a tracking
+						value that means nothing outside this process would be
+						worse than the nothing it gets today. The trace harness
+						recorded what untouched Windows does in that combination
+						- returns 1, sends no WM_MENUCOMMAND, selection lost
+						(question.notifybypos_with_returncmd.trace) - so there is
+						no behaviour there to preserve either.
+					*/
+					sel.by_position = ctx->host_notifies_by_position()
+									  && (uFlags & TPM_RETURNCMD) == 0;
+					if(sel.by_position)
+					{
+						HMENU containing = nullptr;
+						sel.position_known = ctx->native_origin(selected, &sel.position,
+																&containing);
+						sel.containing_menu = containing;
+					}
+
 					result = ctx->InvokeCommand(result);
+					sel.unhandled = result;
+
+					// ctx is gone - InvokeCommand deletes it - so everything the
+					// host contract needs was already read out of it above.
+					auto completion = complete_host_contract(uFlags, sel);
+					result = completion.result;
+
+					if(completion.notify == HostNotification::MenuCommand)
+					{
+						// "wParam - The zero-based index of the item selected.
+						//  lParam - A handle to the menu for the item selected."
+						// Posted for the same reason WM_COMMAND is below: the
+						// traces show Windows posting both after WM_EXITMENULOOP,
+						// so sending would put the notification in front of the
+						// host's own tracking call returning.
+						// https://learn.microsoft.com/en-us/windows/win32/menurc/wm-menucommand
+						::PostMessageW(hWnd, WM_MENUCOMMAND,
+									   static_cast<WPARAM>(completion.notify_position),
+									   reinterpret_cast<LPARAM>(completion.notify_menu));
+					}
+					else if(completion.notify == HostNotification::Command)
+					{
+						// Posted, not sent: Windows posts this after the tracking
+						// call returns, and a host that receives it before its own
+						// call has returned is seeing a sequence the real API
+						// never produces. Measured in
+						// src\tests\hostprobe\fixtures\select.plain.classic.trace.
+						// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex
+						::PostMessageW(hWnd, WM_COMMAND,
+									   MAKEWPARAM(completion.notify_id, 0), 0);
+					}
 					__leave;
 				}
 			}
@@ -1015,6 +1541,28 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		// Only this menu. Another window's popup may still be open and holding a
 		// capture of its own.
 		ShellExtCapture::clear(hMenu);
+
+		// Reaching here with the menu not yet tracked means every path above
+		// declined or threw, and what happens next is the fail-open fallback:
+		// the host's own menu, with the host's own flags, untouched. That is the
+		// single most valuable safety property in this file and it is now
+		// recorded rather than merely relied upon.
+		// docs/refactor/01-takeover-contract.md section 2.
+		if(!invoked)
+		{
+			// A bypass and an open breaker have already recorded what they
+			// were; overwriting them with FailOpen would erase the only
+			// evidence of why this menu was the host's own.
+			if(perf::current_session().record.decision == perf::TakeoverDecision::Unknown)
+				perf::session_decision(perf::TakeoverDecision::FailOpen);
+
+			// Said once, by whichever thread crossed the threshold, rather than
+			// on every menu from here on.
+			// docs/refactor/01-takeover-contract.md section 7.
+			if(attempted_takeover && takeover_breaker().record_failure())
+				log_breaker_opened();
+		}
+
 		invoke(hMenu, uFlags, { x, y });
 		// The flag used to be cleared here, which was the only place it was
 		// cleared and not a place every taskbar menu passes through.
@@ -1022,8 +1570,35 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 		// The WIC factory is apartment-local and must not survive the
 		// CoUninitialize that can close this thread's apartment.
 		WIC::release();
+		perf::session_end();
 		if(need_uninit_com)
 			::CoUninitialize();
+
+		/*
+			Hand back the last error the tracking call left, not whatever the
+			teardown above happened to set.
+
+			TrackPopupMenu documents the pairing: "If the function fails, the
+			return value is zero. To get extended error information, call
+			GetLastError."
+			https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenu
+
+			Everything between the tracking call and this line - InvokeCommand,
+			complete_host_contract, PostMessage, WIC::release, session_end,
+			CoUninitialize - can set the thread's last-error value, and several
+			of them do. The host is then told a menu it never saw simply
+			returned zero, with no way to tell a cancelled menu from a call that
+			failed.
+
+			That distinction is not hypothetical here: Include/HostContract.h
+			depends on exactly this signal, because adding TPM_RETURNCMD makes
+			both cases return zero. Shell was consuming a contract it destroyed
+			for its own callers. Caught by running the trace harness through the
+			hook - src\tests\hostprobe\fixtures\question.a_failed_track_sets_a_last_error.trace
+			was the one scenario in twenty-three whose host-observable result
+			differed.
+		*/
+		::SetLastError(track_error);
 		return result;
 	}
 }
@@ -1169,136 +1744,6 @@ LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 	return wndproc(hWnd, uMsg, wParam, lParam);
 }
 
-LRESULT __stdcall TaskbarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, [[maybe_unused]] UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
-{
-	if(uMsg == WM_CONTEXTMENU)
-	{
-		auto hTaskbar = reinterpret_cast<HWND>(dwRefData);
-		auto pt = Point::CursorPos();
-		if(taskbar_t::is_allowed_area(hTaskbar, pt))
-		{
-			if(ShowTaskbarContextMenu(hTaskbar, pt, wParam == 0 && lParam == 0? WM_RBUTTONDOWN : WM_CONTEXTMENU))
-				return 0;			
-		}
-	}
-	else if(uMsg == WM_MOUSEACTIVATE)
-	{
-		auto lret = ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
-		auto msg = HIWORD(lParam);
-
-		if(/*msg != WM_LBUTTONDOWN && */msg != WM_RBUTTONDOWN)
-			return lret;
-
-		auto hTaskbar = reinterpret_cast<HWND>(dwRefData);
-		auto pt = Point::CursorPos();
-
-		if(taskbar_t::is_allowed_area(hTaskbar, pt))
-		{
-			int disabled_taskbar = 0;
-			if(RegistryConfig::get(L"\\disable", L"taskbar", disabled_taskbar) && disabled_taskbar == 1)
-				return lret;
-
-			if(msg == WM_RBUTTONDOWN)
-			{
-				Keyboard kb;
-				if(auto count = kb.get_keys_excloude_contextmenu(); count > 0)
-				{
-					if(kb.key_ctrl())
-					{
-						if(count == 2 && kb.key_win())
-							return lret;
-
-						if(count == 1 && !_initializer.has_error())
-						{
-							if(!_initializer.Status.Loaded)
-								_initializer.OnState();
-						}
-					}
-				}
-			}
-
-			if(_initializer.has_error())
-			{
-				if(msg != WM_RBUTTONDOWN)
-					return lret;
-
-				_initializer.OnState();
-
-				if(_initializer.has_error())
-					return lret;
-			}
-			else
-			{
-				if(_initializer.Status.Disabled)
-					return lret;
-			}
-
-			if(!is_registered())
-			{
-				_taskbar_mouse.unhook();
-				taskbar_t::unhook(hWnd);
-			//	for(auto &window : _window_taskbar)
-			//		window.second.remove_prop(UxSubclass);
-				return lret;
-			}
-
-			if(msg == WM_RBUTTONDOWN)
-			{
-				_taskbar_mouse.hook(WH_MOUSE, [](int nCode, WPARAM wParam, LPARAM lParam)->LRESULT
-				{
-					//auto lret = _taskbar_mouse.callnext(nCode, wParam, lParam);
-					if(nCode == HC_ACTION && wParam == WM_RBUTTONUP)
-					{
-						auto mh = reinterpret_cast<MOUSEHOOKSTRUCT *>(lParam);
-						Window window = ::GetParent(mh->hwnd);
-						if(window.is_prop(UxSubclass))
-						{
-							_taskbar_mouse.unhook();
-							::SetFocus(window);
-							ShowTaskbarContextMenu(window, mh->pt, WM_CONTEXTMENU);
-							return 1;
-						}
-					}
-					return _taskbar_mouse.callnext(nCode, wParam, lParam);
-				}, hWnd);
-				
-				return MA_ACTIVATEANDEAT;
-			}
-
-			//if(msg != WM_RBUTTONDOWN)
-			//	::SetFocus(hWnd);
-
-			/*
-			if(msg == WM_RBUTTONDOWN)
-			{
-				::SetFocus(hWnd);
-				//ShowTaskbarContextMenu(hWnd, pt, WM_RBUTTONDOWN);
-				SendMessageW(hWnd, WM_CONTEXTMENU, 0, 0);
-			}
-			*/
-		}
-		return lret;
-	}
-	else if(uMsg == WM_SETTINGCHANGE || uMsg == WM_DISPLAYCHANGE)
-	{
-		// Cached hit-test answers describe a layout that has just changed.
-		taskbar_t::invalidate_hit_cache();
-
-		if(uMsg == WM_SETTINGCHANGE && SPI_SETWORKAREA == wParam && ::GetSystemMetrics(SM_CMONITORS) > 1)
-		{
-			taskbar_t::hook_all(1000);
-		}
-	}
-	else if(uMsg == WM_DESTROY)
-	{
-		taskbar_t::invalidate_hit_cache();
-		taskbar_t::unhook(hWnd);
-		taskbar_t::hook_all(1000);
-	}
-
-	return ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
-}
-
 void BootstrapOnce()
 {
 	static std::once_flag flag;
@@ -1375,6 +1820,24 @@ void BootstrapOnce()
 							__trace(L"CoCreateInstance detour did not commit");
 						}
 					}
+					else
+					{
+						// begin() refuses when the process could not be brought
+						// into a known state - a snapshot that failed, a live
+						// thread that could not be opened, a thread Detours
+						// would not record. Committing anyway would leave those
+						// threads able to "execute an illegal combination of old
+						// and new code", which is worse than not having the fast
+						// path. Nothing was init'd, so there is nothing to
+						// forget; Shell's other interception route is untouched
+						// and refresh_interception_status() below reports which
+						// one is carrying this process.
+						__trace(L"CoCreateInstance detour not installed: threads "
+								L"could not be enlisted (reason %d, error %u, thread %u)",
+								static_cast<int>(transaction.enlistment().result),
+								static_cast<unsigned>(transaction.enlistment().error),
+								static_cast<unsigned>(transaction.enlistment().thread_id));
+					}
 
 					if(!rt.ntuser_popup_hook.installed())
 					{
@@ -1391,9 +1854,27 @@ void BootstrapOnce()
 					hook();
 				}
 
+				// Record which of the two mechanisms ended up carrying this
+				// process, so `shell.exe -report perf` can say so. They are not
+				// equivalent - the fallback is per-image and therefore misses
+				// late-loaded modules, GetProcAddress calls, delay-loaded
+				// imports and API-set importers - so "the fallback is carrying
+				// this host" is an actionable statement rather than trivia.
+				// Include/InterceptionStatus.h and
+				// docs/refactor/01-takeover-contract.md section 9c.
+				refresh_interception_status();
+
+				// Start the packaged-verb scan now, on its own thread. It is
+				// registry and manifest I/O - 244 files and ~111 ms cold on the
+				// machine this was measured on - and it used to run on the menu
+				// thread, for whichever right-click happened to find the 30 s
+				// TTL expired. Starting it here overlaps it with the rest of
+				// bootstrap, so by the first menu the answer is usually already
+				// published. See Include/PackageCatalogService.h.
+				PackageCatalogService::instance().warm_async();
+
 				success = true;
 				rt.hooks_installed.store(true, std::memory_order_release);
-				hooks_installed.store(true, std::memory_order_release);
 			}
 		}
 		catch(...)
@@ -1492,7 +1973,7 @@ STDAPI DllCanUnloadNow(void)
 	if(ShellExtCapture::has_active_captures())
 		return S_FALSE;
 
-	if(Runtime().hooks_installed.load(std::memory_order_relaxed) || hooks_installed.load(std::memory_order_relaxed))
+	if(Runtime().hooks_installed.load(std::memory_order_relaxed))
 		return S_FALSE;
 
 	if(!_loader.explorer || !is_registered())
@@ -1501,127 +1982,59 @@ STDAPI DllCanUnloadNow(void)
 	return S_FALSE;
 }
 
-// Register the COM server and the context menu handler.
-HRESULT Register(bool reg)
-{
-	try
-	{
-		if(reg)
-		{
-			Path::Delete(_log.path());
-			//_log.reset();
-		}
-
-		if(!ver->IsWindows7OrGreater())
-		{
-			//windows compatibility
-			_log.error(L"%s", string::Extract(_hInstance, IDS_WINDOWS_COMPATIBILITY).c_str());
-			return ERROR_EXE_MACHINE_TYPE_MISMATCH;//ERROR_DS_VERSION_CHECK_FAILURE
-		}
-
-		auto is_elevated = Security::Elevation::IsElevated();
-
-		if(!is_elevated)
-		{
-			// Missing administrative privileges!
-			string msg = string::Extract(_hInstance, IDS_ADMIN_PRIVILEGES).move();
-			//You will need to provide administrator permission to run this Shell
-			_log.error(L"%s", msg.c_str());
-			return ERROR_ACCESS_DENIED;
-		}
-
-		string path = Path::Module(_hInstance).move();
-
-		if(reg)
-		{
-			// The install-directory ACL widening that used to be here is gone;
-			// see the matching comment in exe/src/Main.cpp. It granted Users
-			// GENERIC_ALL on Program Files and only failed to do so because it
-			// could not open a directory handle.
-			//_log.reset();
-			//IO::Path::Delete(_log.path());
-		}
-
-		string msg;
-
-		if(reg)
-		{
-			//_log.create();
-			REGOP regop{};
-			regop.REGISTER = regop.CONTEXTMENU = regop.ICONOVERLAY = true;
-
-			if(!RegistryConfig::Register(path, regop))
-			{
-				msg = string::Extract(_hInstance, IDS_REGISTER_NOT_SUCCESS).move();
-				_log.error(L"%s", msg.c_str());
-				return S_FALSE;
-			}
-			msg = string::Extract(_hInstance, IDS_REGISTER_SUCCESS).move();
-		}
-		else
-		{
-			if(!RegistryConfig::IsRegistered())
-				return S_OK;
-
-			if(!RegistryConfig::Unregister())
-			{
-				msg = string::Extract(_hInstance, IDS_UNREGISTER_NOT_SUCCESS).move();
-				_log.error(L"%s", msg.c_str());
-				return S_FALSE;;
-			}
-			msg = string::Extract(_hInstance, IDS_UNREGISTER_SUCCESS).move();
-		}
-
-		_log.info(L"%s", msg.c_str());
-
-		_log.close();
-
-		return S_OK;
-	}
-	catch(...)
-	{
-#ifdef _DEBUG
-		_log.exception(__func__);
-#endif
-	}
-	_log.close();
-	return S_FALSE;
-}
 /*
-//  Register the COM server and the context menu handler.
-__control_entrypoint(DllExport)
-STDAPI DllRegisterServer()
-{
-	return Register(true);
-}
+	Parse a configuration and report; publish nothing.
 
-__control_entrypoint(DllExport)
-STDAPI DllUnregisterServer()
-{
-	return Register(false);
-}
+	This is what `shell.exe -check` calls. It exists as an export because the
+	parser lives here and the manager EXE does not link it - see
+	src/shared/ConfigCheck.h for the boundary and docs/refactor/03-config-safety.md
+	section 1b step 4 for why the feature is worth having at all.
+
+	Deliberately does *not* call BootstrapOnce(): loading this DLL to ask it a
+	question must not install a hook into the asking process. DllMain does
+	nothing but record the instance, so a plain LoadLibrary is inert.
+
+	It does have to call `init(HINSTANCE)` though, and not doing so was a defect
+	that made `shell.exe -check` with no argument answer "no configuration file
+	was found" on *every* machine, however healthy. The path is derived in
+	`Initializer::init(HINSTANCE)` - `application.ConfigPortable`, the
+	`shell.nss` beside this DLL - and `Parser`'s default constructor gives up
+	immediately when `Initializer::instance` is null, which is exactly the state
+	skipping BootstrapOnce leaves behind. So the bare form could never work, and
+	docs/refactor/03-config-safety.md section 1b's "empty means whatever this
+	machine would load" was describing something that had never happened.
+
+	`init(HINSTANCE)` is safe here in a way BootstrapOnce is not: it assigns
+	paths, reads the DPI and asks whether this process is elevated. No hook, no
+	COM, no window, no thread.
+
+	Guarded on `instance` being null so this only ever *establishes* the paths.
+	The export is callable from a host where Shell is live and has already
+	bootstrapped, and re-running it there would reset `application.Config` to
+	the portable path underneath a running menu - turning a read-only diagnostic
+	into something that changes what it is diagnosing, which the comment above
+	says this must never do.
+
+	Named with __stdcall and exported by name through shell.def, so the same
+	name works on x86, x64 and arm64 without decoration leaking into the
+	contract.
 */
-/*
-STDAPI DllInstall(BOOL bInstall, _In_opt_ PCWSTR pszCmdLine)
+extern "C" __declspec(dllexport)
+int __stdcall ShellCheckConfig(const wchar_t *path, Nilesoft::Shell::ConfigCheckResult *result)
 {
-	MBF(L"%d %s", bInstall, pszCmdLine);
-	return E_NOTIMPL;
+	using namespace Nilesoft::Shell;
+
+	// A caller compiled against a different version of the struct, or none at
+	// all. Refusing is the only safe answer: every field below is written
+	// through a pointer whose size this is the only evidence for.
+	if(!result || result->cbSize != sizeof(ConfigCheckResult))
+		return CONFIG_CHECK_UNUSABLE;
+
+	if(Initializer::instance == nullptr)
+		_initializer.init(_hInstance);
+
+	return _initializer.check(path, *result);
 }
-*/
-
-/*
-#include <Shldisp.h>
-
-CoInitialize(NULL);
-// Create an instance of the shell class
-IShellDispatch4 *pShellDisp = NULL;
-HRESULT sc = CoCreateInstance(CLSID_Shell, NULL, CLSCTX_SERVER, IID_IDispatch, (LPVOID *) &pShellDisp );
-// Show the desktop
-sc = pShellDisp->ToggleDesktop();
-// Restore the desktop
-sc = pShellDisp->ToggleDesktop();
-pShellDisp->Release();
- */
 
 #pragma endregion
 

@@ -1,6 +1,7 @@
 #include "Include/ShellExt.h"
 #include <pch.h>
 #include "Include/Diagnostics/MenuPerf.h"
+#include "Include/SelectionRoute.h"
 
 //Enable Narrow Classic Context Menu on Windows 10
 // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\FlightedFeatures\ImmersiveContextMenu:0
@@ -995,13 +996,21 @@ namespace Nilesoft
 			return true;
 		}
 
-		bool Selections::QuerySelected()
-		{
-			try
-			{
-				if(Window.handle == nullptr)
-					return false;
+		/*
+			The selection as Explorer's own view reports it - the IShellBrowser route.
 
+			Split out of QuerySelected on 2026-08-24 as step 5 of
+			docs/refactor/04-code-health.md section 4: one provider per way of learning
+			what is selected, and a dispatcher above them that decides which to ask.
+			This half is the window archaeology - find an IShellBrowser by walking up
+			from the popup's window, ask it for the active view, and read the selection
+			off that. Its counterpart is QuerySelectedFromHandler, which reads the
+			selection a host already handed us through IShellExtInit.
+
+			This commit moved the code and changed nothing about it.
+		*/
+		bool Selections::QuerySelectedFromShellBrowser()
+		{
 				/*
 				IComPtr<IShellWindows> sw;	
 				//if(S_OK == ::CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(IShellWindows), sw))
@@ -1076,20 +1085,6 @@ namespace Nilesoft
 
 				HWND current_window{};
 				
-				// No IShellBrowser used to end the query here, and that is exactly why
-				// third-party file managers only ever got theming: they implement
-				// their own view and answer nothing to WM_GETISHELLBROWSER, so the
-				// menu was built with no selection at all. Such a host has usually
-				// already handed us the selection through IShellExtInit, so ask for
-				// that before giving up.
-				//
-				// Placed after this gate rather than before it so Explorer is not
-				// touched. Explorer always has an IShellBrowser and never reaches
-				// here, which keeps its richer handling below - the DropTarget and
-				// Home/Quick access/Libraries cases - exactly as it was. Taking the
-				// handler's selection first would have quietly bypassed all of it.
-				if(!Window.has_IShellBrowser)
-					return QuerySelectedFromHandler();
 
 				if(Window.desktop)
 				{
@@ -1156,6 +1151,37 @@ namespace Nilesoft
 					}
 					if(got_selection)
 					{
+						/*
+							Keep the array the view just handed us.
+
+							docs/refactor/02-first-paint-latency.md section 3 asks
+							for exactly this and it was never wired up: the
+							packaged-verb path needs an IShellItemArray, and when
+							it does not find one it rebuilds it from the item
+							*paths* - one SHParseDisplayName per file, on the
+							thread between the right-click and the first pixel
+							(ContextMenu::ensure_selection_array).
+
+							Section 3 assumed that fallback would be rare. It was
+							not: the capture path stored its array and this one
+							did not, so every Explorer menu rebuilt an array the
+							view had already built. Measured 2026-08-25 with 200
+							files selected - the rebuild is ~420 ms of a ~450 ms
+							menu, and the 27 handlers it exists to feed account
+							for 27 ms of it.
+
+							GetSelection returns a reference this function owns,
+							and the IComPtr drops it at the end of the scope, so
+							one is taken for the field - the same shape as the
+							capture path in QuerySelectedFromHandler.
+						*/
+						if(!ItemArray && sia.pointer)
+						{
+							ItemArray = sia.pointer;
+							ItemArray->AddRef();
+							ItemArrayOwned = true;
+						}
+
 						DWORD sel_count = 0;
 						if(S_OK != sia->GetCount(&sel_count))
 							return false;
@@ -1287,6 +1313,62 @@ namespace Nilesoft
 					}
 					Window.id = WINDOW_UI;
 				}
+
+			// Every failure in this provider lands here, exactly as it did when
+			// this body sat inside QuerySelected's try and fell through to the
+			// same `return false` after the catch. Exceptions are still caught
+			// by that try - this function is called from inside it.
+			return false;
+		}
+
+		bool Selections::QuerySelected()
+		{
+			try
+			{
+				if(Window.handle == nullptr)
+					return false;
+
+				// Which provider is asked, and when the other one may answer.
+				// The rules and the reasoning are in Include/SelectionRoute.h;
+				// this function is only the wiring.
+				//
+				// No IShellBrowser used to end the query here, and that is exactly why
+				// third-party file managers only ever got theming: they implement
+				// their own view and answer nothing to WM_GETISHELLBROWSER, so the
+				// menu was built with no selection at all. Such a host has usually
+				// already handed us the selection through IShellExtInit, so ask for
+				// that before giving up.
+				//
+				// The first gate is on the window classification rather than on the
+				// capture so Explorer is not touched: it always has an IShellBrowser,
+				// so it never reaches the handler, and its richer handling - the
+				// DropTarget and Home/Quick access/Libraries cases - is exactly as it
+				// was. Taking the handler's selection first would have quietly
+				// bypassed all of it.
+				if(SelectionRoute::Provider::Handler
+				   == SelectionRoute::first(Window.has_IShellBrowser))
+					return QuerySelectedFromHandler();
+
+				if(QuerySelectedFromShellBrowser())
+					return true;
+
+				// The window's class said Explorer and no IShellBrowser answered.
+				// `has_IShellBrowser` is set from the class hash alone, so it is a
+				// hypothesis - and it is wrong for exactly the hosts this branch was
+				// written for: a file manager that embeds the real shell view has
+				// Explorer's window classes and its own idea of what is selected.
+				//
+				// Nothing has been read at this point, which is what makes it safe to
+				// ask the handler here and nowhere later: every other way this
+				// provider fails happens after it may have called Parse, and Parse
+				// appends to Items and sets the type counters. `ShellBrowser` is the
+				// discriminator because the lookup is the only thing that sets it, and
+				// an exception would have gone to the catch below rather than here.
+				if(SelectionRoute::Provider::Handler
+				   == SelectionRoute::next_after_browser(ShellBrowser != nullptr))
+					return QuerySelectedFromHandler();
+
+				return false;
 			}
 			catch(...)
 			{

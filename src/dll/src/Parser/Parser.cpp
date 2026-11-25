@@ -4,6 +4,7 @@
 #include "Expression\Variable.h"
 #include "Include\Theme.h"
 #include "RegistryConfig.h"
+#include "ConfigStamp.h"
 
 // Windows State (Hidden | Normal | Minimized | Maximized)
 namespace Nilesoft
@@ -25,6 +26,7 @@ namespace Nilesoft
 			if(!context.Application)
 			{
 				_log.warning(L"no application context; configuration not loaded.");
+				m_root_unavailable = true;
 				return;
 			}
 
@@ -56,22 +58,77 @@ namespace Nilesoft
 					}
 					ss += L"not found.";
 					_log.warning(ss);
+
+					// Nowhere recorded to look: name the portable path, so a
+					// watcher can wait for the file to be created.
+					if(m_path.empty())
+						m_path = context.Application->ConfigPortable;
+					m_root_unavailable = true;
 					return;
 				}
 			}
 
 			context.Application->Config = m_path;
 
+			open_root();
+		}
+
+		Parser::Parser(const string &config_path)
+		{
+			context.Application = Initializer::instance ? &Initializer::instance->application : nullptr;
+			context.Cache = nullptr;
+			context.Selections = nullptr;
+
+			m_path = config_path;
+
+			if(m_path.empty() || !Path::IsFileExists(m_path))
+			{
+				_log.warning(L"config file not found.");
+				m_root_unavailable = true;
+				return;
+			}
+
+			if(context.Application)
+				context.Application->Config = m_path;
+
+			open_root();
+		}
+
+		// Opens m_path as the root lexer. Shared by both constructors so the two
+		// paths cannot drift; only the way m_path is chosen differs.
+		void Parser::open_root()
+		{
 			_imports.emplace_back(new Lexer);
 			l = _imports.front().get();
-			
+
+			// Before the open, so a save after the read differs from it.
+			m_root_stamp = config_file_stamp(m_path.c_str());
+
 			if(!l->load_File(m_path.c_str()) || l->length < 5)
 			{
+				m_root_unavailable = l->open_failed;
+
 				if(HasError())
 				{
 					error(l->length < 5 ? TokenError::InvalidConfigFile : l->error, m_path.c_str());
 				}
+				return;
 			}
+
+			l->file_index = m_loaded.size();
+			m_loaded.emplace_back(Path::Full(m_path).c_str());
+			m_stamps.push_back(m_root_stamp);
+		}
+
+		// Where the rule now being parsed was written. The lexer knows which
+		// file it is reading and how far into it; this is the pair, recorded on
+		// every NativeMenu the parser builds so the inspector can point at it.
+		// Include/RuleProvenance.h.
+		RuleProvenance Parser::here() const
+		{
+			if(!l)
+				return {};
+			return RuleProvenance::at(l->file_index, l->line);
 		}
 
 		Parser::~Parser() { }
@@ -445,6 +502,10 @@ namespace Nilesoft
 				}
 
 				std::unique_ptr<NativeMenu> sub(new NativeMenu(menu));
+				// Taken before parse_menu_item, which consumes the rule and
+				// leaves the lexer on whatever follows it - for a submenu, that
+				// is the closing brace of its body, several lines down.
+				sub->provenance = here();
 				if(parse_menu_item(sub.get(), type))
 				{
 					menu->items.push_back(sub.release());
@@ -527,6 +588,7 @@ namespace Nilesoft
 		{
 			auto cache = context.Cache;
 			std::unique_ptr<NativeMenu> item(new NativeMenu(true));
+			item->provenance = here();
 			if(eat().parse_modify_properties(item.get(), action))
 				cache->statics.push_back(item.release());
 		}
@@ -950,6 +1012,8 @@ namespace Nilesoft
 			SETTING _settings = { CONFIG_SETTINGS, &sets->priority, {
 				{ IDENT_PRIORITY, &sets->priority },
 				{ IDENT_SHOWDELAY, &sets->showdelay },
+				{ IDENT_COLUMNS, &sets->columns },
+				{ IDENT_FAVORITES, &sets->favorites },
 				{ IDENT_SCREENSHOT, &sets->screenshot.enabled,{
 					{ IDENT_ENABLED, &sets->screenshot.enabled },
 					{ IDENT_DIRECTORY, &sets->screenshot.directory }
@@ -1146,18 +1210,27 @@ namespace Nilesoft
 			path = Path::Full(path).move();
 
 			auto hash = path.hash();
-			
+
 			if(hash)
 			{
+				// A file already imported anywhere in this parse is skipped, not
+				// re-loaded: diamond imports previously logged "already imported"
+				// here and then fell through to load_File anyway, because `break`
+				// only exits this scan loop.
+				bool already_imported = false;
 				for(auto &h : m_imports)
 				{
 					if(h == hash)
 					{
 						__trace(L"line[%d] column[%d] already imported '%s'",
 										line, col, path.c_str());
+						already_imported = true;
 						break;
 					}
 				}
+				if(already_imported)
+					return 0;
+
 				m_imports.push_back(hash);
 			}
 
@@ -1181,9 +1254,18 @@ namespace Nilesoft
 
 			auto lex = import_push();
 
+			// Before the open, so a save after the read differs from it.
+			const auto stamp = config_file_stamp(path.c_str());
+
 			if(hash && lex->load_File(path, ignore_failed))
 			{
 				__trace(L"import '%s'", path.c_str());
+
+				// `path` is already canonicalised by Path::Full above, and the
+				// duplicate-import scan means this runs once per file.
+				lex->file_index = m_loaded.size();
+				m_loaded.emplace_back(path.c_str());
+				m_stamps.push_back(stamp);
 
 				l = lex;
 				skip();
@@ -1263,6 +1345,7 @@ namespace Nilesoft
 					case CONFIG_SEPARATOR:
 					{
 						std::unique_ptr<NativeMenu> item(new NativeMenu(&cache->dynamic));
+						item->provenance = here();
 						if(parse_menu_item(item.get(), id))
 						{
 							cache->dynamic.items.push_back(item.release());

@@ -1,0 +1,53 @@
+# depth	pos	id	kind	title	verb
+0	0	256	item	&Open	open
+0	1	261	item	Pin to &Quick access	pintohome
+0	2	262	item	Search Everything 1.5a...	Search Everything 1.5a...
+0	3	263	item	Wi&zTree	WizTree
+0	4	248	item	Open with &Visual Studio	AnyCode
+0	5	250	item	Play with MPC-HC	mplayerc64.play
+0	6	251	item	Play with VLC media player	PlayWithVLC
+0	7	214	item	&Move to OneDrive	
+0	8	0	sep		
+0	9	144	item	Sign and encrypt	
+0	10	150	submenu	More GpgEX options	
+1	0	142	item	Decrypt	
+1	1	143	item	Verify	
+1	2	141	item	Decrypt and verify	
+1	3	145	item	Encrypt	
+1	4	146	item	Sign	
+1	5	144	item	Sign and encrypt	
+1	6	147	item	Import keys	
+1	7	148	item	Create checksums	
+1	8	149	item	Verify checksums	
+1	9	0	sep		
+1	10	151	item	About GpgEX	
+0	11	0	sep		
+0	12	138	submenu	&Give access to	Windows.Share
+1	0	123	item		
+0	13	122	item	Restore previous &versions	PreviousVersions
+0	14	121	submenu	Drop Here?	DropAs
+1	0	114	item	&Symbolic Link	DropSymbolicLink
+1	1	115	item	&Junction	DropJunction
+1	2	116	item	&Smart Copy	DropSmartCopy
+1	3	117	item	Smart M&irror	DropSmartMirror
+1	4	118	item	&DeLorean Copy	DropDeloreanCopy
+1	5	119	item	Hardlink &Clone	DropHardLinkClone
+1	6	120	item	Symbolic Link C&lone	DropSymbolicLinkClone
+0	15	82	submenu	&Include in library	
+1	0	81	item	Retrieving libraries...	PinToStartScreen
+0	16	81	item	&Pin to Start	PinToStartScreen
+0	17	78	item	Copy &as path	copyaspath
+0	18	77	item	Unlock with File Locksmith	
+0	19	76	item	Rename with Pow&erRename	
+0	20	32765	sep		
+0	21	75	submenu	Se&nd to	
+1	0	28	item	Bluetooth device	
+0	22	32764	sep		
+0	23	25	item	Cu&t	cut
+0	24	26	item	&Copy	copy
+0	25	4294967295	sep		
+0	26	17	item	Create &shortcut	link
+0	27	18	item	&Delete	delete
+0	28	32766	sep		
+0	29	20	item	Pr&operties	properties
+# top-level items: 30

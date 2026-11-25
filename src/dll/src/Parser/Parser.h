@@ -27,7 +27,32 @@ namespace Nilesoft
 			std::vector<uint32_t> m_imports;
 			std::vector<std::unique_ptr<Lexer>> _imports;
 
+			// Every file this parse actually opened, root first, in load order.
+			// m_imports holds only hashes and _imports is the live lexer stack,
+			// which is unwound as the parse leaves each file - neither survives
+			// as a list of what was read. The last-known-good shadow needs that
+			// list to mirror the configuration it is shadowing.
+			std::vector<std::wstring> m_loaded;
+
+			// ConfigStamp.h's stamp of each file in m_loaded, same order and size,
+			// taken immediately before that file was opened. A save that lands
+			// after the read then differs from it, so whoever watches the files
+			// can tell the configuration it is serving is already stale.
+			std::vector<uint64_t> m_stamps;
+
+			// The root's stamp, taken before the first attempt to open it
+			// whether or not it opened (zero when it does not exist).
+			uint64_t m_root_stamp = 0;
+
+			// The root file could not be opened or does not exist, as opposed to
+			// opening and being empty.
+			bool m_root_unavailable = false;
+
 		private:
+
+			// The file and line the lexer is on, as a rule records it.
+			// Include/RuleProvenance.h.
+			RuleProvenance here() const;
 
 			bool peek_char(wchar_t c, bool singleLineComment);
 			uint32_t peek_ident(const std::initializer_list<uint32_t> &ids, uint32_t *value = nullptr);
@@ -186,10 +211,43 @@ namespace Nilesoft
 
 		public:
 			Parser();
+
+			// Parse a named file instead of resolving the configuration path from
+			// the registry and the portable fallback. The DLL always uses the
+			// default constructor; this exists so tests can drive a real parse of
+			// real files without depending on, or disturbing, machine state.
+			explicit Parser(const string &config_path);
+
 			~Parser();
+
+		private:
+			void			open_root();
+
+		public:
 
 
 			bool			Load();
+
+			// Full paths of every file this parse opened, root first. Valid
+			// after Load(); see m_loaded.
+			const std::vector<std::wstring> &LoadedFiles() const { return m_loaded; }
+
+			// Pre-read stamps parallel to LoadedFiles(). See m_stamps.
+			const std::vector<uint64_t> &LoadedStamps() const { return m_stamps; }
+
+			// The file this parse tried to load as its root: the registry `config`
+			// value, else the portable path. Empty when there was nowhere to look.
+			const string &RootPath() const { return m_path; }
+
+			// The stamp of RootPath() taken before it was first opened, for a
+			// watcher to wait on a root that never made it into LoadedFiles().
+			uint64_t RootStamp() const { return m_root_stamp; }
+
+			// True when the root does not exist or could not be opened. Not true
+			// for a root that opened and was empty or tiny: an emptied shell.nss
+			// is a legitimate empty configuration.
+			bool RootUnavailable() const { return m_root_unavailable; }
+
 			bool			HasError() const;
 			TokenError		Error() const;
 

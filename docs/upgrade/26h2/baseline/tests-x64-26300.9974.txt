@@ -1,0 +1,1032 @@
+[ordinal_fold]
+  ok   ascii_case_pairs_match
+  ok   ascii_distinct_do_not_match
+  ok   ascii_adjacent_bytes_are_not_folded_together
+  ok   cjk_high_byte_collisions_rejected
+  ok   non_ascii_is_compared_exactly
+  ok   surrogate_pairs_compare_exactly
+  ok   simd_and_scalar_paths_agree
+  ok   count_is_respected_without_null_termination
+  ok   null_and_alias_handling
+
+[ordinal_exact]
+  ok   case_sensitive_path
+  ok   non_ascii_hybrid_unicode_folds
+
+[string_search]
+  ok   find_last_returns_the_final_overlapping_match
+  ok   find_last_checks_index_zero
+  ok   find_last_reports_no_match_without_underflow
+  ok   find_last_preserves_case_policy
+
+[encoding]
+  ok   bom_forms_are_recognised
+  ok   bomless_utf8_is_detected
+  ok   legacy_codepage_bytes_are_detected_as_ansi
+  ok   malformed_utf8_is_rejected
+  ok   degenerate_input
+  ok   wide_to_utf8_encodes_rather_than_failing
+  ok   unicode_to_utf8_encodes_rather_than_failing
+  ok   an_unpaired_surrogate_is_substituted_not_fatal
+  ok   utf8_conversion_of_nothing_is_nothing
+  ok   utf16_to_utf8_encodes_the_first_code_point_above_the_short_boundary
+  ok   utf16_to_utf8_encodes_hangul_and_cjk
+  ok   utf16_to_utf8_recombines_a_surrogate_pair
+  ok   utf16_to_utf8_keeps_ascii_around_a_high_code_point
+  ok   utf16_to_utf8_substitutes_an_unpaired_surrogate
+  ok   utf16_to_utf8_preserves_an_embedded_nul
+  ok   utf16_to_utf8_of_nothing_is_nothing
+  ok   a_bom_only_file_decodes_to_nothing_rather_than_faulting
+  ok   malformed_utf8_decodes_to_nothing_rather_than_faulting
+  ok   an_empty_ansi_read_decodes_to_nothing_rather_than_faulting
+  ok   a_valid_utf8_read_still_decodes
+  ok   an_embedded_nul_still_truncates_a_decoded_read
+
+[bitmapcache]
+  ok   identical_text_and_size_hits
+  ok   same_text_at_a_different_size_is_a_separate_entry
+  ok   different_text_does_not_collide
+  ok   length_is_part_of_the_key
+  ok   duplicate_add_keeps_the_incumbent_and_frees_the_loser
+  ok   re_adding_the_same_handle_is_a_no_op
+  ok   clear_releases_every_handle
+  ok   destructor_releases_every_handle
+  ok   failed_rasterisation_is_not_cached
+  ok   empty_and_null_text_are_rejected
+  ok   bounded_capacity_stops_caching_at_limit
+  ok   concurrent_access_is_thread_safe
+
+[wic]
+  ok   an_already_pbgra_source_avoids_a_redundant_converter
+  ok   straight_alpha_bgra_is_converted_to_premultiplied_bgra
+  ok   converted_source_ownership_is_released_exactly_once
+  ok   init_failure_still_releases_the_transferred_source
+  ok   apartment_local_factories_survive_concurrent_menu_threads
+  ok   factory_survives_repeated_sta_init_use_release_uninit
+  ok   factory_survives_repeated_mta_init_use_release_uninit
+
+[shellext]
+  ok   handler_answers_both_interfaces_and_refuses_others
+  ok   aggregation_is_refused
+  ok   every_live_object_is_counted_and_the_count_returns_to_zero
+  ok   lockserver_pins_and_unpins
+  ok   marshal_failure_never_falls_back_to_a_raw_interface_pointer
+  ok   an_empty_capture_is_never_reported_as_a_match
+  ok   a_capture_belongs_to_one_menu_and_contributes_nothing_to_others
+  ok   the_folder_id_list_is_cloned_and_released
+  ok   two_handlers_do_not_overwrite_each_other
+  ok   two_bound_menus_coexist_and_clear_is_per_menu
+  ok   a_match_outlives_the_registry_entry
+  ok   end_to_end_initialize_and_query_context_menu
+  ok   a_default_only_query_binds_nothing
+  ok   end_to_end_selected_file_data_object_capture
+  ok   independent_menus_own_independent_one_shot_streams
+  ok   an_expired_unconsumed_stream_is_pruned_safely
+  ok   a_capture_taken_on_one_apartment_is_usable_on_another
+  ok   active_captures_reporting
+
+[selection_paths]
+  ok   classifies_every_documented_windows_prefix_form
+  ok   resolves_ordinary_and_root_relative_forms_against_the_selection
+  ok   drive_relative_policy_is_explicit_for_same_and_other_drives
+  ok   directory_precedes_parent_and_no_selection_preserves_input
+  ok   filesystem_consumers_ignore_an_unrelated_host_cwd
+
+[threadsafety]
+  ok   runtime_variable_isolation
+  ok   snapshot_lifetime_and_muid_integrity
+
+[parser]
+  ok   import_path_normalization
+  ok   import_cycle_detection
+
+[native_menu_lazy]
+  ok   a_popup_is_initialised_exactly_once
+  ok   lparam_carries_the_position_and_is_not_a_window_menu
+  ok   the_root_notification_matches_what_windows_sends
+  ok   a_popup_without_a_handle_is_never_notified
+  ok   reentrant_initialisation_is_refused
+  ok   a_throwing_host_does_not_wedge_the_guard
+  ok   only_active_parent_movement_selects_legacy_eager
+  ok   unmaterialized_empty_children_are_pending_not_empty
+  ok   materialized_empty_children_are_known_empty
+  ok   materialized_nonempty_children_are_not_empty
+  ok   nested_moveto_requires_eager_discovery_and_then_moves
+  ok   opening_the_root_does_not_pay_for_unopened_submenus
+
+[native_menu_uninit]
+  ok   a_popup_is_recorded_once_however_often_it_is_offered
+  ok   a_popup_that_was_never_notified_is_owed_nothing
+  ok   popups_are_closed_deepest_first
+  ok   taking_the_list_empties_it
+  ok   every_notified_popup_is_uninitialised_exactly_once
+
+[explorer_command]
+  ok   star_matches_files_only
+  ok   directory_and_drive_types
+  ok   leading_dot_type_matches_that_extension_only
+  ok   mixed_selection_matches_if_any_file_does
+  ok   an_image_verb_stays_off_a_document
+  ok   parse_guid_accepts_braced_and_plain
+  ok   parse_nanazip_style_manifest
+  ok   type_attribute_is_not_itemtype_suffix
+  ok   pretty_printed_type_with_spaces
+  ok   category_attribute_is_not_a_registration
+  ok   missing_section_is_not_a_registration
+  ok   same_hash_and_type_is_already_represented
+  ok   same_hash_different_type_is_not_a_duplicate
+  ok   clsid_match_skips_before_title
+  ok   guid_null_is_not_an_identity
+  ok   canonical_guid_skips_when_usable
+
+[provider_cache]
+  ok   a_borrowed_provider_releases_the_callers_reference
+  ok   a_hundred_menus_do_not_accumulate_references
+  ok   a_released_cache_holds_nothing
+  ok   a_third_party_hosts_thread_keeps_nothing_between_menus
+  ok   explorers_thread_keeps_them_because_that_is_the_measured_win
+  ok   forgetting_a_provider_drops_the_caches_reference
+  ok   an_activation_that_failed_caches_nothing
+  ok   a_provider_the_menu_item_took_is_handed_over_not_released
+  ok   a_released_cache_does_not_take_the_menus_provider_with_it
+  ok   a_moved_handle_names_one_reference_and_not_two
+
+[provider_call]
+  ok   the_canonical_name_read_is_inside_the_providers_cost
+  ok   activation_stays_inside_the_cost
+  ok   a_provider_that_shows_nothing_is_not_asked_its_name
+  ok   a_failed_name_read_is_still_charged_and_yields_no_identity
+
+[packages]
+  ok   a_full_name_parses_into_its_documented_fields
+  ok   a_non_empty_resource_id_still_parses
+  ok   garbage_is_refused_rather_than_half_parsed
+  ok   a_full_name_and_its_path_come_out_of_one_walk
+  ok   the_snapshot_matcher_is_the_index_matcher
+
+[takeover_breaker]
+  ok   a_fresh_breaker_attempts_takeover
+  ok   two_failures_are_not_enough_to_open_it
+  ok   the_third_consecutive_failure_opens_it
+  ok   a_success_resets_the_run
+  ok   failures_far_apart_never_accumulate
+  ok   only_one_caller_is_told_it_opened_the_breaker
+  ok   an_open_breaker_stays_open_even_after_a_success
+  ok   menus_handed_to_the_host_are_counted
+  ok   exactly_one_thread_is_told_it_opened_the_breaker
+  ok   reset_puts_it_back_the_way_it_started
+
+[takeover_gesture]
+  ok   an_ordinary_right_click_carries_no_gesture
+  ok   more_than_two_keys_is_not_a_gesture
+  ok   a_negative_count_is_not_a_gesture
+  ok   ctrl_alone_reloads_the_configuration
+  ok   f5_and_the_left_button_also_reload
+  ok   win_alone_leaves_the_windows_menu_in_charge
+  ok   shift_alone_is_not_a_gesture
+  ok   alt_alone_is_not_a_gesture
+  ok   ctrl_and_win_disable_the_shell
+  ok   ctrl_and_shift_reload_the_configuration
+  ok   ctrl_and_alt_bypass_shell_for_this_click
+  ok   the_bypass_pair_is_none_of_the_pairs_already_taken
+  ok   shift_and_alt_inspect_the_menu
+  ok   the_inspect_pair_is_none_of_the_pairs_already_taken
+  ok   the_remaining_pairs_are_not_gestures
+  ok   a_taskbar_left_click_is_never_a_gesture
+  ok   no_click_can_mean_two_things_at_once
+
+[taskbar_cache]
+  ok   an_empty_cache_answers_nothing
+  ok   a_stored_answer_comes_back
+  ok   nearby_points_share_one_answer
+  ok   negative_coordinates_bucket_consistently
+  ok   each_taskbar_is_answered_separately
+  ok   an_answer_expires
+  ok   uptime_beyond_the_32_bit_wrap_keeps_cache_age_exact
+  ok   a_repeat_answer_refreshes_rather_than_duplicates
+  ok   the_cache_is_bounded
+  ok   invalidation_drops_everything
+  ok   a_null_taskbar_is_never_cached_or_matched
+
+[menutext]
+  ok   an_item_longer_than_max_path_survives_intact
+  ok   an_ordinary_item_reads_back_exactly
+  ok   a_separator_costs_no_buffer_and_reads_back_empty
+  ok   an_empty_title_is_empty_rather_than_absent
+  ok   unicode_beyond_the_bmp_is_not_split
+  ok   a_missing_item_fails_rather_than_returning_rubbish
+
+[registry]
+  ok   a_normal_string_reads_back_exactly
+  ok   an_empty_value_is_empty_rather_than_a_run_of_nuls
+  ok   a_value_stored_without_its_terminator_keeps_its_last_character
+  ok   a_one_character_unterminated_value_reads_back_whole
+  ok   expandable_values_come_back_expanded
+  ok   an_expandable_value_without_variables_is_unchanged
+  ok   a_value_that_is_not_a_string_is_refused
+  ok   a_missing_value_reads_as_nothing
+  ok   the_fixed_buffer_overload_terminates_what_it_returns
+  ok   the_fixed_buffer_overload_refuses_a_buffer_it_cannot_use
+  ok   values_written_through_set_key_value_are_terminated
+  ok   an_empty_string_is_written_as_one_terminator
+  ok   an_empty_expandable_string_is_written_as_one_terminator
+  ok   an_empty_string_through_set_key_value_is_terminated
+  ok   a_null_string_is_written_as_no_data
+  ok   an_empty_written_value_reads_back_empty
+  ok   a_length_too_large_for_cbdata_is_refused
+  ok   enumeration_survives_a_name_longer_than_the_old_buffer
+  ok   subkey_enumeration_lists_them_all
+  ok   enumerating_an_empty_key_is_an_empty_list
+
+[regop]
+  ok   every_option_defaults_to_false
+  ok   selecting_handlers_is_not_by_itself_a_register_operation
+  ok   repeated_unregister_is_an_idempotent_no_op
+  ok   registered_state_propagates_the_delete_result
+  ok   a_legacy_folderextensions_key_still_reports_as_registered
+
+[fso]
+  ok   copy_assignment_preserves_every_selection_field
+  ok   self_assignment_preserves_selection_matching_state
+  ok   set_uses_boolean_elements_not_byte_fill_patterns
+  ok   every_supported_background_subtype_reaches_the_parser_switch
+
+[manifest]
+  ok   embedded_manifest_is_well_formed_and_namespaced
+  ok   version_tool_template_matches
+
+[path_contracts]
+  ok   preflight_then_fill_reports_the_fill_length
+  ok   preflight_then_fill_retries_when_the_answer_grows
+  ok   preflight_then_fill_gives_nothing_back_on_failure
+  ok   preflight_then_fill_gives_up_rather_than_spinning
+  ok   grow_on_exact_fill_treats_a_full_buffer_as_truncation
+  ok   grow_on_exact_fill_keeps_a_result_that_fits
+  ok   grow_on_exact_fill_stops_at_the_maximum_path
+  ok   grow_on_copied_fill_treats_nsize_minus_one_as_truncation
+  ok   grow_on_copied_fill_keeps_a_result_with_slack
+  ok   fill_then_resize_accepts_a_result_that_exactly_fits
+  ok   fill_then_resize_treats_a_full_return_as_a_length
+  ok   fill_then_resize_grows_to_the_size_it_is_told
+  ok   fill_then_resize_gives_nothing_back_on_failure
+
+[path]
+  ok   module_path_matches_the_running_executable
+  ok   module_filename_ex_matches_getmodulefilenamew_for_this_process
+  ok   current_directory_length_is_its_length
+  ok   temp_directory_length_is_its_length
+  ok   long_and_short_round_trip_without_a_trailing_nul
+  ok   full_resolves_a_relative_path_and_reports_its_length
+  ok   search_finds_a_system_executable
+
+[taskbar_origin]
+  ok   defaults_to_false
+  ok   a_scope_restores_what_it_found
+  ok   a_scope_that_never_reaches_the_hook_still_restores
+  ok   scopes_nest_both_ways
+  ok   threads_do_not_see_each_others_state
+
+[taskbar_stats]
+  ok   a_fresh_set_of_counters_is_empty
+  ok   each_outcome_lands_in_its_own_counter
+  ok   a_cache_hit_is_not_a_wait_and_costs_no_time
+  ok   waits_are_the_answered_and_the_timed_out_together
+  ok   the_worst_wait_is_a_maximum_not_the_last_one
+  ok   reset_clears_every_counter
+  ok   concurrent_recording_loses_nothing
+
+[path_bounds]
+  ok   ends_with_slash_survives_an_empty_path
+  ok   get_root_needs_three_characters_before_it_reads_three
+  ok   is_clsid_accepts_the_canonical_form_it_used_to_reject
+  ok   is_clsid_refuses_everything_short_of_one
+  ok   is_clsid_parses_the_guid_rather_than_the_punctuation
+  ok   is_clsid_is_exact_and_is_namespace_is_not
+  ok   is_root_only_accepts_a_drive_root
+  ok   drive_prefix_checks_its_length_when_it_is_given_one
+
+[comptr]
+  ok   destroys_exactly_once
+  ok   copy_construction_adds_a_reference
+  ok   move_construction_steals_rather_than_copies
+  ok   copy_assignment_releases_the_old_and_keeps_the_new
+  ok   self_assignment_does_not_destroy_the_object
+  ok   release_forgets_the_pointer_it_released
+  ok   detach_hands_ownership_over_without_releasing
+  ok   a_failed_out_parameter_leaves_it_empty
+  ok   implicit_out_conversion_then_destructor_is_one_release
+  ok   put_releases_before_handing_out_its_address
+  ok   query_interface_failure_leaves_nothing_behind
+  ok   swap_exchanges_ownership_without_touching_refcounts
+
+[window_text]
+  ok   an_ordinary_title_reads_back_exactly
+  ok   a_title_longer_than_the_old_buffer_survives_intact
+  ok   a_title_exactly_at_the_old_boundary
+  ok   an_empty_title_is_empty_rather_than_rubbish
+  ok   a_null_window_reads_as_nothing
+  ok   unicode_beyond_the_bmp_is_not_split
+
+[dll_load]
+  ok   a_system32_module_still_loads_by_bare_name
+  ok   regedit_loads_and_still_has_its_merge_string
+  ok   powershell_loads_from_its_own_directory
+  ok   the_windows_fallback_refuses_nonsense
+  ok   neither_loader_consults_the_current_directory
+
+[legacy_config_transfer]
+  ok   sha256_matches_the_known_abc_vector
+  ok   copy_and_hash_preserves_large_input_exactly
+  ok   same_size_content_change_changes_the_digest
+  ok   an_open_handle_is_not_rebound_by_path_substitution
+  ok   exclusive_stage_open_blocks_write_and_delete_races
+  ok   directories_are_not_accepted_as_staged_files
+  ok   digest_text_round_trips_and_rejects_bad_input
+
+[type_ahead]
+  ok   a_plain_prefix_matches
+  ok   a_prefix_longer_than_the_title_does_not_match
+  ok   matching_is_case_insensitive_in_both_directions
+  ok   a_mnemonic_marker_is_not_part_of_the_label
+  ok   a_doubled_ampersand_is_a_literal_that_can_be_matched
+  ok   the_accelerator_column_is_not_part_of_the_label
+  ok   an_empty_prefix_or_a_missing_title_matches_nothing
+  ok   the_first_item_in_display_order_wins
+  ok   a_unique_prefix_selects_rather_than_executing
+  ok   a_longer_prefix_narrows_to_a_later_item
+  ok   a_prefix_that_names_nothing_is_ignored
+  ok   a_disabled_item_is_skipped_rather_than_selected
+  ok   an_empty_popup_answers_ignore
+  ok   the_reply_carries_the_position_and_packs_it_low
+  ok   a_fresh_buffer_is_empty
+  ok   characters_accumulate_into_a_prefix
+  ok   the_buffer_clears_after_its_timeout
+  ok   the_buffer_clears_when_the_popup_changes
+  ok   a_clock_that_went_backwards_clears_the_buffer
+  ok   the_buffer_stops_growing_rather_than_overflowing
+  ok   clearing_forgets_the_popup_as_well_as_the_text
+  ok   a_character_that_matches_nothing_does_not_poison_the_word
+
+[treatas_plan]
+  ok   noop_and_uninstall_roundtrip
+  ok   install_absent_carries_owned_marker_path
+  ok   install_absent_without_owned_marker_is_rejected
+  ok   rollback_deletes_treatas_only_when_this_transaction_created_it
+
+[oneshot_marshal]
+  ok   consume_of_an_empty_stream_is_empty
+  ok   desktop_folder_round_trips_to_a_second_sta
+
+[popup_lifecycle]
+  ok   a_fresh_stack_is_empty
+  ok   the_first_create_is_tracked
+  ok   a_null_handle_is_never_tracked
+  ok   a_second_create_for_the_same_window_is_ignored
+  ok   show_reaches_a_tracked_window_exactly_once
+  ok   show_for_an_untracked_window_is_ignored
+  ok   the_root_has_no_parent_and_a_submenu_has_the_root
+  ok   destroying_the_top_leaves_the_rest_in_order
+  ok   an_out_of_order_destroy_removes_the_window_it_names
+  ok   an_out_of_order_destroy_never_strands_an_entry
+  ok   destroying_a_window_we_never_tracked_changes_nothing
+  ok   an_event_after_the_window_is_gone_is_ignored
+  ok   a_sibling_walk_returns_to_the_root_each_time
+  ok   iteration_visits_payloads_root_first
+  ok   a_null_payload_is_skipped_by_iteration_but_still_holds_its_place
+  ok   clear_drops_everything
+  ok   at_returns_null_past_the_end
+
+[menu_model]
+  ok   a_fresh_model_owns_nothing
+  ok   an_added_item_is_owned
+  ok   an_item_that_was_never_added_is_not_owned
+  ok   a_null_pointer_is_never_owned
+  ok   adding_nothing_adds_nothing
+  ok   a_command_is_found_by_its_identifier
+  ok   a_popup_is_never_a_command
+  ok   a_popup_does_not_shadow_a_real_command_sharing_its_identifier
+  ok   the_first_item_with_an_identifier_wins
+  ok   entries_are_kept_in_composition_order
+  ok   an_entry_remembers_where_it_came_from
+  ok   commandable_is_the_opposite_of_popup
+  ok   clearing_forgets_everything
+  ok   reserving_again_keeps_what_is_already_there
+
+[interception_status]
+  ok   a_published_backend_reads_back_with_its_health
+  ok   an_unhealthy_backend_keeps_its_identity
+  ok   nothing_hooked_is_its_own_answer
+  ok   the_most_recent_publish_is_the_one_reported
+  ok   every_backend_has_a_name_a_person_can_read
+  ok   the_name_ignores_the_health_bit
+  ok   an_unknown_backend_reads_as_none_rather_than_rubbish
+
+[selection_route]
+  ok   a_shell_view_asks_the_browser_first
+  ok   a_window_that_is_not_a_shell_view_asks_the_handler
+  ok   no_browser_found_lets_the_handler_answer
+  ok   a_browser_that_answered_ends_the_query
+  ok   the_two_rules_are_not_the_same_rule
+
+[reliability_rows]
+  ok   the_name_column_fits_a_whole_clsid
+  ok   two_clsids_from_one_family_look_different
+  ok   a_clsid_is_shown_whole_and_not_elided
+  ok   elision_keeps_both_ends
+  ok   a_label_that_fits_is_left_alone
+  ok   the_boundary_is_where_it_says_it_is
+  ok   every_row_starts_its_timing_at_the_same_column
+  ok   a_quarantined_row_says_so
+  ok   a_mnemonic_marker_is_not_shown
+  ok   a_doubled_ampersand_is_one_ampersand
+  ok   an_unasked_row_is_not_reported_as_ok
+  ok   a_row_the_menu_never_reached_says_so
+  ok   a_row_shell_judged_slow_says_that_instead
+  ok   a_measured_row_is_not_relabelled_by_a_later_deferral
+  ok   quarantine_still_outranks_everything
+
+[provider_quarantine]
+  ok   a_braced_clsid_parses
+  ok   the_braces_are_optional
+  ok   case_and_surrounding_space_do_not_matter
+  ok   malformed_identifiers_are_refused
+  ok   formatting_round_trips_through_parsing
+  ok   the_hash_is_fnv1a_over_the_raw_guid_bytes
+  ok   two_spellings_of_one_clsid_hash_the_same
+  ok   an_empty_list_parses_to_nothing
+  ok   comments_and_blank_lines_are_ignored
+  ok   text_after_the_clsid_is_kept_as_a_note
+  ok   an_unparseable_line_is_skipped_rather_than_failing_the_file
+  ok   the_same_clsid_twice_is_stored_once_and_keeps_the_first_note
+  ok   the_list_is_capped
+  ok   lone_newlines_are_accepted_as_line_breaks
+  ok   a_serialized_list_parses_back_to_itself
+  ok   an_empty_serialized_list_reads_back_empty
+  ok   a_real_file_round_trips_through_load_and_save
+  ok   a_file_without_a_byte_order_mark_is_still_read
+
+[menu_identity]
+  ok   a_kind_and_a_signature_make_a_readable_identity
+  ok   a_verb_signs_exactly_as_quarantine_names_it
+  ok   the_kind_is_part_of_the_identity
+  ok   matching_ignores_case_but_the_text_keeps_it
+  ok   the_fold_is_ascii_and_not_the_locale
+  ok   nothing_signs_as_nothing
+  ok   a_signature_joins_a_path_and_a_title_the_way_the_menu_does
+  ok   a_signature_survives_a_null_where_a_string_should_be
+  ok   an_identity_survives_a_round_trip
+  ok   only_the_first_colon_separates_the_kind
+  ok   rubbish_is_refused_rather_than_guessed_at
+  ok   an_over_long_identity_is_refused_not_truncated
+  ok   surrounding_whitespace_is_not_part_of_an_identity
+
+[favorites]
+  ok   a_line_is_a_state_a_count_and_the_rest
+  ok   an_identity_with_spaces_in_it_survives
+  ok   comments_and_blank_lines_and_rubbish_are_skipped_not_fatal
+  ok   a_repeated_identity_keeps_the_first
+  ok   the_entry_cap_bounds_what_a_menu_walks
+  ok   a_count_that_saturates_stays_saturated
+  ok   a_list_round_trips_through_the_file
+  ok   a_missing_file_is_an_empty_list_and_not_a_failure
+  ok   recording_a_use_counts_rather_than_reorders
+  ok   pinning_something_never_used_records_it_with_no_count
+  ok   an_invalid_identity_is_never_recorded
+
+[menu_favorites]
+  ok   nothing_is_promoted_until_somebody_asks
+  ok   a_used_item_moves_to_the_top
+  ok   a_pin_outranks_any_count
+  ok   ties_keep_the_order_the_menu_already_had
+  ok   the_cap_is_a_cap
+  ok   a_separator_is_never_promoted
+  ok   an_item_with_no_identity_matches_nothing
+  ok   an_entry_with_nothing_behind_it_promotes_nothing
+  ok   a_section_that_would_be_the_whole_menu_is_refused
+  ok   applying_a_plan_keeps_every_item_exactly_once
+  ok   a_plan_naming_an_index_twice_still_moves_it_once
+  ok   a_plan_naming_an_index_that_is_not_there_is_ignored
+
+[menu_inspector]
+  ok   nothing_is_armed_until_something_arms_it
+  ok   a_location_is_the_file_leaf_and_the_line
+  ok   a_rule_nobody_recorded_has_no_location
+  ok   an_item_says_where_it_came_from
+  ok   every_rule_that_touched_a_native_item_is_named
+  ok   an_item_no_rule_touched_says_only_where_it_came_from
+  ok   an_item_that_cannot_be_named_still_says_what_it_is
+  ok   the_identity_is_printed_whole_because_it_is_the_pin_argument
+  ok   nothing_known_is_nothing_said
+
+[loadstring]
+  ok   a_resource_longer_than_max_path_arrives_whole
+  ok   cch_zero_length_matches_the_copied_string
+  ok   a_missing_id_is_empty
+
+[expression]
+  ok   less_numeric_is_less_not_greater
+  ok   less_numeric_handles_negatives_and_fractions
+  ok   less_on_strings_still_compares_length
+  ok   ternary_copy_keeps_both_branches
+  ok   ternary_copy_evaluates_the_false_arm_too
+  ok   ternary_copy_tolerates_missing_branches
+  ok   func_copy_keeps_array_without_a_child
+  ok   func_copy_without_array_does_not_dereference_null
+  ok   func_copy_keeps_arguments_and_reparents_the_child
+  ok   array_literal_copy_preserves_the_node_type
+  ok   number_literal_copy_still_yields_a_number
+  ok   msg_right_maps_to_the_alignment_flag
+  ok   msg_button_results_are_unchanged
+  ok   an_objects_truth_is_to_bool_not_a_cast
+
+[parser_imports]
+  ok   a_diamond_import_loads_the_shared_file_once
+  ok   importing_the_same_file_twice_from_one_file_loads_it_once
+  ok   a_deeper_diamond_still_loads_the_shared_file_once
+  ok   distinct_files_are_all_loaded
+  ok   the_parse_reports_every_file_it_opened
+  ok   a_file_imported_twice_is_reported_once
+  ok   a_broken_configuration_still_parses_from_its_shadow
+  ok   a_file_that_cannot_be_read_records_no_loaded_file
+  ok   a_file_that_was_read_is_recorded_even_when_it_declares_nothing
+
+[parser_malformed]
+  ok   a_colour_with_a_non_identifier_postfix_is_reported_not_fatal
+  ok   a_wildcard_namespace_ending_in_for_does_not_index_an_empty_argument_list
+  ok   a_wildcard_namespace_ending_in_foreach_does_not_index_an_empty_argument_list
+  ok   a_foreach_with_too_few_arguments_does_not_index_past_its_list
+  ok   a_for_with_the_wrong_arity_is_reported_not_fatal
+  ok   a_foreach_whose_list_argument_is_a_number_is_reported_not_fatal
+  ok   a_wildcard_foreach_whose_list_argument_is_a_number_is_reported_not_fatal
+  ok   a_well_formed_foreach_still_parses
+
+[rule_provenance]
+  ok   an_unset_provenance_is_not_a_file
+  ok   a_rule_records_the_line_it_was_written_on
+  ok   a_submenu_records_where_it_opens_not_where_it_closes
+  ok   a_rule_in_an_imported_file_names_that_file
+  ok   the_lexer_goes_back_to_the_importing_file_when_the_import_ends
+  ok   a_modify_rule_records_where_it_was_written
+  ok   an_index_past_the_file_list_resolves_to_nothing
+
+[string_index]
+  ok   in_range_characters_read_back
+  ok   reading_at_length_gives_the_terminator
+  ok   reading_past_the_end_gives_the_terminator_not_the_last_character
+  ok   scanning_to_the_terminator_stops
+  ok   an_empty_string_reads_as_the_terminator
+  ok   a_cleared_string_reads_as_the_terminator
+  ok   writing_through_the_subscript_still_works
+  ok   copy_assignment_is_a_deep_copy
+  ok   self_assignment_leaves_the_string_intact
+
+[com_activation_policy]
+  ok   blocked_clsid_stays_blocked_with_alt_held
+  ok   alt_times_only_activations_policy_allowed
+  ok   uninteresting_activations_are_never_touched
+  ok   the_decision_is_a_constant_expression
+  ok   an_empty_policy_needs_no_hook_and_affects_nothing
+  ok   a_mentioned_clsid_is_affected_and_others_are_not
+  ok   both_halves_of_the_key_decide
+  ok   the_same_clsid_mentioned_twice_is_stored_once
+  ok   a_conditional_rule_still_mentions_its_clsid
+  ok   conditional_and_unconditional_rules_are_counted_apart
+  ok   the_modern_menu_suppression_needs_the_hook_on_its_own
+  ok   a_key_is_exactly_the_size_of_a_guid
+
+[config_check]
+  ok   a_clean_parse_names_the_file_and_what_it_found
+  ok   a_single_file_and_a_single_entry_are_not_plural
+  ok   zero_entries_is_still_plural
+  ok   an_error_is_reported_where_an_editor_can_find_it
+  ok   an_error_with_no_position_omits_the_parentheses
+  ok   a_line_with_no_column_still_reports_its_position
+  ok   a_result_with_no_path_still_produces_a_readable_line
+  ok   a_result_with_no_message_says_so_rather_than_trailing_off
+  ok   a_short_buffer_truncates_and_still_terminates
+  ok   a_capacity_of_zero_writes_nothing_at_all
+  ok   a_null_buffer_is_refused_rather_than_dereferenced
+  ok   the_exit_codes_are_what_a_script_expects
+  ok   the_struct_starts_with_its_own_size
+
+[config_lifecycle]
+  ok   a_failed_parse_keeps_serving_the_last_good_generation
+  ok   a_failed_parse_with_nothing_loaded_still_refuses
+  ok   a_reload_request_outranks_a_stale_snapshot
+  ok   disabled_outranks_everything
+  ok   the_ordinary_paths_are_unchanged
+  ok   every_input_combination_has_a_verdict
+
+[config_watcher]
+  ok   one_file_is_covered_by_its_own_directory
+  ok   files_in_one_directory_produce_one_watch
+  ok   directories_differing_only_in_case_are_one_directory
+  ok   forward_slashes_are_separators_too
+  ok   a_path_with_no_directory_contributes_nothing
+  ok   the_cap_is_honoured
+  ok   the_shipping_cap_leaves_room_for_the_stop_event
+  ok   a_watcher_with_nothing_to_watch_does_not_start
+  ok   writing_a_watched_file_triggers_exactly_one_reload
+  ok   an_unrelated_file_in_the_same_directory_reloads_nothing
+  ok   deleting_a_watched_file_is_a_change
+  ok   restarting_replaces_the_previous_watch
+  ok   a_callback_that_re_points_the_watcher_does_not_kill_it
+  ok   a_callback_can_re_point_the_watcher_at_a_different_file
+  ok   stopping_twice_is_harmless
+  ok   a_failed_wait_ends_the_watch_and_says_so
+  ok   an_out_of_range_wait_result_ends_the_watch_and_says_so
+  ok   a_re_point_with_nothing_watchable_ends_the_watch_and_says_so
+
+[package_catalog]
+  ok   nothing_published_means_a_scan_is_due
+  ok   a_fresh_snapshot_does_not_trigger_a_scan
+  ok   an_expired_snapshot_is_still_served_while_it_refreshes
+  ok   refreshes_coalesce
+  ok   a_failed_scan_leaves_the_old_catalog_in_place
+  ok   a_scan_overtaken_by_a_change_does_not_publish
+  ok   invalidate_does_not_discard_what_is_published
+  ok   a_reader_keeps_the_snapshot_it_started_with
+  ok   a_clock_that_goes_backwards_costs_a_scan_not_a_frozen_catalog
+  ok   concurrent_callers_start_exactly_one_scan
+  ok   a_publish_carries_packages_as_well_as_commands
+  ok   both_halves_are_replaced_together_by_a_later_scan
+  ok   a_scan_invalidated_while_running_publishes_neither_half
+  ok   a_failed_scan_is_abandoned_rather_than_published
+  ok   a_failed_scan_does_not_hold_the_catalog_for_a_ttl
+  ok   a_failed_scan_then_a_good_one_publishes_normally
+  ok   the_first_scan_of_a_process_failing_publishes_nothing_at_all
+  ok   a_scan_overtaken_by_a_change_is_retried_within_the_same_kick
+  ok   a_machine_changing_faster_than_it_can_be_scanned_does_not_spin
+
+[packages_cache]
+  ok   a_query_reads_the_published_snapshot
+  ok   the_path_comes_from_the_snapshot_rather_than_from_the_registry
+  ok   one_query_is_one_snapshot_read
+  ok   no_snapshot_means_no_answer_and_no_scan_of_its_own
+  ok   an_empty_snapshot_is_not_the_same_object_as_no_snapshot
+  ok   all_reports_every_published_identity
+  ok   an_empty_or_null_name_asks_nothing
+  ok   a_query_holds_the_snapshot_it_read
+  ok   the_default_constructed_cache_still_uses_the_live_service
+  ok   a_query_that_found_nothing_asks_for_a_rescan
+  ok   a_query_that_found_its_package_asks_for_nothing
+  ok   an_empty_name_is_not_a_miss
+  ok   a_permanent_miss_does_not_rescan_on_every_menu
+  ok   the_gate_reopens_after_its_interval_and_not_before
+  ok   a_late_first_miss_is_still_granted
+
+[display_name_memo]
+  ok   a_name_is_resolved_once_and_then_remembered
+  ok   an_empty_answer_is_remembered_too
+  ok   different_packages_get_their_own_answers
+  ok   a_new_catalog_generation_drops_everything_remembered
+  ok   an_answer_from_a_superseded_generation_is_not_stored
+
+[store_file]
+  ok   a_missing_file_is_missing_rather_than_failed
+  ok   a_file_that_will_not_open_is_failed_rather_than_empty
+  ok   a_reader_does_not_block_a_replace
+  ok   the_content_and_the_stamp_come_from_one_handle
+  ok   an_oversized_file_is_failed_rather_than_truncated_or_empty
+  ok   an_odd_sized_file_is_failed
+  ok   a_failed_replace_leaves_the_previous_file_intact
+  ok   a_failed_replace_does_not_leave_its_temporary_behind
+  ok   favorites_round_trip_through_the_atomic_write
+  ok   a_favorites_read_that_failed_is_not_an_empty_list
+
+[favorites_store]
+  ok   a_use_is_counted_and_visible_to_the_next_menu
+  ok   a_failed_save_does_not_become_process_state
+  ok   a_failed_read_never_writes_a_fresh_list_over_the_file
+  ok   an_edit_by_another_host_is_picked_up
+  ok   concurrent_uses_in_one_process_all_land
+
+[quarantine_store]
+  ok   a_quarantined_hash_is_found_and_an_absent_one_is_not
+  ok   a_read_that_failed_keeps_the_previous_list
+  ok   a_missing_file_really_is_an_empty_list
+  ok   an_empty_saved_list_releases_everything
+
+[config_shadow]
+  ok   a_saved_set_comes_back_with_its_layout_intact
+  ok   an_empty_store_offers_nothing
+  ok   a_shadow_whose_content_changed_is_refused
+  ok   a_shadow_missing_a_file_is_refused
+  ok   a_shadow_with_no_manifest_is_refused
+  ok   a_manifest_this_build_does_not_understand_is_refused
+  ok   saving_the_same_configuration_twice_rewrites_nothing
+  ok   a_damaged_shadow_is_repaired_by_the_next_save
+  ok   an_edited_configuration_replaces_the_previous_shadow
+  ok   a_file_outside_the_configuration_directory_makes_the_shadow_partial
+  ok   nothing_worth_shadowing_is_not_an_error_that_writes_a_broken_store
+  ok   relative_paths_are_recognised_case_insensitively
+  ok   the_default_directory_is_under_local_appdata
+  ok   a_short_form_root_still_finds_its_own_files
+  ok   long_form_leaves_an_ordinary_path_alone
+
+[host_contract]
+  ok   returncmd_is_added_when_the_host_did_not_ask_for_it
+  ok   returncmd_is_left_alone_when_the_host_already_asked
+  ok   nonotify_is_removed
+  ok   every_other_flag_the_host_passed_survives
+  ok   a_returncmd_host_gets_the_native_identifier_back
+  ok   a_returncmd_host_gets_zero_for_an_item_shell_ran
+  ok   a_returncmd_host_gets_zero_when_the_user_cancelled
+  ok   a_notifying_host_is_told_about_a_native_item
+  ok   a_synthetic_identifier_never_reaches_a_notifying_host
+  ok   a_notifying_host_still_gets_true_when_the_user_cancelled
+  ok   a_nonotify_host_is_not_notified
+  ok   a_nonotify_returncmd_host_still_gets_its_identifier
+  ok   a_synthetic_identifier_is_refused_even_if_it_gets_this_far
+  ok   the_synthetic_range_matches_the_one_contextmenu_hands_out
+  ok   a_failed_track_is_zero_for_every_host
+  ok   nothing_is_notified_for_a_cancelled_menu_that_left_a_stale_identifier
+  ok   a_by_position_host_is_told_which_position
+  ok   a_nested_selection_names_its_own_submenu
+  ok   position_zero_is_a_position_and_not_a_cancellation
+  ok   a_by_position_host_hears_nothing_for_an_item_shell_ran
+  ok   a_by_position_host_hears_nothing_when_it_cancels
+  ok   an_unplaceable_selection_notifies_nothing_rather_than_falling_back
+  ok   a_quiet_by_position_menu_is_still_quiet
+  ok   an_ordinary_host_is_untouched_by_any_of_this
+  ok   a_returncmd_host_never_reaches_the_by_position_path
+  ok   a_failed_by_position_track_is_still_zero_and_silent
+  ok   the_short_form_still_describes_an_ordinary_host
+  ok   a_native_tracking_identifier_is_not_a_synthetic_one
+
+[diagnostics_ring]
+  ok   an_empty_ring_offers_nothing
+  ok   the_newest_session_comes_back_first
+  ok   asking_for_more_than_it_holds_gives_what_it_has
+  ok   wrapping_keeps_the_newest_and_forgets_the_oldest
+  ok   clearing_forgets_everything_including_the_running_total
+  ok   phases_are_recorded_in_order_with_their_counts
+  ok   a_phase_that_does_not_fit_is_counted_not_dropped_silently
+  ok   a_provider_that_does_not_fit_is_counted_too
+  ok   provider_results_survive_the_round_trip
+  ok   reset_leaves_nothing_of_the_previous_session
+  ok   a_session_publishes_once_and_carries_its_phases
+  ok   a_nested_session_folds_into_the_one_around_it
+  ok   the_outermost_decision_is_the_one_recorded
+  ok   recording_outside_a_session_is_ignored_rather_than_lost_somewhere
+  ok   an_unbalanced_end_does_not_swallow_the_next_session
+  ok   sessions_on_different_threads_do_not_share_a_slot
+  ok   the_hosts_own_tracking_flags_are_kept_verbatim
+  ok   the_two_deferrals_are_different_answers
+  ok   the_provider_result_values_are_the_wire_format
+
+[provider_health]
+  ok   an_unknown_provider_is_always_tried
+  ok   an_unknown_provider_is_deferred_only_when_nothing_is_left
+  ok   a_provider_that_has_been_quick_keeps_its_place
+  ok   a_provider_that_has_never_been_quick_is_deferred
+  ok   one_slow_sample_is_not_enough_to_condemn_a_provider
+  ok   one_quick_answer_rehabilitates_a_provider_permanently
+  ok   a_deferred_provider_is_tried_again_eventually
+  ok   a_reprobe_does_not_start_in_a_menu_with_nothing_left
+  ok   a_provider_that_cannot_fit_in_what_is_left_waits
+  ok   deferrals_and_failures_are_counted_for_reporting
+  ok   providers_are_tracked_separately
+  ok   an_unseen_provider_reports_nothing_rather_than_zeroes
+  ok   the_hash_separates_two_clsids_that_differ_in_one_bit
+  ok   a_cold_first_menu_does_not_progressively_empty_the_menu
+  ok   a_genuinely_pathological_provider_is_still_caught
+
+[provider_budget]
+  ok   a_fresh_budget_has_all_of_it_and_spends_down
+  ok   an_exhausted_budget_reports_zero_rather_than_wrapping
+
+[provider_health]
+  ok   a_cost_learned_on_one_file_says_nothing_about_two_hundred
+  ok   being_slow_over_many_does_not_condemn_the_single_case
+  ok   each_shape_keeps_its_own_timing
+  ok   the_shape_buckets_are_where_they_say_they_are
+  ok   a_background_click_is_not_a_selection_of_one
+  ok   a_single_spike_does_not_exclude_a_provider_for_the_process_lifetime
+  ok   a_budget_deferral_still_does_not_consume_a_slow_providers_turn
+  ok   any_answer_ends_the_budget_deferral_streak
+  ok   the_identity_a_provider_produced_is_remembered
+  ok   an_unseen_provider_has_no_identity_to_skip_on
+  ok   a_duplicate_skip_costs_the_provider_no_turn
+  ok   answering_refreshes_the_duplicate_interval
+  ok   contributing_is_counted_apart_from_answering
+
+[icon_resource]
+  ok   a_plain_path_has_no_index
+  ok   a_trailing_index_is_split_off
+  ok   a_negative_index_is_a_resource_identifier
+  ok   only_the_last_comma_separates_the_index
+  ok   a_comma_that_is_not_an_index_stays_in_the_path
+  ok   quotes_are_stripped
+  ok   nothing_is_not_a_location
+  ok   an_unresolvable_location_yields_nothing_rather_than_a_stray_handle
+  ok   an_extracted_bitmap_is_released_when_it_goes_out_of_scope
+  ok   releasing_hands_the_handle_over_and_the_caller_must_free_it
+  ok   the_leak_this_replaces_would_have_been_visible_here
+
+[mnemonics]
+  ok   a_marked_character_is_the_mnemonic
+  ok   matching_is_case_insensitive_in_both_directions
+  ok   a_doubled_ampersand_is_a_literal_and_marks_nothing
+  ok   only_the_first_marker_counts
+  ok   a_marker_in_the_accelerator_column_is_not_a_mnemonic
+  ok   a_title_with_no_marker_has_no_mnemonic
+  ok   an_unmatched_key_is_ignored_rather_than_closing_the_menu
+  ok   a_unique_match_is_executed
+  ok   the_reply_carries_the_position_not_the_index_into_the_candidate_list
+  ok   duplicated_mnemonics_select_rather_than_execute
+  ok   pressing_the_same_key_again_moves_to_the_next_match
+  ok   the_cycle_wraps_round_to_the_first_match
+  ok   a_highlight_somewhere_unrelated_still_finds_the_next_match
+  ok   a_disabled_item_does_not_swallow_the_keystroke
+  ok   an_empty_popup_answers_ignore_rather_than_reaching_into_nothing
+  ok   the_reply_packs_the_action_high_and_the_position_low
+  ok   an_ignore_reply_is_exactly_what_defwindowproc_would_have_returned
+
+[menu_columns]
+  ok   a_menu_that_fits_is_left_alone
+  ok   the_feature_is_off_until_it_is_asked_for
+  ok   an_overflowing_menu_is_split
+  ok   the_columns_come_out_even_rather_than_full
+  ok   a_break_never_lands_on_the_first_row
+  ok   three_columns_when_two_would_not_be_enough
+  ok   more_columns_than_allowed_falls_back_to_scrolling
+  ok   a_menu_too_wide_for_the_screen_falls_back_to_scrolling
+  ok   a_break_prefers_the_row_after_a_separator
+  ok   a_distant_separator_is_not_worth_an_uneven_split
+  ok   a_configured_column_switches_the_whole_thing_off
+  ok   no_column_is_empty_and_none_overflows
+  ok   grouped_menus_also_never_overflow_or_empty_a_column
+  ok   an_empty_menu_is_not_a_special_case
+  ok   group_boundaries_do_not_pile_up_in_the_last_column
+  ok   a_refusal_says_which_rule_refused
+  ok   separators_anywhere_never_overflow_a_column
+
+[perf_export]
+  ok   a_fresh_block_reads_back_empty
+  ok   records_come_back_newest_first
+  ok   the_ring_wraps_and_keeps_the_newest
+  ok   asking_for_fewer_than_are_held_gets_the_newest_ones
+  ok   a_sequence_caught_mid_write_is_reported_as_torn
+  ok   a_write_that_completes_during_the_copy_is_reported_as_torn
+  ok   a_settled_sequence_is_not_torn
+  ok   a_capacity_larger_than_the_array_is_refused_not_clamped
+  ok   a_count_beyond_the_capacity_is_clamped
+  ok   a_next_beyond_the_capacity_is_clamped
+  ok   a_zero_capacity_block_is_never_written_to
+  ok   sanitize_terminates_a_name_that_fills_its_buffer
+  ok   sanitize_clamps_counts_that_exceed_the_arrays
+  ok   the_object_name_is_the_prefix_and_the_process_id
+  ok   an_object_name_that_would_not_fit_is_refused_not_truncated
+  ok   a_real_section_round_trips_through_the_writer_and_the_reader
+  ok   tracking_flags_are_rendered_as_words_and_returncmd_comes_first
+  ok   rendering_flags_into_a_buffer_that_cannot_hold_them_still_terminates
+  ok   a_process_with_no_block_reports_not_present
+  ok   enumeration_finds_this_process
+
+[perf_report]
+  ok   a_percentile_over_one_sample_is_that_sample
+  ok   a_percentile_is_nearest_rank_and_lands_on_a_real_sample
+  ok   a_percentile_over_nothing_is_zero_rather_than_undefined
+  ok   an_age_never_runs_backwards
+  ok   the_slowest_session_wins_ties_by_being_the_more_recent
+  ok   the_slowest_session_is_the_slowest_one
+  ok   the_menu_left_open_longest_is_not_the_slowest_one
+  ok   a_session_that_never_displayed_a_menu_is_not_a_fast_one
+  ok   a_host_that_displayed_nothing_reports_no_measurements
+  ok   a_phase_lookup_matches_the_whole_name
+  ok   a_summary_counts_the_decisions_that_happened
+  ok   a_summary_with_no_scratch_still_reports_the_maximum
+  ok   a_summary_over_nothing_reports_no_slowest_session
+  ok   milliseconds_round_rather_than_truncate
+
+[perf_export]
+  ok   a_fresh_block_knows_no_provider_names
+  ok   a_noted_name_comes_back_for_its_hash
+  ok   an_unknown_hash_still_has_no_name
+  ok   noting_the_same_provider_twice_adds_nothing
+  ok   a_provider_with_no_title_is_still_identified
+  ok   an_empty_title_is_the_same_as_none
+  ok   a_name_learned_later_fills_in_the_entry_that_is_already_there
+  ok   a_name_already_recorded_is_never_replaced
+  ok   a_name_that_fills_the_buffer_is_truncated_and_terminated
+  ok   the_directory_fills_up_and_says_so_rather_than_overwriting
+  ok   a_directory_count_beyond_the_array_is_refused_not_clamped
+  ok   the_count_does_not_admit_an_entry_until_it_is_written
+  ok   the_directory_remembers_the_clsid_the_hash_came_from
+  ok   the_reader_copies_the_directory_out_of_the_block
+  ok   the_version_is_the_one_this_meaning_belongs_to
+  ok   a_skipped_duplicate_is_not_a_deferral
+  ok   a_declined_handler_does_not_print_as_a_shown_one
+  ok   the_two_deferrals_print_as_different_words
+  ok   every_result_value_has_its_own_word
+  ok   the_two_deferrals_are_told_apart_by_predicate_as_well_as_by_word
+  ok   a_block_from_the_previous_version_is_refused
+
+[native_menu_targets]
+  ok   an_empty_set_needs_nothing
+  ok   a_target_is_needed
+  ok   an_ancestor_of_a_target_is_needed
+  ok   a_sibling_that_shares_a_name_prefix_is_not_an_ancestor
+  ok   a_deeper_target_still_needs_its_shallow_ancestors_only_once
+  ok   the_same_target_twice_is_stored_once
+  ok   matching_ignores_case_because_the_rules_do
+  ok   the_only_wildcard_is_a_single_asterisk
+  ok   normalisation_follows_is_location
+  ok   an_empty_location_adds_no_target
+  ok   a_root_level_path_is_never_needed_by_accident
+
+[hostprobe_args]
+  ok   the_canonical_native_gate_command_parses
+  ok   the_canonical_takeover_gate_command_parses
+  ok   verify_without_a_directory_is_a_usage_error
+  ok   record_without_a_directory_is_a_usage_error
+  ok   shell_without_a_path_is_a_usage_error
+  ok   an_option_cannot_be_swallowed_as_another_options_operand
+  ok   verify_with_an_empty_directory_is_a_usage_error
+  ok   record_with_an_empty_directory_is_a_usage_error
+  ok   shell_with_an_empty_path_is_a_usage_error
+  ok   an_unknown_option_is_an_error_not_a_filter
+  ok   a_plain_word_is_still_a_substring_filter
+  ok   a_filter_combines_with_verification
+  ok   shell_without_takeover_keeps_its_own_exit_code
+  ok   the_first_error_is_the_one_reported
+  ok   only_a_double_dash_word_counts_as_an_option
+  ok   the_argv_overload_skips_the_program_name
+
+[detour_enlistment]
+  ok   every_other_thread_of_this_process_is_enlisted
+  ok   a_failed_snapshot_is_a_failed_enlistment
+  ok   a_snapshot_that_cannot_be_walked_is_a_failed_enlistment
+  ok   a_live_thread_that_cannot_be_opened_fails_the_enlistment
+  ok   a_thread_that_ended_during_the_snapshot_race_is_ignored
+  ok   a_thread_detours_will_not_record_fails_the_enlistment
+  ok   a_walk_that_breaks_partway_is_not_an_enlistment
+  ok   a_walk_that_ends_early_but_says_so_is_still_an_enlistment
+  ok   a_liveness_check_that_cannot_start_does_not_prove_a_thread_left
+  ok   a_liveness_check_that_breaks_partway_does_not_prove_a_thread_left
+  ok   an_absence_from_a_completed_walk_is_still_the_benign_race
+  ok   begin_refuses_when_the_snapshot_failed
+  ok   begin_refuses_when_the_walk_could_not_be_finished
+  ok   begin_refuses_when_detours_would_not_open_the_transaction
+  ok   a_clean_begin_commits
+  ok   a_failed_commit_reports_which_target_failed
+  ok   aborting_twice_is_harmless_and_reopening_is_refused
+
+[provider_schedule]
+  ok   the_cheap_are_resolved_before_the_expensive_can_overrun
+  ok   a_runtime_overrun_can_no_longer_starve_the_cheap_tail
+  ok   a_handler_that_never_contributes_sorts_behind_ones_that_do
+  ok   a_demoted_handler_is_still_planned_and_never_deferred_for_it
+  ok   one_shown_item_restores_a_handlers_place
+  ok   demotion_does_not_reach_the_unknown
+  ok   known_providers_are_ordered_cheapest_first
+  ok   the_estimate_is_conservative_rather_than_optimistic
+  ok   a_provider_that_cannot_fit_does_not_end_the_pass
+  ok   a_slow_provider_that_is_not_due_is_deferred_as_slow
+  ok   a_due_reprobe_runs_after_everything_affordable
+  ok   a_due_reprobe_is_not_refused_on_a_prediction
+  ok   one_exploration_is_guaranteed_before_the_known_set
+  ok   exploration_rotates_so_no_unknown_is_starved
+  ok   an_expensive_cold_head_does_not_starve_the_unknown_tail
+  ok   an_exploration_is_never_refused_on_a_number_nobody_measured
+  ok   nothing_is_lost_when_everything_fits
+  ok   an_empty_registration_set_plans_nothing
+  ok   every_ordinal_appears_exactly_once_across_order_and_deferrals
+  ok   the_plan_is_deterministic_for_a_given_set_of_timings
+  ok   a_known_step_that_no_menu_could_admit_is_never_planned
+  ok   the_admissibility_invariant_holds_across_a_mixed_plan
+  ok   a_provider_refused_too_often_is_given_a_forced_turn
+  ok   a_forced_turn_does_not_displace_affordable_work
+  ok   an_affordable_provider_is_untouched_by_any_of_this
+
+[vertical_blank]
+  ok   a_failed_timing_call_asks_for_no_wait_at_all
+  ok   a_zero_performance_frequency_asks_for_no_wait
+  ok   a_negative_refresh_period_asks_for_no_wait
+  ok   a_refresh_period_slower_than_one_hertz_is_not_a_display
+  ok   a_vblank_one_full_period_ahead_waits_a_whole_frame
+  ok   a_vblank_half_a_period_ahead_waits_half_a_frame
+  ok   a_vblank_in_the_past_wraps_into_the_next_period
+  ok   a_vblank_an_exact_number_of_periods_in_the_past_waits_nothing
+  ok   a_vblank_many_periods_ahead_still_waits_less_than_one_frame
+  ok   an_implausibly_long_wait_is_refused_rather_than_slept
+  ok   a_144_hertz_display_waits_less_than_a_60_hertz_one
+
+[explorer_command_state]
+  ok   an_enabled_command_is_shown
+  ok   a_disabled_command_is_still_shown
+  ok   a_hidden_command_is_not_shown
+  ok   hidden_wins_over_anything_else_in_the_flags
+  ok   pending_is_shown_provisionally_enabled_and_reported
+  ok   a_pending_handlers_leftover_flags_are_not_believed
+  ok   any_other_failure_omits_the_item
+  ok   a_failed_state_call_never_produces_an_enabled_item
+  ok   success_is_succeeded_and_not_equality_with_s_ok
+
+34794 checks, 0 failure(s)
+
+Checking source invariants...
+check-invariants: OK (15 rules, 0 deferred)
+
+All requested builds and tests completed successfully!

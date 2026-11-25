@@ -104,9 +104,6 @@
     <ClInclude Include="src\Include\ContextMenu.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\Include\Styles.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="src\Expression\Expression.h">
       <Filter>Header Files\Expression</Filter>
     </ClInclude>
@@ -166,9 +163,6 @@
     </ClInclude>
     <ClInclude Include="src\Expression\Variable.h">
       <Filter>Header Files\Expression</Filter>
-    </ClInclude>
-    <ClInclude Include="src\Include\UTheme.h">
-      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\Include\Theme.h">
       <Filter>Header Files</Filter>

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <io.h>		// _open_osfhandle, _close
+#include <fcntl.h>	// _O_RDONLY, _O_BINARY
+
 namespace Nilesoft
 {
 	namespace IO
@@ -49,26 +52,14 @@ namespace Nilesoft
 			{
 			}
 
-			File(const File& file) :
-				Path { file.Path },
-				Handle { file.Handle },
-				m_write { file.m_write }
-			{
-			}
-
 			~File()
 			{
 				this->Close();
 			}
 
-			File &operator =(const File &file)
-			{
-				this->Handle = file.Handle;
-				this->Path = file.Path;
-				this->m_write = file.m_write;
-				this->m_encoding = file.m_encoding;
-				return *this;
-			}
+			// Non-copyable: Handle is an owned FILE*; a copy would close it twice.
+			File(const File&) = delete;
+			File &operator =(const File&) = delete;
 
 			bool Open(const string &path, bool write, Encoding encoding)
 			{
@@ -93,6 +84,38 @@ namespace Nilesoft
 
 			bool Open()
 			{
+				/*
+					A binary read - the parser reading shell.nss, io.file.read - must
+					not stop the user's editor saving, in place or by rename-replace,
+					while two dozen hosts reload. _wfopen_s "can't open a file for
+					sharing": measured, a GENERIC_WRITE open and a DELETE for a rename
+					both fail with error 32 while it is held, and an editor holding
+					the file for write made the read fail. So open with every share
+					mode and hand the handle to the CRT; fclose then closes both.
+					https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/fopen-s-wfopen-s
+					https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/open-osfhandle
+				*/
+				if(!m_write && m_encoding == Encoding::Binary)
+				{
+					auto handle = ::CreateFileW(this->Path, GENERIC_READ,
+												FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+												nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+					if(handle == INVALID_HANDLE_VALUE)
+						return false;
+
+					auto fd = ::_open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_RDONLY | _O_BINARY);
+					if(fd == -1)
+					{
+						::CloseHandle(handle);
+						return false;
+					}
+
+					this->Handle = ::_wfdopen(fd, L"rb");
+					if(!this->Handle)
+						::_close(fd);		// closes the OS handle too
+					return this->Handle != nullptr;
+				}
+
 				string mode = m_write ? L"w" : L"r";
 
 				if(m_encoding == Encoding::Binary)
@@ -430,7 +453,9 @@ namespace Nilesoft
 										swab(buffer2, sz);
 									}
 
-									const size_t length = (sz / sizeof(wchar_t)) - 1;
+									// Every character, not all but the last; a BOM-only file
+									// is zero characters and yields an empty string.
+									const size_t length = sz / sizeof(wchar_t);
 
 									std::unique_ptr<wchar_t[]> buffer(new wchar_t[length + 4]{ 0 });
 									return (wchar_t*)::memcpy(&buffer[0], buffer2, sz);

@@ -74,7 +74,6 @@ using Dictionary = std::unordered_map<TKey, TValue>;
 #include <System.h>
 
 using namespace ::Nilesoft;
-using namespace ::Nilesoft::Collections;
 using namespace ::Nilesoft::Text;
 using namespace ::Nilesoft::IO;
 using namespace ::Nilesoft::Drawing;
@@ -105,7 +104,6 @@ using namespace Nilesoft;
 #include "Expression\IdentExpression.h"
 
 
-#include "Include\Styles.h"
 #include "Include\Menu.h"
 #include "Include\MenuItem.h"
 #include "Include\Cache.h"

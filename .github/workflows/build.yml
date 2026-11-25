@@ -2,7 +2,10 @@ name: Build
 
 on:
   push:
-    branches: [ "main" ]
+    # The working refactor branch is listed so that its gates run in CI while it
+    # is live. Before this it triggered on main only, so an 83-commit branch had
+    # never been through CI at all.
+    branches: [ "main", "refactor/takeover-master-plan" ]
     tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
@@ -11,6 +14,25 @@ permissions:
   contents: read
 
 jobs:
+
+  # Source-level invariants: patterns the refactor removed and that must not come
+  # back. Its own job rather than a step in the matrix, for two reasons: the check
+  # reads sources only, so running it three times proves nothing extra; and as a
+  # separate job it still reports when a platform build fails, which is exactly
+  # when a reintroduced pattern is most likely to be the cause.
+  #
+  # Invoked through `powershell` rather than the runner's default `pwsh` so that
+  # CI and build.ps1 run the script the same way, under the same edition.
+  invariants:
+
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check source invariants
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invariants.ps1
+
   build:
 
     strategy:
@@ -33,18 +55,124 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
 
+    # The hosted image carries the v143 toolset that every project here pins,
+    # but only its x64/x86 halves: the first CI run this branch had built x64
+    # and x86 and failed arm64 with
+    #
+    #   MSB8020: The build tools for Visual Studio 2022 (Platform Toolset =
+    #   'v143') cannot be found.
+    #
+    # from VS 18's own MSBuild, having already compiled x64 with
+    # VC\Tools\MSVC\14.44.35207. So the toolset is present and the ARM64 cross
+    # tools are the missing component, which the installer can add in place.
+    # Retargeting the solution instead would change what ships, which is not a
+    # CI decision.
+    #
+    # Best-effort by design: if the component cannot be added, the build step
+    # below fails with the same clear MSB8020 rather than this step failing
+    # with something about the installer.
+    - name: Install v143 ARM64 cross tools
+      if: matrix.platform == 'arm64'
+      shell: pwsh
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $root = & $vswhere -latest -products * -property installationPath
+        Write-Host "VS installation: $root"
+
+        # MSB8020 is about the *platform toolset* MSBuild can find for this
+        # platform, not about a compiler binary existing somewhere, so that is
+        # what gets reported here. An earlier attempt tested for any directory
+        # called arm64 under any MSVC bin, decided the tools were present and
+        # skipped the install while the build went on failing.
+        function Report($when) {
+          Write-Host "--- $when ---"
+          Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              $hosts = Get-ChildItem $_.FullName -Recurse -Depth 2 -Directory -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Parent.Name -like 'Host*' } |
+                       ForEach-Object { "$($_.Parent.Name)/$($_.Name)" }
+              Write-Host ("  MSVC {0}: {1}" -f $_.Name, ($hosts -join ' '))
+            }
+          Get-ChildItem "$root\MSBuild\Microsoft\VC" -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              $sets = Get-ChildItem "$($_.FullName)\Platforms" -Directory -ErrorAction SilentlyContinue |
+                      ForEach-Object {
+                        $p = Get-ChildItem "$($_.FullName)\PlatformToolsets" -Directory -ErrorAction SilentlyContinue |
+                             Select-Object -ExpandProperty Name
+                        "$($_.Name)=[$($p -join ',')]"
+                      }
+              Write-Host ("  MSBuild {0}: {1}" -f $_.Name, ($sets -join ' '))
+            }
+        }
+
+        # The one thing MSB8020 is actually asking for. Measured on this image:
+        #
+        #   before   MSBuild v170: Win32=[v143] x64=[v143]
+        #   after    MSBuild v170: ARM64=[v143] ARM64EC=[v143] Win32=[v143] x64=[v143]
+        #
+        # and MSVC 14.44.35207 gained HostX64/arm64 with it. So the image ships
+        # the pinned toolset for the two platforms it expects to be asked for,
+        # and the ARM64 half is an add-on.
+        $toolset = "$root\MSBuild\Microsoft\VC\v170\Platforms\ARM64\PlatformToolsets\v143"
+
+        Report 'before'
+
+        if (Test-Path -LiteralPath $toolset) {
+          Write-Host "v143 ARM64 platform toolset already present - nothing to do"
+          exit 0
+        }
+
+        $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+        foreach ($id in @('Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64',
+                          'Microsoft.VisualStudio.Component.VC.v143.ARM64',
+                          'Microsoft.VisualStudio.Component.VC.Tools.ARM64')) {
+          Write-Host "trying --add $id"
+          $p = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+                 'modify', '--installPath', "`"$root`"", '--add', $id,
+                 '--quiet', '--norestart', '--nocache')
+          Write-Host "  exit $($p.ExitCode)"
+
+          # The version-pinned id is the one that worked; the others are there
+          # in case the image moves. Stop at whichever produced the toolset,
+          # rather than running the installer three times for one outcome.
+          if (Test-Path -LiteralPath $toolset) { Write-Host "  toolset present"; break }
+        }
+
+        Report 'after'
+
     - name: Restore NuGet packages
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: nuget restore ${{env.SOLUTION_FILE_PATH}}
 
+    # -restore runs the Restore target before the build targets
+    # (https://learn.microsoft.com/en-us/visualstudio/msbuild/msbuild-command-line-reference).
+    # setup/wix/setup.wixproj is an SDK-style project - Sdk="WixToolset.Sdk/5.0.2" -
+    # so the toolset itself arrives through NuGet restore. Without it the solution
+    # can build every binary and silently emit no package, which is why the upload
+    # step below was written with if-no-files-found: warn.
     - name: Build
       working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{env.BUILD_PLATFORM}} ${{env.SOLUTION_FILE_PATH}}
+      run: msbuild /m /restore /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{env.BUILD_PLATFORM}} ${{env.SOLUTION_FILE_PATH}}
 
     - name: Run unit tests
       if: matrix.platform == 'x64' || matrix.platform == 'x86'
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: ${{env.BIN_PATH}}\tests.exe
+
+    # Reads the built package's Component, Registry, InstallExecuteSequence,
+    # CustomAction, Upgrade and RemoveFile tables. It installs nothing and writes
+    # nothing - msi-query.ps1 opens the database in read-only mode - so it needs
+    # no elevation and no desktop. Until now it was documented as a "cheap,
+    # immediate" CI addition and run by hand.
+    - name: Validate MSI lifecycle
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: |
+        $msi = "src\bin\setup-${{matrix.platform}}.msi"
+        if (-not (Test-Path -LiteralPath $msi)) {
+          throw "$msi was not produced by the build. If every binary built, suspect the WiX SDK restore rather than the authoring."
+        }
+        powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-msi-lifecycle.ps1 -Path $msi
+        exit $LASTEXITCODE
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4

@@ -13,6 +13,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ca", "setup\ca\ca.vcxproj",
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tests", "tests\tests.vcxproj", "{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "hostprobe", "tests\hostprobe\hostprobe.vcxproj", "{7B09AECC-392E-42BB-A84D-FA11ABD66108}"
+EndProject
 Project("{B7DD6F7E-DEF8-4E67-B5B7-07EF123DB6F0}") = "setup", "setup\wix\setup.wixproj", "{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}"
 	ProjectSection(ProjectDependencies) = postProject
 		{BAF011AC-D5E9-42C5-BA26-BA6115A45DAC} = {BAF011AC-D5E9-42C5-BA26-BA6115A45DAC}
@@ -51,6 +53,12 @@ Global
 		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|x64.Build.0 = release|x64
 		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|x86.ActiveCfg = release|Win32
 		{3C1F4E7A-9B62-4D58-8E44-2A7D6C5B10F3}.release|x86.Build.0 = release|Win32
+		{7B09AECC-392E-42BB-A84D-FA11ABD66108}.release|ARM64.ActiveCfg = release|ARM64
+		{7B09AECC-392E-42BB-A84D-FA11ABD66108}.release|ARM64.Build.0 = release|ARM64
+		{7B09AECC-392E-42BB-A84D-FA11ABD66108}.release|x64.ActiveCfg = release|x64
+		{7B09AECC-392E-42BB-A84D-FA11ABD66108}.release|x64.Build.0 = release|x64
+		{7B09AECC-392E-42BB-A84D-FA11ABD66108}.release|x86.ActiveCfg = release|Win32
+		{7B09AECC-392E-42BB-A84D-FA11ABD66108}.release|x86.Build.0 = release|Win32
 		{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}.release|ARM64.ActiveCfg = Release|ARM64
 		{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}.release|ARM64.Build.0 = Release|ARM64
 		{F8A8D368-F53D-4EA1-9E17-404DA0CC89CD}.release|x64.ActiveCfg = Release|x64

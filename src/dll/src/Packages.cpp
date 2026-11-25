@@ -182,24 +182,49 @@ namespace Nilesoft
 
 			// Subkey names only. Opening every package key and reading every value
 			// is what used to make this scan expensive.
+			//
+			// Only ERROR_NO_MORE_ITEMS ends this walk successfully. RegEnumKeyEx
+			// distinguishes three outcomes and this loop used to collapse all of
+			// them: "If the function succeeds, the return value is ERROR_SUCCESS.
+			// If the function fails, the return value is a system error code. If
+			// there are no more subkeys available, the function returns
+			// ERROR_NO_MORE_ITEMS. If the lpName buffer is too small to receive
+			// the name of the key, the function returns ERROR_MORE_DATA."
+			// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumkeyexw
+			//
+			// The Remarks say the same thing as an instruction: call it "until
+			// there are no more subkeys (meaning the function returns
+			// ERROR_NO_MORE_ITEMS)".
+			//
+			// `else if(rc != ERROR_MORE_DATA) break; ... return true` therefore
+			// reported a partial enumeration as a complete one, and the caller
+			// published the result as the machine's whole package set. What that
+			// costs is in PackageCatalogService::run.
+			//
+			// ERROR_MORE_DATA is treated as a failure rather than skipped, and
+			// that is the one behaviour change here rather than a strictly
+			// stricter reading. A package full name is bounded by
+			// PACKAGE_FULL_NAME_MAX_LENGTH - name 50 + version 23 +
+			// architecture + resource id 30 + publisher id 13 with separators,
+			// about 127 characters (Windows Kits/10/Include/.../um/minappmodel.h)
+			// - so a 512-character buffer cannot overflow in practice, and a hit
+			// means something is wrong with the key rather than with the buffer.
+			// Silently advancing past an indexed key is the behaviour worth
+			// removing.
 			for(DWORD i = 0;; i++)
 			{
 				wchar_t name[512]{};
 				DWORD cch = static_cast<DWORD>(std::size(name));
 				auto rc = ::RegEnumKeyExW(key, i, name, &cch, nullptr, nullptr, nullptr, nullptr);
 				if(rc == ERROR_SUCCESS)
+				{
 					out.emplace_back(name, cch);
-				else if(rc != ERROR_MORE_DATA)
-					break;
+					continue;
+				}
+
+				::RegCloseKey(key);
+				return rc == ERROR_NO_MORE_ITEMS;
 			}
-
-			::RegCloseKey(key);
-			return true;
-		}
-
-		std::wstring RegistryPackageSource::resolve_path(const std::wstring &full_name)
-		{
-			return GetInstalledPackagePath(full_name);
 		}
 
 		std::wstring RegistryPackageSource::resolve_display_name(const std::wstring &full_name)
@@ -242,6 +267,17 @@ namespace Nilesoft
 
 			std::wstring result;
 
+			// Keys are the encoded path of a package's resources.pri or merged
+			// resource file, e.g.
+			//   C:%5CProgram Files%5CWindowsApps%5CMicrosoft.Paint_11.2508.361.0_x64__8wekyb3d8bbwe%5Cresources.pri
+			// so the package name sits between an encoded separator and the
+			// "_<version>" that follows it. A bare substring match took
+			// Microsoft.WindowsTerminalPreview_... for Microsoft.WindowsTerminal.
+			// Observed on Windows 11, not a documented format.
+			std::wstring needle = L"%5C";
+			needle += identity.name;
+			needle += L'_';
+
 			for(DWORD i = 0;; i++)
 			{
 				wchar_t name[512]{};
@@ -253,14 +289,18 @@ namespace Nilesoft
 				// embed the version that was current when the strings were
 				// cached, which drifts behind the installed one.
 				std::wstring entry(name, cch);
-				if(!icontains(entry, identity.name.c_str()))
+				if(!icontains(entry, needle.c_str()))
 					continue;
 
+				// Subkeys "are not ordered" and several versions of the package
+				// can be cached, so a matching key that yields nothing is not the
+				// end of the search - try the next one.
+				// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumkeyexw
 				// <package>\<merged resource file>\<language> holds the values.
 				HKEY level = nullptr;
 				if(::RegOpenKeyExW(mrt, entry.c_str(), 0,
 								   KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE, &level) != ERROR_SUCCESS)
-					break;
+					continue;
 
 				for(int depth = 0; depth < 2 && level; depth++)
 				{
@@ -284,266 +324,39 @@ namespace Nilesoft
 						DWORD data_cb = sizeof(value_data);
 						DWORD type = 0;
 
-						if(::RegEnumValueW(level, v, value_name, &name_cch, nullptr, &type,
-										   reinterpret_cast<LPBYTE>(value_data), &data_cb) != ERROR_SUCCESS)
+						auto rc = ::RegEnumValueW(level, v, value_name, &name_cch, nullptr, &type,
+												  reinterpret_cast<LPBYTE>(value_data), &data_cb);
+						if(rc == ERROR_MORE_DATA)
+							continue;	// this value does not fit; the next might
+						if(rc != ERROR_SUCCESS)
 							break;
 
 						if(display == value_name)
 						{
-							result = value_data;
+							// REG_SZ "may not have been stored with the proper
+							// null-terminating characters", so size from the byte
+							// count and stop at the first NUL rather than trusting one.
+							// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regenumvaluew
+							std::wstring data(value_data, data_cb / sizeof(wchar_t));
+							data.resize(data.find(L'\0') == std::wstring::npos ? data.size() : data.find(L'\0'));
+							result = std::move(data);
 							break;
 						}
 					}
 					::RegCloseKey(level);
 				}
-				break;
+
+				if(!result.empty())
+					break;
 			}
 
 			::RegCloseKey(mrt);
 			return result;
 		}
 
-		bool PackageIndex::ensure_index() const
+		bool package_full_name_matches(const std::wstring &full_name, const wchar_t *query)
 		{
-			std::vector<std::wstring> names;
-			IPackageSource *source = nullptr;
-			uint64_t generation = 0;
-
-			{
-				std::unique_lock<std::mutex> lock(_mutex);
-
-				// Another thread is already scanning: wait for it rather than
-				// repeat the same enumeration.
-				_cv.wait(lock, [this] { return _state != State::Loading; });
-
-				if(_state == State::Ready)
-				{
-					// Still fresh enough. GetTickCount64 does not wrap in any
-					// process lifetime that matters here, but the subtraction is
-					// unsigned so it would survive it anyway.
-					if(now() - _ready_at < _ttl_ms)
-						return true;
-
-					// Expired. Keep the list so callers racing this scan still get
-					// the old answer rather than nothing, and rescan.
-				}
-
-				if(!_source)
-					return false;
-
-				_state = State::Loading;
-				source = _source;
-				generation = _generation;
-			}
-
-			// If the scan throws - it allocates once per package - the state must
-			// not be left at Loading, or every later caller waits on a condition
-			// variable nobody will notify, hanging the thread building the menu.
-			struct loading_guard
-			{
-				PackageIndex const *self;
-				bool done;
-				~loading_guard()
-				{
-					if(done)
-						return;
-					{
-						std::lock_guard<std::mutex> lock(self->_mutex);
-						if(self->_state == State::Loading)
-							self->_state = State::Empty;
-					}
-					self->_cv.notify_all();
-				}
-			} guard{ this, false };
-
-			auto ok = source->enumerate_full_names(names);
-
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-
-				if(ok && _generation != generation)
-				{
-					// Something invalidated the index while this scan was running,
-					// so what it just enumerated describes the machine before that
-					// change. Publishing it would cache the stale answer under a
-					// fresh timestamp - exactly the bug being fixed.
-					_state = State::Empty;
-					ok = false;
-				}
-				else if(ok)
-				{
-					_list.clear();
-					_list.reserve(names.size());
-					for(auto &n : names)
-					{
-						Entry e;
-						if(parse_package_full_name(n, e.identity))
-							_list.push_back(std::move(e));
-					}
-					_state = State::Ready;
-					_ready_at = now();
-				}
-				else
-				{
-					// A transient failure must not be cached forever - packages
-					// come and go, and the next menu should try again.
-					_state = State::Empty;
-				}
-			}
-
-			guard.done = true;
-			_cv.notify_all();
-			return ok;
-		}
-
-		long long PackageIndex::match_locked(const std::vector<Entry> &list, const wchar_t *query)
-		{
-			for(size_t i = 0; i < list.size(); i++)
-			{
-				if(icontains(list[i].identity.full_name, query))
-					return static_cast<long long>(i);
-			}
-			return -1;
-		}
-
-		bool PackageIndex::exists(const wchar_t *query) const
-		{
-			if(!query || !*query || !ensure_index())
-				return false;
-
-			std::lock_guard<std::mutex> lock(_mutex);
-			return match_locked(_list, query) >= 0;
-		}
-
-		std::optional<PackageIdentity> PackageIndex::find_identity(const wchar_t *query) const
-		{
-			if(!query || !*query || !ensure_index())
-				return std::nullopt;
-
-			std::lock_guard<std::mutex> lock(_mutex);
-			auto i = match_locked(_list, query);
-			if(i < 0)
-				return std::nullopt;
-			return _list[static_cast<size_t>(i)].identity;
-		}
-
-		std::optional<std::wstring> PackageIndex::path(const wchar_t *query) const
-		{
-			if(!query || !*query || !ensure_index())
-				return std::nullopt;
-
-			std::wstring full_name;
-			IPackageSource *source = nullptr;
-
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				auto i = match_locked(_list, query);
-				if(i < 0)
-					return std::nullopt;
-
-				auto &entry = _list[static_cast<size_t>(i)];
-				if(entry.path_resolved)
-					return entry.install_path;
-
-				full_name = entry.identity.full_name;
-				source = _source;
-			}
-
-			if(!source)
-				return std::nullopt;
-
-			// Outside the lock: this reaches the package manager.
-			auto resolved = source->resolve_path(full_name);
-
-			std::lock_guard<std::mutex> lock(_mutex);
-			for(auto &entry : _list)
-			{
-				if(entry.identity.full_name == full_name)
-				{
-					entry.install_path = resolved;
-					entry.path_resolved = true;
-					break;
-				}
-			}
-			return resolved;
-		}
-
-		std::optional<std::wstring> PackageIndex::display_name(const wchar_t *query) const
-		{
-			if(!query || !*query || !ensure_index())
-				return std::nullopt;
-
-			std::wstring full_name;
-			IPackageSource *source = nullptr;
-
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				auto i = match_locked(_list, query);
-				if(i < 0)
-					return std::nullopt;
-
-				auto &entry = _list[static_cast<size_t>(i)];
-				if(entry.display_resolved)
-					return entry.display;
-
-				full_name = entry.identity.full_name;
-				source = _source;
-			}
-
-			if(!source)
-				return std::nullopt;
-
-			auto resolved = source->resolve_display_name(full_name);
-
-			std::lock_guard<std::mutex> lock(_mutex);
-			for(auto &entry : _list)
-			{
-				if(entry.identity.full_name == full_name)
-				{
-					entry.display = resolved;
-					entry.display_resolved = true;
-					break;
-				}
-			}
-			return resolved;
-		}
-
-		std::vector<PackageIdentity> PackageIndex::all_identities() const
-		{
-			std::vector<PackageIdentity> out;
-			if(!ensure_index())
-				return out;
-
-			std::lock_guard<std::mutex> lock(_mutex);
-			out.reserve(_list.size());
-			for(auto &entry : _list)
-				out.push_back(entry.identity);
-			return out;
-		}
-
-		void PackageIndex::clear()
-		{
-			std::unique_lock<std::mutex> lock(_mutex);
-			_cv.wait(lock, [this] { return _state != State::Loading; });
-			_list.clear();
-			_state = State::Empty;
-			_generation++;
-		}
-
-		// Unlike clear(), this does not wait for a scan in flight and does not
-		// throw the current list away - it just guarantees the next call rescans,
-		// and that whatever is scanning right now will not publish.
-		void PackageIndex::invalidate()
-		{
-			std::lock_guard<std::mutex> lock(_mutex);
-			_generation++;
-
-			// Not _ready_at = 0: freshness is `now() - _ready_at < ttl`, and at a
-			// small tick count that still reads as fresh. Drop straight out of
-			// Ready instead. The list is left alone - nothing reads it without
-			// going through ensure_index first.
-			if(_state == State::Ready)
-				_state = State::Empty;
+			return icontains(full_name, query);
 		}
 	}
 }

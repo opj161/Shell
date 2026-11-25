@@ -8,6 +8,7 @@
 #include <string>
 #include <sddl.h>
 #include "../../shared/LegacyConfigTransfer.h"
+#include "../../shared/TreatAsRegistry.h"
 #include "TreatAsPlan.h"
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "msi.lib")
@@ -106,27 +107,57 @@ struct MSI
 constexpr auto FILECONFIG = L"shell.nss";
 constexpr auto FILECONFIGSTOCK = L"shell.nss.stock-new";
 
-constexpr wchar_t TREATAS_PARENT[] = L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}";
-constexpr wchar_t TREATAS_KEY[] = L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\TreatAs";
-constexpr wchar_t CONTEXT_MENU_CLSID[] = L"{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}";
 constexpr auto TREATAS_WARNING = 25001;
 constexpr auto TREATAS_REMOVE_ERROR = 25002;
 constexpr auto ROLLBACK_REQUIRED_ERROR = 25003;
 
-class RegKey
+namespace TreatAs = Nilesoft::TreatAsRegistry;
+
+// Borrowing write access to TreatAs::Parent reports through a plain function
+// pointer, which cannot carry an MSIHANDLE. The deferred custom actions here are
+// single-threaded, so BorrowReportScope below parks the current one here for the
+// duration of one action and the diagnostic reaches the MSI log instead of
+// nowhere. MsiProcessMessage is one of the few handle-taking functions a
+// deferred custom action may call.
+// https://learn.microsoft.com/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
+static MSIHANDLE g_borrow_install = 0;
+
+static void BorrowReportToInstaller(const wchar_t *message)
 {
-public:
-	RegKey() = default;
-	RegKey(const RegKey &) = delete;
-	RegKey &operator=(const RegKey &) = delete;
-	~RegKey() { if(_key) ::RegCloseKey(_key); }
+	::OutputDebugStringW(message);
+	if(!g_borrow_install || !message)
+		return;
+	PMSIHANDLE record = ::MsiCreateRecord(1);
+	if(!record)
+		return;
+	::MsiRecordSetStringW(record, 0, message);
+	::MsiProcessMessage(g_borrow_install, INSTALLMESSAGE_INFO, record);
+}
 
-	operator HKEY() const { return _key; }
-	HKEY *put() { return &_key; }
-
-private:
-	HKEY _key{};
+// The handle is the installer's, and it is only valid for the duration of the
+// custom action it was handed to. Assigning it at entry and relying on every
+// return path to clear it is how a stale MSIHANDLE ends up being passed to
+// MsiProcessMessage later; both entry points below have several returns, and
+// this DLL stays loaded between actions.
+struct BorrowReportScope
+{
+	explicit BorrowReportScope(MSIHANDLE h) { g_borrow_install = h; }
+	~BorrowReportScope() { g_borrow_install = 0; }
+	BorrowReportScope(const BorrowReportScope &) = delete;
+	BorrowReportScope &operator=(const BorrowReportScope &) = delete;
 };
+
+// The custom actions run deferred and no-impersonate, i.e. as LocalSystem, and
+// LocalSystem holds ReadKey on TreatAs::Parent and nothing more - measured on
+// Windows 11 26200 on 2026-08-27 by opening the key from a SYSTEM scheduled
+// task: CreateSubKey and Delete are both refused, ReadKey succeeds. So
+// TreatAs::Create and TreatAs::Remove borrow write access (src/shared/
+// TreatAsRegistry.h), the same code shell.exe runs. Without it install warned
+// and skipped the redirect, and uninstall returned ERROR_INSTALL_FAILURE once a
+// redirect existed.
+//
+// SeTakeOwnershipPrivilege and SeRestorePrivilege are present but disabled in
+// that token, which is what BorrowedKeyAccess::acquire enables.
 
 class FileHandle
 {
@@ -144,112 +175,6 @@ public:
 private:
 	HANDLE _handle{ INVALID_HANDLE_VALUE };
 };
-
-enum class TreatAsState
-{
-	absent,
-	ours,
-	foreign,
-	inaccessible
-};
-
-static TreatAsState QueryTreatAs(LSTATUS *error = nullptr)
-{
-	RegKey key;
-	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, 0,
-		KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_WOW64_64KEY, key.put());
-	if(rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
-	{
-		if(error) *error = ERROR_SUCCESS;
-		return TreatAsState::absent;
-	}
-	if(rc != ERROR_SUCCESS)
-	{
-		if(error) *error = rc;
-		return TreatAsState::inaccessible;
-	}
-
-	DWORD subkeys = 0;
-	DWORD values = 0;
-	rc = ::RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, &subkeys, nullptr,
-		                     nullptr, &values, nullptr, nullptr, nullptr, nullptr);
-	if(rc != ERROR_SUCCESS)
-	{
-		if(error) *error = rc;
-		return TreatAsState::inaccessible;
-	}
-
-	wchar_t value[64]{};
-	DWORD bytes = sizeof(value);
-	rc = ::RegGetValueW(key, nullptr, nullptr,
-		RRF_RT_REG_SZ | RRF_ZEROONFAILURE, nullptr, value, &bytes);
-	if(rc != ERROR_SUCCESS)
-	{
-		if(error) *error = (rc == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : rc);
-		return rc == ERROR_FILE_NOT_FOUND ? TreatAsState::foreign : TreatAsState::inaccessible;
-	}
-
-	if(error) *error = ERROR_SUCCESS;
-	if(subkeys == 0 && values == 1
-	   && ::CompareStringOrdinal(value, -1, CONTEXT_MENU_CLSID, -1, TRUE) == CSTR_EQUAL)
-		return TreatAsState::ours;
-
-	return TreatAsState::foreign;
-}
-
-// created is set only when this invocation both created the key
-// (REG_CREATED_NEW_KEY) and wrote our CLSID. Opening an already-ours key is
-// success with created=false so rollback must not delete it.
-//
-//   https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regcreatekeyexw
-static LSTATUS CreateTreatAsIfAbsent(bool *created = nullptr)
-{
-	if(created)
-		*created = false;
-
-	RegKey parent;
-	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TREATAS_PARENT, 0,
-		KEY_CREATE_SUB_KEY | KEY_WOW64_64KEY, parent.put());
-	if(rc != ERROR_SUCCESS)
-		return rc;
-
-	RegKey key;
-	DWORD disposition = 0;
-	rc = ::RegCreateKeyExW(parent, L"TreatAs", 0, nullptr, REG_OPTION_NON_VOLATILE,
-		KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_WOW64_64KEY, nullptr, key.put(), &disposition);
-	if(rc != ERROR_SUCCESS)
-		return rc;
-
-	if(disposition != REG_CREATED_NEW_KEY)
-		return QueryTreatAs() == TreatAsState::ours ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
-
-	rc = ::RegSetValueExW(key, nullptr, 0, REG_SZ,
-		reinterpret_cast<const BYTE *>(CONTEXT_MENU_CLSID), sizeof(CONTEXT_MENU_CLSID));
-	if(rc != ERROR_SUCCESS)
-	{
-		// We created this empty key in this call, so taking it back is not a
-		// recursive/shared-key deletion.
-		::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, KEY_WOW64_64KEY, 0);
-		return rc;
-	}
-	if(created)
-		*created = true;
-	return ERROR_SUCCESS;
-}
-
-static LSTATUS RemoveTreatAsIfOurs()
-{
-	LSTATUS error = ERROR_SUCCESS;
-	auto state = QueryTreatAs(&error);
-	if(state == TreatAsState::absent)
-		return ERROR_SUCCESS;
-	if(state == TreatAsState::foreign)
-		return ERROR_ALREADY_EXISTS;
-	if(state == TreatAsState::inaccessible)
-		return error;
-
-	return ::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TREATAS_KEY, KEY_WOW64_64KEY, 0);
-}
 
 enum class MarkerState
 {
@@ -523,7 +448,19 @@ UINT __stdcall BackupLegacyConfig(MSIHANDLE hInstall)
 	if(!InstallFolder(hInstall, install_folder))
 		return ERROR_INSTALL_FAILURE;
 
-	auto config = JoinPath(install_folder, FILECONFIG);
+	// The outgoing file is where the previous product put it, which is not
+	// INSTALLFOLDER when it was installed to a custom folder: nothing seeds
+	// INSTALLFOLDER from the old install, so this upgrade resolves it to the
+	// default and a read there finds nothing while the old product's removal
+	// deletes the real file. PREVIOUSINSTALLFOLDER is the component search for it
+	// (setup.wxs). The restore below still targets the new INSTALLFOLDER, which
+	// the user may have changed in the folder dialog.
+	MSI msi(hInstall);
+	std::wstring previous_folder;
+	if(!msi.get(L"PREVIOUSINSTALLFOLDER", previous_folder) || previous_folder.empty())
+		previous_folder = install_folder;
+
+	auto config = JoinPath(previous_folder, FILECONFIG);
 	FileHandle source{ ::CreateFileW(config.c_str(), GENERIC_READ, FILE_SHARE_READ,
 		nullptr, OPEN_EXISTING,
 		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
@@ -539,7 +476,6 @@ UINT __stdcall BackupLegacyConfig(MSIHANDLE hInstall)
 	if(!Nilesoft::LegacyConfigTransfer::regular_non_reparse(source))
 		return ERROR_INSTALL_FAILURE;
 
-	MSI msi(hInstall);
 	std::wstring rollback_disabled;
 	if(msi.get(L"RollbackDisabled", rollback_disabled))
 		return ERROR_INSTALL_FAILURE;
@@ -619,8 +555,15 @@ UINT __stdcall RestoreLegacyConfig(MSIHANDLE hInstall)
 	   || !Nilesoft::LegacyConfigTransfer::equal(actual, plan.digest))
 		return ERROR_INSTALL_FAILURE;
 
+	// FILE_SHARE_DELETE because this handle is still open when ReplaceFileW below
+	// replaces the same file, which it opens "with the GENERIC_READ, DELETE, and
+	// SYNCHRONIZE access rights". Without it that open is a sharing violation
+	// (error 32, measured), so every legacy upgrade that had a shell.nss to carry
+	// over failed here with 1603 and rolled back.
+	// https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew
 	auto config = JoinPath(plan.install_folder, FILECONFIG);
-	FileHandle stock{ ::CreateFileW(config.c_str(), GENERIC_READ, FILE_SHARE_READ,
+	FileHandle stock{ ::CreateFileW(config.c_str(), GENERIC_READ,
+		FILE_SHARE_READ | FILE_SHARE_DELETE,
 		nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
 			| FILE_FLAG_SEQUENTIAL_SCAN, nullptr) };
 	if(!stock.valid() || !Nilesoft::LegacyConfigTransfer::regular_non_reparse(stock))
@@ -742,15 +685,15 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 		&& ::CompareStringOrdinal(remove.c_str(), -1, L"ALL", -1, TRUE) == CSTR_EQUAL;
 
 	LSTATUS error = ERROR_SUCCESS;
-	auto state = QueryTreatAs(&error);
+	auto state = TreatAs::Query(&error);
 	Nilesoft::TreatAsPlan::Op op = Nilesoft::TreatAsPlan::Op::noop;
 	std::wstring marker;
 
 	if(uninstall)
 	{
-		if(state == TreatAsState::ours)
+		if(state == TreatAs::State::ours)
 			op = Nilesoft::TreatAsPlan::Op::uninstall_ours;
-		else if(state == TreatAsState::inaccessible)
+		else if(state == TreatAs::State::inaccessible)
 		{
 			wchar_t detail[32]{};
 			::swprintf_s(detail, L"%ld", error);
@@ -762,13 +705,13 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 	}
 	else
 	{
-		if(state == TreatAsState::absent)
+		if(state == TreatAs::State::absent)
 		{
 			if(!BuildCreatedMarkerPath(marker))
 				return ERROR_INSTALL_FAILURE;
 			op = Nilesoft::TreatAsPlan::Op::install_absent;
 		}
-		else if(state == TreatAsState::foreign || state == TreatAsState::inaccessible)
+		else if(state == TreatAs::State::foreign || state == TreatAs::State::inaccessible)
 		{
 			wchar_t detail[32]{};
 			::swprintf_s(detail, L"%ld", error);
@@ -811,6 +754,9 @@ UINT __stdcall PrepareTreatAs(MSIHANDLE hInstall)
 // https://learn.microsoft.com/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
 UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 {
+	// Route any BorrowedKeyAccess diagnostic into this install's log.
+	BorrowReportScope borrow_report_scope(hInstall);
+
 	MSI msi(hInstall);
 	std::wstring data;
 	if(!msi.get(L"CustomActionData", data))
@@ -826,7 +772,7 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 	if(plan.op == Nilesoft::TreatAsPlan::Op::install_absent)
 	{
 		bool created = false;
-		rc = CreateTreatAsIfAbsent(&created);
+		rc = TreatAs::Create(BorrowReportToInstaller, &created);
 		if(rc != ERROR_SUCCESS)
 		{
 			wchar_t detail[32]{};
@@ -845,7 +791,7 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 		// https://learn.microsoft.com/windows/win32/msi/rollback-custom-actions
 		if(created && !WriteCreatedMarker(plan.marker))
 		{
-			RemoveTreatAsIfOurs();
+			TreatAs::Remove(BorrowReportToInstaller);
 			InstallerMessage(hInstall,
 				INSTALLMESSAGE(INSTALLMESSAGE_WARNING | MB_OK | MB_ICONWARNING),
 				TREATAS_WARNING);
@@ -854,7 +800,7 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 	}
 	else if(plan.op == Nilesoft::TreatAsPlan::Op::uninstall_ours)
 	{
-		rc = RemoveTreatAsIfOurs();
+		rc = TreatAs::Remove(BorrowReportToInstaller);
 		if(rc != ERROR_SUCCESS)
 		{
 			wchar_t detail[32]{};
@@ -873,6 +819,9 @@ UINT __stdcall TreatAsApply(MSIHANDLE hInstall)
 
 UINT __stdcall TreatAsRollback(MSIHANDLE hInstall)
 {
+	// Route any BorrowedKeyAccess diagnostic into this install's log.
+	BorrowReportScope borrow_report_scope(hInstall);
+
 	MSI msi(hInstall);
 	std::wstring data;
 	if(!msi.get(L"CustomActionData", data))
@@ -894,12 +843,12 @@ UINT __stdcall TreatAsRollback(MSIHANDLE hInstall)
 			marker == MarkerState::present))
 			return ERROR_SUCCESS;
 
-		rc = RemoveTreatAsIfOurs();
+		rc = TreatAs::Remove(BorrowReportToInstaller);
 		if(rc == ERROR_SUCCESS)
 			::DeleteFileW(plan.marker.c_str());
 	}
 	else if(plan.op == Nilesoft::TreatAsPlan::Op::uninstall_ours)
-		rc = CreateTreatAsIfAbsent();
+		rc = TreatAs::Create(BorrowReportToInstaller);
 	else
 		return ERROR_INSTALL_FAILURE;
 
@@ -935,73 +884,6 @@ UINT __stdcall NotifyShellChanged(MSIHANDLE)
 	// SHCNE_ASSOCCHANGED requires SHCNF_IDLIST and two null items.
 	// https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shchangenotify
 	::SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
-	return ERROR_SUCCESS;
-}
-
-UINT __stdcall ValidatePath(MSIHANDLE hInstall)
-{
-	HRESULT hr = S_OK;
-
-	BOOL fInstallPathIsRemote = TRUE;
-	BOOL fInstallPathIsRemoveable = TRUE;
-
-	MSI msi(hInstall);
-	std::wstring pwszWixUIDir, pwszInstallPath;
-	if(!msi.get(L"WIXUI_INSTALLDIR", pwszWixUIDir))
-	{
-		log("failed to get WixUI Installation Directory");
-		return ERROR_INSTALL_FAILURE;
-	}
-
-	if(!msi.get(pwszWixUIDir.c_str(), pwszInstallPath))
-	{
-		log("failed to get Installation Directory");
-		return ERROR_INSTALL_FAILURE;
-	}
-
-	std::wstring pStrippedTargetFolder = pwszInstallPath;
-
-	// Terminate the path at the root
-	if(!::PathStripToRootW(pStrippedTargetFolder.data()))
-	{
-		hr = HRESULT_FROM_WIN32(ERROR_INVALID_DRIVE);
-		if(FAILED(hr))
-		{
-			log("failed to parse target folder");
-			return hr;
-		}
-	}
-
-	auto drive_type = ::GetDriveTypeW(pStrippedTargetFolder.c_str());
-
-	fInstallPathIsRemote = (DRIVE_REMOTE == drive_type);
-	fInstallPathIsRemoveable = ((DRIVE_CDROM == drive_type) || (DRIVE_REMOVABLE == drive_type) || (DRIVE_RAMDISK == drive_type) || (DRIVE_UNKNOWN == drive_type));
-
-	// If the path does not point to a network drive, mapped drive, or removable drive,
-	// then set WIXUI_INSTALLDIR_VALID to "1" otherwise set it to 0
-	BOOL fInstallPathIsUnc = ::PathIsUNCW(pwszInstallPath.c_str());
-	if(!fInstallPathIsUnc && !fInstallPathIsRemote && !fInstallPathIsRemoveable)
-	{
-		// path is valid
-		if(!msi.set(L"WIXUI_INSTALLDIR_VALID", L"1"))
-		{
-			log("failed to set WIXUI_INSTALLDIR_VALID");
-			return ERROR_INSTALL_FAILURE;
-		}
-	}
-	else
-	{
-		// path is invalid; we can't log it because we're being called from a DoAction control event
-		// but we can at least call WcaLog to get it to write to the debugger from a debug build
-		log("Installation path %ls is invalid: it is %s UNC path, %s remote path, or %s path on a removable drive, and must be none of these.",
-			pwszInstallPath.c_str(), fInstallPathIsUnc ? "a" : "not a", fInstallPathIsRemote ? "a" : "not a", fInstallPathIsRemoveable ? "a" : "not a");
-
-		if(!msi.set(L"WIXUI_INSTALLDIR_VALID", L"0"))
-		{
-			log("failed to set WIXUI_INSTALLDIR_VALID");
-			return ERROR_INSTALL_FAILURE;
-		}
-	}
 	return ERROR_SUCCESS;
 }
 

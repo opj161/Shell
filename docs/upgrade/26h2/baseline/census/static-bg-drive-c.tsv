@@ -1,0 +1,22 @@
+# depth	pos	id	kind	title	verb
+0	0	89	item	Open w&ith Antigravity	Antigravity
+0	1	90	item	Open with &Visual Studio	AnyCode
+0	2	93	item	Search Everything 1.5a...	Search Everything 1.5a...
+0	3	94	item	Wi&zTree	WizTree
+0	4	19	submenu	New+	
+1	0	20	item	tmp-254550	
+1	1	21	item	md-254551	
+1	2	22	item	ps1-254552	
+1	3	23	item	py-254552	
+1	4	0	sep		
+1	5	24	item	Open templates	
+0	5	18	item	Rename with Pow&erRename	
+0	6	0	sep		
+0	7	17	submenu	&Give access to	Windows.Share
+1	0	2	item		
+0	8	32765	sep		
+0	9	25	submenu	Ne&w	New
+1	0	28	item	Ne&w	
+0	10	32766	sep		
+0	11	1	item	P&roperties	properties
+# top-level items: 12

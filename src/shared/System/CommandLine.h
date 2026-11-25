@@ -67,19 +67,12 @@ namespace Nilesoft
 
 		~CommandLine()
 		{
-			this->clrear();
-		}
-
-		void clrear()
-		{
-			for(auto o : Options) delete o;
-			Options.clear();
-			ShowHelp = false;
+			clear();
 		}
 
 		CommandLine& operator=(const wchar_t*str)
 		{
-			this->clrear();
+			this->clear();
 			this->m_path.clear();
 			this->Parse(str);
 			return *this;
@@ -182,10 +175,19 @@ namespace Nilesoft
 		auto end() { return Options.end(); }
 
 	private:
+		// Destructor body logic; Parse reuses it instead of invoking ~CommandLine()
+		// explicitly (which would end the object's lifetime while members stay in use).
+		void clear()
+		{
+			for(auto o : Options) delete o;
+			Options.clear();
+			ShowHelp = false;
+		}
+
 		bool Parse(const wchar_t* _cmdLine)
 		{
 			if(!Options.empty())
-				this->~CommandLine();
+				this->clear();
 
 			/*
 			int argc = 0;

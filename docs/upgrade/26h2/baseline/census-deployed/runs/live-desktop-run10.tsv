@@ -1,0 +1,30 @@
+# depth	pos	id	kind	title	verb
+0	0	30985	submenu	&View	
+0	1	30980	submenu	S&ort by	
+0	2	30979	ownerdraw	R&efresh	
+0	3	268435461	ownerdraw	Repomix	
+0	4	4294967295	sep		
+0	5	268435462	submenu	Term&inal	
+0	6	268435463	submenu	File manage	
+0	7	268435464	submenu	&Develop	
+0	8	4294967295	sep		
+0	9	268435465	submenu	&Go To	
+0	10	4294967295	sep		
+0	11	30978	ownerdraw	&Paste	
+0	12	31060	submenu	New+	
+0	13	31062	ownerdraw	Open w&ith Code	
+0	14	31064	ownerdraw	WizTree	
+0	15	31065	ownerdraw	Open w&ith Antigravity	
+0	16	31066	ownerdraw	Open with &Visual Studio	
+0	17	31069	ownerdraw	Search Everything 1.5a...	
+0	18	4294967295	sep		
+0	19	30995	ownerdraw	NVIDIA App	
+0	20	4294967295	sep		
+0	21	30994	ownerdraw	NVIDIA Control Panel	
+0	22	4294967295	sep		
+0	23	268435458	ownerdraw	Open project in ChatGPT	
+0	24	4294967295	sep		
+0	25	31088	ownerdraw	&Display settings	
+0	26	31090	ownerdraw	Pe&rsonalise	
+# top-level items: 27
+# timing-ms popup=172 hmenu=188 count-stable=407

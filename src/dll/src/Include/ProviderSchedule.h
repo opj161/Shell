@@ -1,0 +1,382 @@
+#pragma once
+
+/*
+	The order packaged verb handlers are asked in, and who is left out.
+
+	Separated from the calling loop, and from COM, so the policy can be run
+	against numbers instead of against a desktop. Everything here is pure: it
+	takes what ProviderHealth remembers and produces an order plus a list of
+	deferrals, and it activates nothing.
+
+	Why it exists at all
+	--------------------
+
+	The loop this replaces walked the registry's registration order and spent a
+	whole-menu budget as it went. Measured against the deployed build on
+	2026-08-25 (37 handlers, single-file selection, `shell.exe -report perf:all`
+	over 16 held sessions), one session exhausted the budget and dropped six
+	providers:
+
+		{8F491918-...}  deferred   Resize with Image Resizer     (0.4 ms warm)
+		{1861E28B-...}  deferred   Rename with PowerRename       (1.6 ms warm)
+		{1C6DF0C0-...}  deferred   Open with Code                (1.3 ms warm)
+		{BFE0E2A4-...}  deferred   Edit with Photos              (6.7 ms warm)
+		{7A53B94A-...}  deferred   Create with Designer         (13.9 ms warm)
+		{CA6CC9F1-...}  deferred   Edit in Notepad               (0.3 ms warm)
+
+	Four of those cost between 0.3 and 1.6 ms. They lost their place in the menu
+	for sitting *after* one that costs 13.9 ms - which is the opposite of what
+	docs/refactor/02-first-paint-latency.md section 2a describes ("a provider
+	that misses its deadline is omitted"). Six items vanished from that
+	right-click and came back on the next, with nothing marking the omission.
+
+	Resolution order is not presentation order
+	------------------------------------------
+
+	The output of this header is the order in which providers are *called*. What
+	the user sees stays in registration order, and duplicate resolution still
+	runs in registration order, so a cheaper later provider cannot take the
+	first-registration-wins identity from an earlier one. Nothing about the menu
+	changes; only which providers get asked when the menu cannot afford all of
+	them.
+
+	What it does not promise
+	------------------------
+
+	Not "at most two providers are dropped", and not a hard bound on the menu.
+	`IExplorerCommand`'s methods "are called on the UI thread"
+	(https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorercommand)
+	and a call already in flight cannot be interrupted, so the honest bound is
+	still **one in-flight overrun**. What this does guarantee is that the cheap
+	providers are resolved before the expensive one gets the chance to overrun,
+	rather than after.
+*/
+
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
+#include "ProviderHealth.h"
+
+namespace Nilesoft
+{
+	namespace Shell
+	{
+		// Why a provider is being called, which decides where it sits in the
+		// order and how the live budget check treats it.
+		enum class ProviderCall : uint8_t
+		{
+			// Two or more samples, best time under SLOW_PROVIDER_US. Its cost is
+			// predictable, so it is ordered by that prediction and refused when
+			// the prediction does not fit.
+			Known,
+
+			// Fewer than MIN_SAMPLES_TO_JUDGE. Nothing is known about it, so
+			// nothing can be predicted; it is admitted while any budget remains.
+			Explore,
+
+			// Condemned as slow, but REPROBE_AFTER menus have passed. Runs last:
+			// a re-probe must not evict known healthy items from the same menu.
+			Reprobe,
+		};
+
+		enum class ProviderDeferral : uint8_t
+		{
+			Slow,		// judged slow and not due for a re-probe
+			Budget,		// the menu ran out before it was reached
+		};
+
+		struct ProviderStep
+		{
+			uint32_t ordinal{};			// index into the caller's registration list
+			uint32_t hash{};
+			ProviderCall call{ ProviderCall::Explore };
+
+			// Conservative prediction, for ProviderCall::Known only. max(best,
+			// last) rather than best alone: `best` is the fastest it has *ever*
+			// managed, and ordering by a number a provider hits once flatters
+			// every provider that has since got slower.
+			uint32_t estimate_us{};
+		};
+
+		struct ProviderDeferred
+		{
+			uint32_t ordinal{};
+			uint32_t hash{};
+			ProviderDeferral why{ ProviderDeferral::Slow };
+		};
+
+		// One registration, with everything the schedule needs read out of it.
+		// Filled by the caller from ProviderHealth::classify, which does not
+		// mutate the re-probe counters - deciding that a probe is due is an
+		// explicit policy operation, not a side effect of looking.
+		struct ProviderCandidate
+		{
+			uint32_t ordinal{};
+			uint32_t hash{};
+
+			bool has_timing{};
+			uint16_t samples{};
+			uint32_t best_us{};
+			uint32_t last_us{};
+
+			// best_us > SLOW_PROVIDER_US, with at least MIN_SAMPLES_TO_JUDGE.
+			bool slow{};
+
+			// since_probe + 1 >= REPROBE_AFTER. Computed by the caller so this
+			// header holds no counter state.
+			bool reprobe_due{};
+
+			// budget_deferrals + 1 >= BUDGET_REPROBE_AFTER. The same idea for
+			// the other way a provider stops being called, and computed by the
+			// caller for the same reason.
+			bool budget_reprobe_due{};
+
+			// It has answered at least MIN_ANSWERS_BEFORE_DEPRIORITISING times
+			// and has never once put an item in the menu. A sort key only - see
+			// the ordering below - because "has nothing to offer so far" is a
+			// weaker statement than "is slow", and the remedy has to be
+			// correspondingly weaker. Include/ProviderHealth.h, ProviderTiming::shown.
+			bool never_shown{};
+		};
+
+		struct ProviderPlan
+		{
+			std::vector<ProviderStep> order;
+			std::vector<ProviderDeferred> deferred;
+		};
+
+		inline uint32_t provider_estimate_us(const ProviderCandidate &c) noexcept
+		{
+			return c.best_us > c.last_us ? c.best_us : c.last_us;
+		}
+
+		/*
+			`exploration_cursor` rotates across menus so the unknown set is
+			sampled fairly.
+
+			Without it, exploration always starts at the head of registration
+			order, and an expensive cold provider near the front can consume the
+			budget on every menu while an unknown tail is never sampled at all -
+			so it never acquires the two samples it needs to be judged, and never
+			becomes schedulable. The cursor is advanced by the caller once per
+			menu; any monotonically increasing value works.
+		*/
+		inline ProviderPlan plan_providers(const std::vector<ProviderCandidate> &candidates,
+										   uint64_t exploration_cursor)
+		{
+			ProviderPlan plan;
+			plan.order.reserve(candidates.size());
+
+			std::vector<const ProviderCandidate *> known;
+			std::vector<const ProviderCandidate *> unknown;
+			std::vector<const ProviderCandidate *> reprobe;
+
+			for(const auto &c : candidates)
+			{
+				if(c.slow)
+				{
+					if(c.reprobe_due)
+						reprobe.push_back(&c);
+					else
+						plan.deferred.push_back({ c.ordinal, c.hash, ProviderDeferral::Slow });
+					continue;
+				}
+
+				if(c.has_timing && c.samples >= MIN_SAMPLES_TO_JUDGE)
+				{
+					/*
+						A known provider that keeps being refused for cost.
+
+						This is the trap the two-phase scheduler opened, and it
+						has nothing to do with being slow. Take best_us = 2 000
+						and last_us = 70 000 - two samples, the second a spike,
+						which section 02.2a's own cold-handler numbers make
+						ordinary rather than exotic:
+
+						  - `slow` is false, because judgement is on best_us
+						    alone and 2 ms is well under SLOW_PROVIDER_US, so it
+						    is Known and never Reprobe;
+						  - `provider_estimate_us` is max(best, last) = 70 ms,
+						    which is above MENU_BUDGET_US, so provider_step_fits
+						    refuses it against a *completely unspent* budget;
+						  - note_budget_deferral deliberately does not touch
+						    since_probe, because a provider the menu could not
+						    afford has not had its turn.
+
+						So it is never called, record() never runs, last_us can
+						never come down, and best_us can never rise into "slow".
+						The item disappears from every menu for the life of the
+						process - the same harm the whole scheduler was built to
+						remove (section 09 finding C), in a permanent form.
+
+						Two things close it, and both are needed.
+
+						First, a forced turn. `budget_reprobe_due` promotes the
+						candidate to Reprobe, which reuses machinery that is
+						already correct: provider_step_fits never refuses a
+						non-Known step on a prediction, and re-probes are ordered
+						last, so a forced retry cannot evict known-healthy work
+						from the same menu. One answer resets the streak and
+						corrects the estimate that caused it.
+
+						Second, and this is what makes the class unreachable
+						rather than merely survivable: a Known step whose
+						estimate exceeds the *whole* budget is a step no menu can
+						ever admit. Planning one is a lie about what the plan
+						will do, so it is not planned - it is deferred here, with
+						its reason, and the caller charges it exactly as the
+						resolution loop would have. plan_is_admissible() states
+						the resulting invariant and a test holds the planner to
+						it.
+					*/
+					if(c.budget_reprobe_due)
+						reprobe.push_back(&c);
+					else if(provider_estimate_us(c) > MENU_BUDGET_US)
+						plan.deferred.push_back({ c.ordinal, c.hash,
+												  ProviderDeferral::Budget });
+					else
+						known.push_back(&c);
+				}
+				else
+					unknown.push_back(&c);
+			}
+
+			/*
+				Providers that have contributed an item first, then cheapest,
+				then registration order so the plan stays deterministic.
+
+				The first key is new, and it is the answer to a measurement the
+				report could not make until Hidden stopped being reported as Ok:
+				38.2% of the whole budget - 17.8 ms of every menu - went to six
+				handlers that answered and declined on all twelve menus sampled,
+				and have never produced a title on this machine at all. Ordering
+				by cost alone made that *worse* rather than better, because they
+				are individually cheap (3.6-4.1 ms), so cheapest-first put every
+				one of them ahead of the verbs a user actually sees, and the
+				refusals landed on the tail that had something to offer.
+
+				A sort key rather than a deferral, deliberately. Declining is a
+				statement about this selection, not about the handler: Image
+				Resizer declines a .txt and accepts a .png at the same shape. So
+				a demoted provider is still planned, still called whenever the
+				budget reaches it, and is promoted permanently by a single shown
+				item (ProviderTiming::shown never resets). And when the budget
+				does not reach it, note_budget_deferral accrues exactly as
+				before, so BUDGET_REPROBE_AFTER still forces its turn within
+				twenty menus - the sort cannot starve anything the existing
+				machinery would not already have rescued.
+			*/
+			std::stable_sort(known.begin(), known.end(),
+							 [](const ProviderCandidate *a, const ProviderCandidate *b)
+							 {
+								 if(a->never_shown != b->never_shown)
+									 return !a->never_shown;
+								 auto ea = provider_estimate_us(*a);
+								 auto eb = provider_estimate_us(*b);
+								 if(ea != eb)
+									 return ea < eb;
+								 return a->ordinal < b->ordinal;
+							 });
+
+			// Rotate the unknown set so a different one leads each menu.
+			if(!unknown.empty())
+			{
+				auto at = static_cast<size_t>(exploration_cursor % unknown.size());
+				std::rotate(unknown.begin(), unknown.begin() + static_cast<ptrdiff_t>(at),
+							unknown.end());
+			}
+
+			auto push = [&plan](const ProviderCandidate *c, ProviderCall call)
+			{
+				ProviderStep step;
+				step.ordinal = c->ordinal;
+				step.hash = c->hash;
+				step.call = call;
+				step.estimate_us = call == ProviderCall::Known ? provider_estimate_us(*c) : 0;
+				plan.order.push_back(step);
+			};
+
+			// One exploration first, so every menu makes progress on the unknown
+			// set even when the known set could fill the whole budget. Exactly
+			// one: the point is to guarantee progress, not to let unmeasured
+			// work push out work whose cost is known and affordable.
+			size_t explored = 0;
+			if(!unknown.empty())
+			{
+				push(unknown[0], ProviderCall::Explore);
+				explored = 1;
+			}
+
+			for(auto *c : known)
+				push(c, ProviderCall::Known);
+
+			for(size_t i = explored; i < unknown.size(); i++)
+				push(unknown[i], ProviderCall::Explore);
+
+			// Last, and only what is actually due. Charging a 200-menu re-probe
+			// before ordinary affordable work is how a rehabilitation attempt
+			// ends up costing the user six items it had no quarrel with.
+			std::stable_sort(reprobe.begin(), reprobe.end(),
+							 [](const ProviderCandidate *a, const ProviderCandidate *b)
+							 {
+								 return provider_estimate_us(*a) < provider_estimate_us(*b);
+							 });
+			for(auto *c : reprobe)
+				push(c, ProviderCall::Reprobe);
+
+			return plan;
+		}
+
+		/*
+			Whether the next step still fits, asked immediately before the call.
+
+			A predicted cost is only refused for a provider whose cost is
+			actually predicted. An exploration or a re-probe has no prediction to
+			test - refusing one on a number nobody measured would be a guess
+			dressed as a policy - so those are admitted while any budget remains,
+			exactly as an unknown provider was before this existed.
+		*/
+		inline bool provider_step_fits(const ProviderStep &step, uint32_t remaining_us) noexcept
+		{
+			if(remaining_us == 0)
+				return false;
+			if(step.call != ProviderCall::Known)
+				return true;
+			return step.estimate_us <= remaining_us;
+		}
+
+		/*
+			The structural guarantee, so that it can be asserted rather than
+			argued.
+
+			A Known step is refused on its prediction. A prediction above
+			MENU_BUDGET_US therefore cannot be satisfied by any menu, however
+			empty - provider_step_fits compares against what is *left*, and what
+			is left is never more than the whole budget. A plan containing such
+			a step is a plan with a step in it that will be refused every time it
+			is made, which is starvation written into the schedule rather than
+			arrived at by accident.
+
+			plan_providers does not produce one: such a candidate is either
+			promoted to Reprobe, which is admitted on remaining budget rather
+			than on a prediction, or deferred with ProviderDeferral::Budget so
+			the caller charges it once and it accrues toward its forced turn.
+
+			Checked by a test over the planner's whole output rather than
+			asserted at runtime, because it is a property of the policy and the
+			policy is pure - there is nothing to catch it doing at runtime that
+			the test cannot catch first.
+		*/
+		inline bool plan_is_admissible(const ProviderPlan &plan) noexcept
+		{
+			for(const auto &step : plan.order)
+			{
+				if(step.call == ProviderCall::Known
+				   && step.estimate_us > MENU_BUDGET_US)
+					return false;
+			}
+			return true;
+		}
+	}
+}
