@@ -158,6 +158,15 @@ namespace hostprobe
 	class Probe
 	{
 	public:
+		// Draining after a tracking call: how long to keep pumping at most, how
+		// long the queue has to stay empty before that counts as drained, and
+		// how long to wait between polls. See the drain loop in track() for the
+		// measurement that put these here - the numbers bound a posted
+		// WM_COMMAND's arrival, they are not a guess about how slow a menu is.
+		static constexpr uint64_t DRAIN_BUDGET_MS = 250;
+		static constexpr int      DRAIN_QUIET_POLLS = 4;
+		static constexpr DWORD    DRAIN_POLL_MS = 5;
+
 		static Probe &instance()
 		{
 			static Probe *p = new Probe();
@@ -305,11 +314,42 @@ namespace hostprobe
 			// is still queued here, and draining it is part of observing the
 			// contract rather than cleanup.
 			// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex
+			//
+			// That sentence is a floor, not a delivery guarantee: it says the
+			// notification will not arrive *early*, and says nothing about the
+			// message already sitting in the queue by the time the call returns.
+			// WM_COMMAND is posted, so it can land a moment later - and a drain
+			// that stopped at the first empty PeekMessage therefore dropped it,
+			// leaving the trace one line short of its baseline.
+			//
+			// Measured 2026-08-28 on this machine: 3 failures in 21 native runs
+			// and 3 in 17 takeover runs, always in the select.* family, always
+			// the trailing WM_COMMAND, always a different scenario - the shape
+			// AGENTS.md tells the reader to read as memory corruption. It
+			// reproduces in native mode, where Shell is never loaded, so it is
+			// the harness and not the product. Failures cluster under load,
+			// which is what a first-empty-queue test does when the poster is
+			// descheduled.
+			//
+			// So: keep pumping until the queue has been quiet for a stretch,
+			// bounded by a deadline. Idle is what ends this, not a fixed clock.
 			MSG msg;
-			for(int i = 0; i < 200 && ::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE); i++)
+			const auto drain_deadline = ::GetTickCount64() + DRAIN_BUDGET_MS;
+			int quiet = 0;
+			while(::GetTickCount64() < drain_deadline)
 			{
-				::TranslateMessage(&msg);
-				::DispatchMessageW(&msg);
+				if(::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+				{
+					::TranslateMessage(&msg);
+					::DispatchMessageW(&msg);
+					quiet = 0;
+					continue;
+				}
+
+				if(++quiet >= DRAIN_QUIET_POLLS)
+					break;
+
+				::Sleep(DRAIN_POLL_MS);
 			}
 
 			return result;
@@ -571,7 +611,14 @@ namespace hostprobe
 		*/
 		static std::wstring item_title_at(HMENU menu, UINT position)
 		{
-			if(!menu || position >= static_cast<UINT>(::GetMenuItemCount(menu)))
+			// GetMenuItemCount "returns -1" on failure, and the comparison has
+			// to be made in int rather than UINT: static_cast<UINT>(-1) is
+			// 4294967295, so the bound this guard exists to apply was wider
+			// than any position could ever be and the guard admitted everything
+			// on exactly the menus it was meant to reject.
+			// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuitemcount
+			const auto count = menu ? ::GetMenuItemCount(menu) : -1;
+			if(count <= 0 || static_cast<long long>(position) >= count)
 				return {};
 
 			const auto found = position;
