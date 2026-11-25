@@ -330,6 +330,69 @@ static HWND find_descendant(HWND parent, const wchar_t *class_name, int depth)
     return nullptr;
 }
 
+// Read whatever popup menu is open right now, without opening one.
+//
+// This is the way round the taskbar being a XAML surface that ignores a posted
+// WM_CONTEXTMENU: a person right-clicks it and leaves the menu up, and this
+// reads the menu they opened. It works for any host, so it is also the way to
+// census a folder or a selection that cannot be driven from here.
+static int census_read_open(void)
+{
+    HWND popup = nullptr;
+    for(int i = 0; i < 400 && !popup; i++)
+    {
+        popup = ::FindWindowW(L"#32768", nullptr);
+        if(!popup)
+            ::Sleep(50);
+    }
+    if(!popup)
+    {
+        wprintf(L"# read-open: no menu was open within 20 s\n");
+        return 3;
+    }
+
+    HMENU menu = nullptr;
+    for(int i = 0; i < 40 && !menu; i++)
+    {
+        DWORD_PTR handle = 0;
+        ::SendMessageTimeoutW(popup, MN_GETHMENU, 0, 0, SMTO_ABORTIFHUNG, 2000, &handle);
+        menu = reinterpret_cast<HMENU>(handle);
+        if(!menu)
+            ::Sleep(25);
+    }
+    if(!menu)
+    {
+        wprintf(L"# read-open: MN_GETHMENU gave nothing\n");
+        return 3;
+    }
+
+    // Wait for the menu to stop changing before walking it. Without this, a
+    // reading taken the instant the handle became readable caught the menu
+    // mid-composition: 27 rows both times, but a different 27 - Shell's items
+    // present and Explorer's Paste and New+ not yet. Measured 2026-11-25.
+    int count = ::GetMenuItemCount(menu);
+    int stable = 0;
+    for(int i = 0; i < 120 && stable < 6; i++)
+    {
+        ::Sleep(25);
+        const int now = ::GetMenuItemCount(menu);
+        if(now == count)
+            stable++;
+        else
+        {
+            count = now;
+            stable = 0;
+        }
+    }
+
+    int total = 0;
+    wprintf(L"# depth\tpos\tid\tkind\ttitle\tverb\n");
+    walk(menu, nullptr, 0, 1, &total);
+    wprintf(L"# top-level items: %d\n", ::GetMenuItemCount(menu));
+    // The menu belongs to whoever opened it, so it is left exactly as found.
+    return 0;
+}
+
 static POINT centre_of(HWND hwnd)
 {
     RECT rc {};
@@ -487,8 +550,9 @@ int wmain(int argc, wchar_t **argv)
     {
         wprintf(L"usage: menucensus <mode> [args]\n"
                 L"  live-desktop            the desktop background menu Explorer shows\n"
-                L"  live-taskbar            the taskbar menu Explorer shows\n"
+                L"  live-taskbar            the taskbar menu (needs real input; see the notes)\n"
                 L"  live-folder <folder>    a folder window's background menu\n"
+                L"  read-open               read a menu someone already opened, and leave it\n"
                 L"  bg <folder>             handler contributions, folder background\n"
                 L"  item <path> [<path>...] handler contributions, one or more items\n");
         return 1;
@@ -506,6 +570,8 @@ int wmain(int argc, wchar_t **argv)
         rc = census_live_desktop();
     else if(::lstrcmpiW(argv[1], L"live-taskbar") == 0)
         rc = census_live_taskbar();
+    else if(::lstrcmpiW(argv[1], L"read-open") == 0)
+        rc = census_read_open();
     else if(::lstrcmpiW(argv[1], L"live-folder") == 0)
     {
         if(argc < 3)

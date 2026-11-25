@@ -568,8 +568,10 @@ Still open, and all three need either elevation or a human at the keyboard:
 
 7. **Create a restore point, or an image.** "Go back" is probably unavailable for
    an eKB (§4), and System Protection state could not be read without elevation.
-8. **Right-click the taskbar and record what it shows**, before and after. The
-   probe cannot reach it (§7) and it is the surface 26H2 most directly changes.
+8. **Census the taskbar menu**, before and after. The probe cannot open it, but
+   `menucensus read-open` can read one you open: start it, then right-click the
+   taskbar and leave the menu up (§7). It is the surface 26H2 most directly
+   changes.
 9. **Put `shell.nss` somewhere off this machine.** Two copies on one disk, both
    outside version control (§4).
 
@@ -662,11 +664,28 @@ In this order, because each step is cheaper than the next:
     `Windows.UI.Composition.DesktopWindowContentBridge`. The Windows 11 taskbar
     is a XAML surface. Reaching its menu needs synthetic input, and if Windows
     answers with a XAML flyout rather than an `HMENU` there is no menu handle to
-    read at all. Since 26H2 turns taskbar app actions on by default, **this is
-    the gap that matters most: right-click the taskbar by hand, before and
-    after.** (Shell does track a popup for the taskbar — `src/dll/src/Main.cpp`
-    passes `hTaskbar` to the tracking hook — so a real right-click probably does
-    produce a readable `HMENU`; that is untested.)
+    read at all. Since 26H2 turns taskbar app actions on by default, this is the
+    gap that matters most. (Shell does track a popup for the taskbar —
+    `src/dll/src/Main.cpp` passes `hTaskbar` to the tracking hook — so a real
+    right-click probably does produce a readable `HMENU`; that is untested.)
+
+    **There is a way to census it anyway, with one right-click from a human.**
+    `menucensus read-open` reads whatever popup menu is already open and leaves
+    it exactly as found, so:
+
+    ```
+    <probe> read-open > taskbar-before.tsv     # then right-click the taskbar
+                                               # and leave the menu up
+    ```
+
+    It waits up to 20 s for a menu to appear. Verified 2026-11-25 against a menu
+    opened by a separate process: the reading is **identical** to the settled
+    `live-desktop` one, row for row. It needed the same count-stability wait as
+    the live modes to get there — read the instant the handle became readable, it
+    caught the menu mid-composition and returned 27 rows that were a *different*
+    27, with Shell's items present and Explorer's `Paste` and `New+` not yet
+    added. The same trick censuses a folder or a selection, which is the other
+    surface this shell cannot drive.
   - **A folder window could not be opened from this shell at all.** Neither the
     probe's `ShellExecuteW` nor `Start-Process explorer.exe <path>` produced a
     `CabinetWClass` window, across ten attempts; the process started and no
