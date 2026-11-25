@@ -8,6 +8,7 @@
 #include "Include/FavoritesStore.h"
 #include "Include/ProviderQuarantineStore.h"
 
+#include <atomic>
 #include <thread>
 
 // favorites.txt and quarantine.txt, and the holders that cache them.
@@ -507,6 +508,85 @@ TEST(store_file, a_failed_replace_does_not_leave_its_temporary_behind)
 	CHECK(search == INVALID_HANDLE_VALUE);
 	if(search != INVALID_HANDLE_VALUE)
 		::FindClose(search);
+}
+
+// ---- StoreFile::Lock ----------------------------------------------------
+
+TEST(store_file, a_held_lock_refuses_a_second_and_releasing_it_removes_the_file)
+{
+	auto path = temp_path(L"locked-store.txt");
+	auto lock_file = path + L".lock";
+
+	{
+		StoreFile::Lock first(path);
+		CHECK(first);
+
+		// Short timeout: the point is that it gives up rather than waits forever.
+		StoreFile::Lock second(path, 50);
+		CHECK_MSG(!second, "an exclusive file is exclusive within a process too");
+
+		// A move hands the lock over rather than releasing it.
+		StoreFile::Lock moved(std::move(first));
+		CHECK(moved);
+		StoreFile::Lock third(path, 50);
+		CHECK(!third);
+	}
+
+	// DELETE_ON_CLOSE: nothing left beside the store, and the next taker wins.
+	CHECK(::GetFileAttributesW(lock_file.c_str()) == INVALID_FILE_ATTRIBUTES);
+	StoreFile::Lock again(path);
+	CHECK(again);
+}
+
+TEST(store_file, locked_read_modify_write_from_two_threads_loses_no_update)
+{
+	/*
+		The real shape of a writer - read, change, save, all under the lock -
+		run by two threads that each add their own distinct entries. They share
+		a process, so this does not need two processes to show the lost update:
+		without the lock both read the same list and one entry is overwritten,
+		and a read landing between ReplaceFileW's two renames starts from an
+		empty list and drops everything.
+	*/
+	auto path = temp_path(L"lost-update.txt");
+	constexpr uint32_t PerThread = 100;
+	std::atomic<uint32_t> failed{ 0 };
+
+	auto worker = [&](uint32_t base)
+	{
+		for(uint32_t i = 0; i < PerThread; i++)
+		{
+			StoreFile::Lock lock(path, 5000);
+			if(!lock)
+			{
+				failed++;
+				continue;
+			}
+
+			auto loaded = Favorites::read(path);
+			if(!loaded.usable())
+			{
+				failed++;
+				continue;
+			}
+
+			auto entries = std::move(loaded.entries);
+			if(!Favorites::record_use(entries, identity_of(base + i))
+			   || !Favorites::save(path, entries))
+				failed++;
+		}
+	};
+
+	std::thread a(worker, 0xA0000000u);
+	std::thread b(worker, 0xB0000000u);
+	a.join();
+	b.join();
+
+	CHECK_EQ(failed.load(), 0u);
+
+	auto back = Favorites::read(path);
+	CHECK(back.loaded());
+	CHECK_EQ(back.entries.size(), static_cast<size_t>(2 * PerThread));
 }
 
 // ---- the file formats on top of it --------------------------------------

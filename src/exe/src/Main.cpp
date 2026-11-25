@@ -4,6 +4,7 @@
 #include <Resource.h>
 #include <dwmapi.h>
 
+#include <optional>
 #include <vector>
 #include <commctrl.h>
 #include "Control.h"
@@ -1222,6 +1223,16 @@ namespace Nilesoft
 
 					auto path = Nilesoft::Shell::Quarantine::default_path();
 
+					// Held across the read and the save: see StoreFile::Lock. Not acquired
+					// is the same answer as a save that failed.
+					Nilesoft::Shell::StoreFile::Lock store_lock(path);
+					if(!store_lock)
+					{
+						::MessageBoxW(g_ui.window, L"Could not write the quarantine list.",
+									  L"Nilesoft Shell", MB_OK | MB_ICONERROR);
+						return;
+					}
+
 					// read() rather than load(), because this modifies and writes
 					// back. load() maps every failure to an empty list, so a file
 					// that would not open became "nothing is quarantined" and the
@@ -1469,6 +1480,21 @@ static int QuarantineCommand(const string &action, const string &argument)
 		return CONFIG_CHECK_UNUSABLE;
 	}
 
+	// add and remove read, modify and write: hold the lock across all of it
+	// (StoreFile::Lock). `list` only reads, and does not wait on a writer.
+	std::optional<Nilesoft::Shell::StoreFile::Lock> store_lock;
+	if(!action.empty() && !action.equals(L"list", true))
+	{
+		store_lock.emplace(path);
+		if(!*store_lock)
+		{
+			string failed;
+			failed.append_format(L"shell.exe -quarantine: could not write %s", path.c_str());
+			write_console_line(failed.c_str());
+			return CONFIG_CHECK_UNUSABLE;
+		}
+	}
+
 	// read() rather than load(): the add/remove paths below modify this list
 	// and write it back, and load() cannot tell a file that would not open
 	// from an empty one. Refusing is the only safe answer - writing a fresh
@@ -1628,6 +1654,21 @@ static int FavoritesCommand(const string &action, const string &argument)
 	{
 		write_console_line(L"shell.exe -favorites: could not locate %LocalAppData%.");
 		return CONFIG_CHECK_UNUSABLE;
+	}
+
+	// pin, unpin and forget read, modify and write: hold the lock across all of
+	// it (StoreFile::Lock). `list` only reads, and does not wait on a writer.
+	std::optional<Nilesoft::Shell::StoreFile::Lock> store_lock;
+	if(!action.empty() && !action.equals(L"list", true))
+	{
+		store_lock.emplace(path);
+		if(!*store_lock)
+		{
+			string failed;
+			failed.append_format(L"shell.exe -favorites: could not write %s", path.c_str());
+			write_console_line(failed.c_str());
+			return CONFIG_CHECK_UNUSABLE;
+		}
 	}
 
 	auto entries = Fav::load(path);

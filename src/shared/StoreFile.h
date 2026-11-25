@@ -32,9 +32,10 @@
 
 	CREATE_ALWAYS is what opens that window: it truncates first and writes
 	after, so the file is empty on disk for as long as the write takes. Writing
-	a temporary in the same directory and swapping it in removes the window
-	entirely - there is no moment at which the destination is a half-written or
-	zero-length file. replace() below says which swap and why.
+	a temporary in the same directory and swapping it in means the destination
+	is never a half-written or zero-length file. It is not gap-free: ReplaceFileW
+	is two renames, so a pure reader can briefly see Missing, and two writers can
+	read the same state - Lock below serialises writers. replace() says which swap.
 
 	ProviderQuarantine::save carried a comment defending the non-atomic write:
 	"a torn quarantine file loses at worst one entry". That is a sound argument
@@ -295,6 +296,72 @@ namespace Nilesoft
 					::CreateDirectoryW(directory.substr(0, parent).c_str(), nullptr);
 				::CreateDirectoryW(directory.c_str(), nullptr);
 			}
+
+			/*
+				Serialises read-modify-write of one store file across processes.
+				Take it before the read and hold it until the replace returns;
+				readers that only build a menu do not need it.
+
+				An exclusive file next to the store rather than a named mutex: an
+				elevated shell.exe would create the mutex with a High label that
+				medium-integrity hosts cannot open for MUTEX_MODIFY_STATE, while
+				the file inherits the user's own folder ACL.
+
+				dwShareMode 0 "cannot be opened again until the handle ... is
+				closed", so a second holder gets ERROR_SHARING_VIOLATION.
+				FILE_FLAG_DELETE_ON_CLOSE deletes the file "after all of its
+				handles are closed" (so a crashed holder leaves nothing behind),
+				and a file in that state fails to open with ERROR_ACCESS_DENIED
+				until the delete lands - so that is retried too.
+				https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+
+				Not re-entrant: it is exclusive within a process as well, so a
+				second Lock on the same path would wait out the timeout. When it
+				is not acquired the caller must skip the write, never go ahead.
+			*/
+			class Lock
+			{
+				HANDLE _file{ INVALID_HANDLE_VALUE };
+
+			public:
+				explicit Lock(const std::wstring &path, DWORD timeout_ms = 500)
+				{
+					if(path.empty())
+						return;
+
+					ensure_directory(path);
+					auto name = path + L".lock";
+					auto start = ::GetTickCount64();
+					for(;;)
+					{
+						_file = ::CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+											  OPEN_ALWAYS,
+											  FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE,
+											  nullptr);
+						if(_file != INVALID_HANDLE_VALUE)
+							return;
+
+						auto error = ::GetLastError();
+						if((error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED)
+						   || ::GetTickCount64() - start >= timeout_ms)
+							return;
+						::Sleep(1);
+					}
+				}
+
+				Lock(Lock &&other) noexcept : _file(other._file) { other._file = INVALID_HANDLE_VALUE; }
+				Lock(const Lock &) = delete;
+				Lock &operator=(const Lock &) = delete;
+				Lock &operator=(Lock &&) = delete;
+
+				~Lock()
+				{
+					if(_file != INVALID_HANDLE_VALUE)
+						::CloseHandle(_file);
+				}
+
+				explicit operator bool() const { return _file != INVALID_HANDLE_VALUE; }
+			};
 
 			// ReplaceFileW, behind a pointer only so a test can make it fail
 			// with a chosen error: the two failure classes below cannot be

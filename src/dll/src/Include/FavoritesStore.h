@@ -124,6 +124,13 @@ namespace Nilesoft
 				*/
 				std::lock_guard<std::mutex> lock(_mutex);
 
+				// The cross-process half: without it two hosts read the same list and
+				// one write is lost, or a read lands between ReplaceFileW's two renames
+				// and starts from an empty list. Not acquired reads as a failed save.
+				StoreFile::Lock file_lock(path);
+				if(!file_lock)
+					return false;
+
 				auto loaded = Favorites::read(path);
 
 				// A read that failed is not an empty list. Incrementing from
