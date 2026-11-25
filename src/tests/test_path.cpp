@@ -389,3 +389,52 @@ TEST(path, search_finds_a_system_executable)
 	CHECK(consistent(found));
 	CHECK(found.ends_with(L"cmd.exe", true));
 }
+
+namespace
+{
+	std::wstring wide(const string &s)
+	{
+		return s.empty() ? std::wstring() : std::wstring(s.c_str(), s.length());
+	}
+}
+
+// Extension used to return a std::wstring_view of a temporary string freed at the
+// end of the return statement. The value has to stay readable after the heap has
+// been churned, so this fails under a debug heap or page heap even when the
+// freed block happens to survive a plain release run.
+TEST(path, extension_owns_what_it_returns)
+{
+	auto ext = IO::Path::Extension(L"C:\\dir\\file.name.TXT");
+
+	std::vector<std::wstring> churn;
+	for(int i = 0; i < 256; i++)
+		churn.emplace_back(48, L'x');
+
+	CHECK(wide(ext) == L".TXT");
+	CHECK(wide(IO::Path::Extension(L"C:\\a.b\\noext")).empty());
+	CHECK(wide(IO::Path::Extension(L".hidden")).empty());
+	CHECK(wide(IO::Path::Extension(L"C:\\")).empty());
+	CHECK(wide(IO::Path::Extension(L"")).empty());
+
+	CHECK(IO::Path::IsExe(L"C:\\Windows\\notepad.EXE"));
+	CHECK(!IO::Path::IsExe(L"C:\\Windows\\notepad.txt"));
+	CHECK(wide(IO::Path::RemoveExtension(L"C:\\dir\\file.txt")) == L"C:\\dir\\file");
+}
+
+// FixSeparator collapsed every run of separators, a leading pair included, so a
+// UNC path lost its first backslash and every network-share import failed.
+TEST(path, fix_separator_keeps_a_leading_pair)
+{
+	CHECK(wide(IO::Path::FixSeparator(L"\\\\nas\\cfg\\x.nss")) == L"\\\\nas\\cfg\\x.nss");
+	CHECK(wide(IO::Path::FixSeparator(L"//nas/cfg/x.nss")) == L"\\\\nas\\cfg\\x.nss");
+	CHECK(wide(IO::Path::FixSeparator(L"\\\\?\\C:\\x")) == L"\\\\?\\C:\\x");
+	CHECK(wide(IO::Path::FixSeparator(L"//nas/cfg/x.nss", L"/")) == L"//nas/cfg/x.nss");
+
+	// A third leading separator is still a run, and runs elsewhere still collapse.
+	CHECK(wide(IO::Path::FixSeparator(L"\\\\\\nas\\\\cfg")) == L"\\\\nas\\cfg");
+	CHECK(wide(IO::Path::FixSeparator(L"a\\\\\\\\b")) == L"a\\b");
+	CHECK(wide(IO::Path::FixSeparator(L"C:/a//b\\\\c")) == L"C:\\a\\b\\c");
+	CHECK(wide(IO::Path::FixSeparator(L"\\a")) == L"\\a");
+	CHECK(wide(IO::Path::FixSeparator(L"\\")) == L"\\");
+	CHECK(wide(IO::Path::FixSeparator(L"")).empty());
+}

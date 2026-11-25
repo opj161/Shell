@@ -40,6 +40,24 @@ namespace Nilesoft
 					return path;
 				return string(resolver.resolve(std::wstring_view(path.c_str(), path.length())));
 			}
+
+			// The Shlwapi in-place path functions can lengthen the string and document the buffer as
+			// MAX_PATH, e.g. PathAddExtensionW: "You must set the size of this buffer to MAX_PATH"
+			// https://learn.microsoft.com/en-us/windows/win32/api/shlwapi/nf-shlwapi-pathaddextensionw
+			// A string's own allocation is not that, so run them on a MAX_PATH buffer. A path that
+			// already fills it, or would once `grow` characters are added, is returned unchanged:
+			// the function would fail on it anyway.
+			template<typename F>
+			string in_max_path(const string &path, size_t grow, F &&fn)
+			{
+				if(path.length() + grow >= MAX_PATH)
+					return path;
+				wchar_t buf[MAX_PATH]{};
+				if(!path.empty())
+					wmemcpy(buf, path.c_str(), path.length());
+				fn(buf);
+				return string(buf);
+			}
 		}
 
 		template<typename T>
@@ -576,12 +594,12 @@ namespace Nilesoft
 							if(argc > 1)
 							{
 								Diagnostics::ShellExec::Run(arg0, eval_arg(1),
-															cwd, L"runas", eval_arg(2, SW_NORMAL));
+															cwd, L"runas", false, eval_arg(2, SW_NORMAL));
 							}
 							else
 							{
 								Diagnostics::ShellExec::Run(arg0, nullptr,
-															cwd, L"open", SW_NORMAL);
+															cwd, L"open", false, SW_NORMAL);
 							}
 						}
 						//else if(Id[0] == IDENT_CMD && argc == 0)
@@ -595,7 +613,7 @@ namespace Nilesoft
 					{
 						auto cwd = context->Selections ? context->Selections->Directory.c_str() : nullptr;
 						_result = Diagnostics::ShellExec::Run(eval_arg(0), eval_arg(1), cwd,
-															  eval_arg(2), eval_arg(3, SW_NORMAL));
+															  eval_arg(2), false, eval_arg(3, SW_NORMAL));
 					}
 					break;
 				}
@@ -2728,22 +2746,24 @@ namespace Nilesoft
 						//unsigned char utf8[3] = { 0xEF, 0xBB, 0xBF };
 						//::WriteFile(hTempFile, utf8, 3, &dwBytesWritten, nullptr);
 
-						size_t len = 0;
-						char *lputf8 = nullptr;
+						// FromUnicode allocates only when it has something to convert and leaves
+						// the out pointer alone otherwise, so each conversion starts from its own
+						// null: a pointer left over from the previous item was already freed by
+						// that item's autostr, and an empty path would hand it to a second owner.
+						auto write_utf8 = [&](const string &text)
+						{
+							char *utf8 = nullptr;
+							size_t len = UTF8::FromUnicode(text, text.length(), &utf8);
+							autostr<char> s(utf8, len);
+							if(len > 0)
+								::WriteFile(hTempFile, s, (DWORD)s.len, &dwBytesWritten, nullptr);
+						};
 
 						for(size_t i = 0; i < sel->Items.size(); i++)
 						{
-							auto const &p = sel->Path(i, quote);
-							len = UTF8::FromUnicode(p, p.length(), &lputf8);
-							autostr<char> s(lputf8, len);
-							::WriteFile(hTempFile, s, (DWORD)s.len, &dwBytesWritten, nullptr);
+							write_utf8(sel->Path(i, quote));
 							if(sep.length() > 0 && i < sel->Items.size() - 1)
-							{
-								lputf8 = nullptr;
-								len = UTF8::FromUnicode(sep, sep.length(), &lputf8);
-								autostr<char> sep_(lputf8, len);
-								::WriteFile(hTempFile, sep_,(DWORD)sep_.len, &dwBytesWritten, nullptr);
-							}
+								write_utf8(sep);
 						}
 						_result = path.move();
 					}
@@ -3535,32 +3555,33 @@ namespace Nilesoft
 				case IDENT_COMPACT:
 				{
 					uint32_t dx = argc > 1 ? eval_arg(1).to_number() : 50;
-					::PathCompactPathW(nullptr, arg0.data(), dx);
-					_result = arg0.release().move();
+					// "..." can make a short path longer than it was
+					_result = in_max_path(arg0, 3, [&](wchar_t *p) { ::PathCompactPathW(nullptr, p, dx); }).move();
 					break;
 				}
 				case IDENT_QUOTE_SPACES:
 				{
-					::PathQuoteSpacesW(arg0.data());
-					_result = arg0.release().move();
+					_result = in_max_path(arg0, 2, [](wchar_t *p) { ::PathQuoteSpacesW(p); }).move();
 					break;
 				}
 				case IDENT_REMOVE_EXTENSION:
 				{
-					::PathRemoveExtensionW(arg0.data());
+					// data() is null for an empty string, which the API is not given.
+					if(!arg0.empty())
+						::PathRemoveExtensionW(arg0.data());
 					_result = arg0.release().move();
 					break;
 				}
 				case IDENT_RENAME_EXTENSION:
 				{
-					::PathRenameExtensionW(arg0.data(), eval_arg(1).to_string());
-					_result = arg0.release().move();
+					string ext = eval_arg(1).to_string().move();
+					_result = in_max_path(arg0, ext.length(), [&](wchar_t *p) { ::PathRenameExtensionW(p, ext); }).move();
 					break;
 				}
 				case IDENT_ADD_EXTENSION:
 				{
-					::PathAddExtensionW(arg0.data(), eval_arg(1).to_string());
-					_result = arg0.release().move();
+					string ext = eval_arg(1).to_string().move();
+					_result = in_max_path(arg0, ext.length(), [&](wchar_t *p) { ::PathAddExtensionW(p, ext); }).move();
 					break;
 				}
 				case IDENT_REFRESH:
@@ -3821,12 +3842,23 @@ namespace Nilesoft
 										return;
 									}
 
+									// The content is evaluated before the file is opened: CREATE_ALWAYS
+									// truncates an existing file at once, so a content argument that turns
+									// out to be unset must not get that far.
+									// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+									Object content = eval_arg(1).move();
+									if(argc > 1 && content.is_null())
+									{
+										_result = 0;
+										return;
+									}
+
 									auto_handle hFile = ::CreateFileW(arg0, GENERIC_WRITE,
 																	  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, Id.back() == IDENT_APPEND ? OPEN_ALWAYS : CREATE_ALWAYS,
 																	  FILE_ATTRIBUTE_NORMAL, nullptr);
 									if(hFile)
 									{
-										string arg1 = eval_arg(1).to_string().move();
+										string arg1 = content.to_string().move();
 										if(arg1.empty())
 											_result = 0;
 										else
@@ -5367,7 +5399,12 @@ namespace Nilesoft
 
 					if(argc == 1)
 					{
-						_result = Registry::SetKeyValue(root_key, nullptr, nullptr, REG_NONE, nullptr, 0);
+						// Create the key and write no value; RegCreateKeyEx opens it if it exists
+						// and "creates all missing keys in the specified path".
+						// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regcreatekeyexw
+						auto keybase = RegistryKey::OpenBaseKey(root_key, true, 0);
+						auto key = keybase.CreateSubKey(sub_key, true);
+						_result = static_cast<bool>(key);
 						return;
 					}
 

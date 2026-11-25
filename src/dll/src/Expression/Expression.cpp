@@ -121,12 +121,34 @@ namespace Nilesoft
 			return _result.move();
 		}
 
+		namespace
+		{
+			// Variables are stored unevaluated, so `$a = $a + 1` or `$a = $b; $b = $a` makes a
+			// definition that evaluates itself. Nothing makes a stack overflow recoverable inside
+			// the host (SEH unwinding skips C++ destructors under /EHsc and would leave locks held),
+			// so a definition already being evaluated on this thread yields null instead.
+			thread_local std::vector<Expression *> evaluating;
+
+			struct EvalGuard
+			{
+				explicit EvalGuard(Expression *e) { evaluating.push_back(e); }
+				~EvalGuard() { evaluating.pop_back(); }
+				static bool active(Expression *e)
+				{
+					return std::find(evaluating.begin(), evaluating.end(), e) != evaluating.end();
+				}
+			};
+		}
+
 		Object VariableExpression::Eval(Context *context)
 		{
 			if(context && context->variables.global)
 			{
 				if(auto variable = context->get_variable(Id, this); variable)
 				{
+					if(EvalGuard::active(variable))
+						return nullptr;
+					EvalGuard guard(variable);
 					Object obj = context->Eval(variable).move();
 					return context->eval_object(Array, obj).move();
 				}
