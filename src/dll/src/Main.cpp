@@ -728,8 +728,8 @@ inline Nilesoft::Shell::TakeoverBreaker &takeover_breaker()
 */
 void log_breaker_opened() noexcept
 {
-	_log.write(L"takeover failed %u times in a row; this process will use the host's own menus from now on\n",
-			   Nilesoft::Shell::TakeoverBreaker::THRESHOLD);
+	_log.warning(L"takeover failed %u times in a row; this process will use the host's own menus from now on",
+				 Nilesoft::Shell::TakeoverBreaker::THRESHOLD);
 }
 
 /*
@@ -743,8 +743,8 @@ std::atomic<bool> g_host_paints_menus{ false };
 // Its own function for the same C2712 reason as log_breaker_opened().
 void log_host_paints_menus() noexcept
 {
-	_log.write(L"this host paints its own menu windows (Delphi VCL Styles does); "
-			   L"it gets its own menus from now on\n");
+	_log.warning(L"this host paints its own menu windows (Delphi VCL Styles does); "
+				 L"it gets its own menus from now on");
 }
 
 LRESULT __stdcall TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
