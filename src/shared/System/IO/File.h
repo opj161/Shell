@@ -418,7 +418,9 @@ namespace Nilesoft
 										swab(buffer2, sz);
 									}
 
-									const size_t length = (sz / sizeof(wchar_t)) - 1;
+									// Every character, not all but the last; a BOM-only file
+									// is zero characters and yields an empty string.
+									const size_t length = sz / sizeof(wchar_t);
 
 									std::unique_ptr<wchar_t[]> buffer(new wchar_t[length + 4]{ 0 });
 									return (wchar_t*)::memcpy(&buffer[0], buffer2, sz);

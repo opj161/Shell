@@ -21,12 +21,33 @@
 	did, with no redirection table and no parser changes beyond knowing which
 	files it read.
 
+	Two properties matter more than the layout, because up to ~two dozen hosts
+	reload and save at once after every edit:
+
+	Only what was parsed is saved. The parser stamps each file before reading
+	it (ConfigStamp.h) and save() takes those stamps. A file whose stamp has
+	moved on by the time save() hashes it, or again after it has been copied,
+	is not what was parsed - a newer, possibly half-typed save landed - and
+	the previous shadow is kept rather than replaced by something that was
+	never known to be good.
+
+	Generations are immutable. Files live under <directory>\<generation>\...,
+	where the generation is a digest of the file set, so processes that parsed
+	the same configuration agree on the name and a generation is never
+	modified after a manifest names it. A set is copied into a private staging
+	directory, verified, and renamed into place; the manifest is then the only
+	mutable pointer and is swapped atomically. A copy that dies part-way, or
+	two hosts saving at once, can therefore not leave a manifest naming
+	changed bytes. Superseded generations are deleted later, once old enough
+	that no concurrent saver can still be about to name them (prune()).
+
 	Integrity, not authenticity. Every file is checksummed on the way in and
-	checked on the way out, and the manifest that names them is written last
-	and swapped atomically, so a torn write is invisible rather than dangerous
-	- a half-written shadow has no manifest naming it. A shadow that does not
-	verify is refused outright and the process falls back to the ordinary
-	"never loaded" refusal.
+	checked on the way out. A shadow that does not verify is refused outright
+	and the process falls back to the ordinary "never loaded" refusal.
+
+	Manifest v1 kept the files directly under <directory> and rewrote them in
+	place. resolve() still accepts it, so an upgraded machine keeps its
+	fallback until the first v2 save, which then deletes the v1 files.
 
 	The checksum is FNV-1a and deliberately not a cryptographic hash. Against
 	tampering it would buy nothing: the manifest sits in the same directory as
@@ -52,10 +73,12 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "ConfigStamp.h"
 #include "LegacyConfigTransfer.h"
 
 namespace Nilesoft
@@ -71,7 +94,13 @@ namespace Nilesoft
 		inline constexpr wchar_t Separator = 0x5C;			// backslash
 		inline constexpr wchar_t Field = L'\t';				// illegal in a Windows filename
 		inline constexpr const wchar_t *ManifestName = L"manifest.lkg";
-		inline constexpr const wchar_t *ManifestHeader = L"nilesoft-shell-lkg\t1";
+		inline constexpr const wchar_t *ManifestHeader = L"nilesoft-shell-lkg\t2";
+		inline constexpr const wchar_t *LegacyManifestHeader = L"nilesoft-shell-lkg\t1";
+
+		// How old a superseded generation or a leftover staging entry must be
+		// before prune() may delete it: long enough for a concurrent saver to
+		// have named it, or finished with it. 100 ns units.
+		inline constexpr unsigned long long PruneAge = 10ULL * 60ULL * 10000000ULL;
 
 		// A file that was loaded during the parse and lives under the
 		// configuration's own directory, so it can be mirrored.
@@ -86,6 +115,10 @@ namespace Nilesoft
 		{
 			std::wstring root;			// relative path of the root file, e.g. "shell.nss"
 			std::vector<Entry> files;
+
+			// Subdirectory of the store holding the files; empty for a v1
+			// manifest, whose files sit directly in the store.
+			std::wstring generation;
 
 			// At least one loaded file lived outside the configuration directory
 			// and could not be mirrored. The shadow is still worth keeping - an
@@ -302,13 +335,13 @@ namespace Nilesoft
 
 		// ---- manifest ------------------------------------------------------
 
-		inline std::wstring render(const Manifest &manifest)
+		// The lines that identify a file set: root and files, not the header
+		// or the partial flag. The generation name is a digest of exactly
+		// these, so every process that parsed the same configuration derives
+		// the same name.
+		inline std::wstring render_body(const Manifest &manifest)
 		{
-			std::wstring out = ManifestHeader;
-			out += L'\n';
-			if(manifest.partial)
-				out += L"partial\n";
-			out += L"root";
+			std::wstring out = L"root";
 			out += Field;
 			out += manifest.root;
 			out += L'\n';
@@ -323,6 +356,33 @@ namespace Nilesoft
 				out += to_hex(e.digest);
 				out += L'\n';
 			}
+			return out;
+		}
+
+		inline Digest fnv_text(const std::wstring &text)
+		{
+			Digest value = FnvOffsetBasis;
+			for(auto c : text)
+			{
+				value ^= static_cast<Digest>(c & 0xFF);
+				value *= FnvPrime;
+				value ^= static_cast<Digest>((c >> 8) & 0xFF);
+				value *= FnvPrime;
+			}
+			return value;
+		}
+
+		inline std::wstring render(const Manifest &manifest)
+		{
+			std::wstring out = ManifestHeader;
+			out += L'\n';
+			out += L"generation";
+			out += Field;
+			out += manifest.generation;
+			out += L'\n';
+			if(manifest.partial)
+				out += L"partial\n";
+			out += render_body(manifest);
 			return out;
 		}
 
@@ -343,7 +403,15 @@ namespace Nilesoft
 
 		inline bool read_all(const std::wstring &path, std::wstring &text)
 		{
-			auto file = open_for_read(path);
+			// FILE_SHARE_DELETE as well, because this reads the manifest and a
+			// saver replaces it by rename: MoveFileEx with REPLACE_EXISTING
+			// needs delete access to the target, which an open handle without
+			// FILE_SHARE_DELETE denies, so a reader mid-read would fail
+			// somebody's commit.
+			// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+			auto file = ::CreateFileW(path.c_str(), GENERIC_READ,
+									  FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+									  FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 			if(file == INVALID_HANDLE_VALUE)
 				return false;
 
@@ -383,11 +451,37 @@ namespace Nilesoft
 			}
 		}
 
+		// A manifest names files by path relative to a directory this code
+		// then reads - and, for v1 cleanup, deletes - so it must not be able to
+		// name anything outside it: no drive, no rooted path, no "." or ".."
+		// segment, no empty one.
+		inline bool safe_relative(const std::wstring &relative)
+		{
+			if(relative.empty() || relative.find(L':') != std::wstring::npos)
+				return false;
+
+			size_t start = 0;
+			for(;;)
+			{
+				auto cut = relative.find_first_of(L"\\/", start);
+				auto part = relative.substr(start, cut == std::wstring::npos ? cut : cut - start);
+				if(part.empty() || part == L"." || part == L"..")
+					return false;
+				if(cut == std::wstring::npos)
+					return true;
+				start = cut + 1;
+			}
+		}
+
 		inline bool parse_manifest(const std::wstring &text, Manifest &out)
 		{
 			out = {};
 			auto lines = split(text, L'\n');
-			if(lines.empty() || lines.front() != ManifestHeader)
+			if(lines.empty())
+				return false;
+
+			bool v2 = lines.front() == ManifestHeader;
+			if(!v2 && lines.front() != LegacyManifestHeader)
 				return false;
 
 			for(size_t i = 1; i < lines.size(); i++)
@@ -403,8 +497,18 @@ namespace Nilesoft
 				}
 
 				auto parts = split(line, Field);
+				if(v2 && parts[0] == L"generation" && parts.size() == 2)
+				{
+					Digest ignored{};
+					if(!from_hex(parts[1], ignored))
+						return false;
+					out.generation = parts[1];
+					continue;
+				}
 				if(parts[0] == L"root" && parts.size() == 2)
 				{
+					if(!safe_relative(parts[1]))
+						return false;
 					out.root = parts[1];
 					continue;
 				}
@@ -412,6 +516,8 @@ namespace Nilesoft
 				{
 					Entry e;
 					e.relative = parts[1];
+					if(!safe_relative(e.relative))
+						return false;
 					try
 					{
 						e.size = std::stoull(parts[2]);
@@ -431,35 +537,258 @@ namespace Nilesoft
 				return false;
 			}
 
+			if(v2 && out.generation.empty())
+				return false;
+
 			return !out.root.empty() && !out.files.empty();
+		}
+
+		// Every file the manifest names, under `base`, has its recorded size
+		// and digest, and the root is among them.
+		inline bool verify(const std::wstring &base, const Manifest &manifest)
+		{
+			bool root_present = false;
+			for(const auto &e : manifest.files)
+			{
+				auto file = open_for_read(join(base, e.relative));
+				if(file == INVALID_HANDLE_VALUE)
+					return false;
+
+				Digest digest{};
+				unsigned long long size = 0;
+				auto ok = digest_of(file, digest, size)
+					   && size == e.size
+					   && digest == e.digest;
+				::CloseHandle(file);
+				if(!ok)
+					return false;
+
+				root_present = root_present || equal_ignoring_case(e.relative, manifest.root);
+			}
+
+			return root_present;
+		}
+
+		// ---- deleting ------------------------------------------------------
+
+		inline unsigned long long file_time_value(const FILETIME &t)
+		{
+			return (static_cast<unsigned long long>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+		}
+
+		// A link is removed as the entry it is and never entered:
+		// RemoveDirectory "can be used to remove a directory junction ... will
+		// remove the specified link regardless of whether the target directory
+		// is empty or not", and the target is not affected.
+		// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-removedirectorya
+		// FindFirstFile reports a link's own attributes, so `attributes` here
+		// is never about a target.
+		inline void remove_entry(const std::wstring &path, DWORD attributes)
+		{
+			if(!(attributes & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				::DeleteFileW(path.c_str());
+				return;
+			}
+
+			if(!(attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+			{
+				WIN32_FIND_DATAW find{};
+				auto handle = ::FindFirstFileW(join(path, L"*").c_str(), &find);
+				if(handle != INVALID_HANDLE_VALUE)
+				{
+					do
+					{
+						std::wstring name = find.cFileName;
+						if(name != L"." && name != L"..")
+							remove_entry(join(path, name), find.dwFileAttributes);
+					}
+					while(::FindNextFileW(handle, &find));
+					::FindClose(handle);
+				}
+			}
+
+			::RemoveDirectoryW(path.c_str());
+		}
+
+		// Removes `path` if it exists, whatever it is. GetFileAttributes
+		// "returns attributes for the symbolic link" when given one.
+		// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileattributesexw
+		inline void remove_tree(const std::wstring &path)
+		{
+			auto attributes = ::GetFileAttributesW(path.c_str());
+			if(attributes != INVALID_FILE_ATTRIBUTES)
+				remove_entry(path, attributes);
+		}
+
+		inline bool is_generation_name(const std::wstring &name)
+		{
+			Digest ignored{};
+			return from_hex(name, ignored);
+		}
+
+		inline bool ends_with(const std::wstring &text, const wchar_t *suffix)
+		{
+			std::wstring tail = suffix;
+			return text.size() >= tail.size()
+				&& text.compare(text.size() - tail.size(), tail.size(), tail) == 0;
+		}
+
+		// A name no other process can have picked: process id plus tick.
+		inline std::wstring unique_suffix()
+		{
+			return std::to_wstring(::GetCurrentProcessId()) + L"-" + std::to_wstring(::GetTickCount64());
+		}
+
+		/*
+			Best-effort cleanup of what a committed save leaves behind:
+			generations nothing names any more, and staging entries whose owner
+			died. Never fails and never throws; whatever it cannot delete the
+			next save tries again.
+
+			Only direct children of `directory`, and only names this code
+			creates, so a user's file that happens to live there is never
+			touched. `keep` is the generation the caller just committed. The
+			generation the manifest names *now* is also kept, because another
+			process may have committed a newer one in between.
+
+			`min_age` guards the race this cannot see: a process that has
+			chosen an existing generation but not yet named it in the manifest.
+			Nothing younger than that is deleted, and save() refreshes a reused
+			generation's time for the same reason.
+		*/
+		inline void prune(const std::wstring &directory, const std::wstring &keep,
+						  unsigned long long min_age = PruneAge)
+		{
+			// Without a readable manifest we do not know what is named, and
+			// the only safe answer is to delete nothing.
+			std::wstring text;
+			Manifest named;
+			if(!read_all(join(directory, ManifestName), text) || !parse_manifest(text, named))
+				return;
+
+			FILETIME now{};
+			::GetSystemTimeAsFileTime(&now);
+			auto now_value = file_time_value(now);
+
+			WIN32_FIND_DATAW find{};
+			auto handle = ::FindFirstFileW(join(directory, L"*").c_str(), &find);
+			if(handle == INVALID_HANDLE_VALUE)
+				return;
+
+			do
+			{
+				std::wstring name = find.cFileName;
+				auto written = file_time_value(find.ftLastWriteTime);
+				if((now_value > written ? now_value - written : 0) < min_age)
+					continue;
+
+				bool is_directory = (find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+				bool superseded = is_directory && is_generation_name(name)
+							   && name != keep && name != named.generation;
+				bool stale_staging_directory = is_directory && name.size() > 17
+							   && is_generation_name(name.substr(0, 16)) && name[16] == L'.'
+							   && ends_with(name, L".tmp");
+				bool stale_staging_manifest = !is_directory && name.compare(0, 9, L"manifest.") == 0
+							   && ends_with(name, L".staging");
+
+				if(superseded || stale_staging_directory || stale_staging_manifest)
+					remove_entry(join(directory, name), find.dwFileAttributes);
+			}
+			while(::FindNextFileW(handle, &find));
+			::FindClose(handle);
+		}
+
+		// v1 kept its files directly under `directory`; once a v2 manifest has
+		// replaced the v1 one nothing names them. Only the files that manifest
+		// listed are deleted, then the directories that emptied, never above
+		// `directory` and never through a link.
+		inline void remove_legacy(const std::wstring &directory, const Manifest &legacy)
+		{
+			for(const auto &e : legacy.files)
+			{
+				auto path = join(directory, e.relative);
+
+				bool linked = false;
+				auto walk = directory;
+				size_t start = 0;
+				for(;;)
+				{
+					auto cut = e.relative.find_first_of(L"\\/", start);
+					walk = join(walk, e.relative.substr(start, cut == std::wstring::npos ? cut : cut - start));
+					auto attributes = ::GetFileAttributesW(walk.c_str());
+					linked = linked || (attributes != INVALID_FILE_ATTRIBUTES
+										&& (attributes & FILE_ATTRIBUTE_REPARSE_POINT));
+					if(cut == std::wstring::npos)
+						break;
+					start = cut + 1;
+				}
+				if(linked)
+					continue;
+
+				::DeleteFileW(path.c_str());
+				for(auto parent = path.substr(0, path.find_last_of(L"\\/"));
+					!relative_to(directory, parent).empty();
+					parent = parent.substr(0, parent.find_last_of(L"\\/")))
+				{
+					if(!::RemoveDirectoryW(parent.c_str()))
+						break;
+				}
+			}
 		}
 
 		// ---- save ----------------------------------------------------------
 
-		// Defined below; save() consults it before deciding an existing shadow
-		// is still worth keeping.
-		inline std::wstring resolve(const std::wstring &directory);
+		// Sets a directory's last-write time to now, so a generation that was
+		// just chosen for reuse is not "old" to a concurrent prune().
+		// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfiletime
+		inline void touch_directory(const std::wstring &path)
+		{
+			auto handle = ::CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES,
+										FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+										nullptr, OPEN_EXISTING,
+										FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+			if(handle == INVALID_HANDLE_VALUE)
+				return;
+
+			FILETIME now{};
+			::GetSystemTimeAsFileTime(&now);
+			::SetFileTime(handle, nullptr, nullptr, &now);
+			::CloseHandle(handle);
+		}
 
 		/*
 			Mirrors the files a successful parse read into `directory`.
 
 			`root` is the configuration's own path and `loaded` is every file
-			the parse opened, root included. Files outside the root's directory
-			are recorded as making the shadow partial but are not copied -
-			mirroring them would need a second root, and an absolute import
-			usually resolves the same way wherever it is read from.
+			the parse opened, root included. `stamps[i]` is
+			Shell::config_file_stamp(loaded[i]) taken by the parser *before* it
+			read that file. Files outside the root's directory are recorded as
+			making the shadow partial but are not copied - mirroring them would
+			need a second root, and an absolute import usually resolves the same
+			way wherever it is read from.
 
-			Returns false and leaves any previous shadow in place on failure:
-			the manifest is written last, so nothing points at a half-copied
-			set. Returns true without writing anything when the manifest would
-			be byte-identical to the one already there, which is what stops
-			every process on the machine rewriting the same files.
+			Returns false and leaves the previous shadow serving when the
+			stamps and `loaded` disagree in size, when any file no longer has
+			the stamp it was parsed with (before it is hashed, or after it has
+			been copied: a write landed, so what is on disk is not what was
+			parsed), or on any I/O failure. Returns true without writing when
+			the identical set is already the shadow and still verifies, which is
+			what stops every process on the machine rewriting the same files.
+
+			MoveFileEx moves a directory "including its children", and "when
+			moving a directory, the destination must be on the same drive" -
+			the staging directory is a sibling of the generation, so it is.
+			Without MOVEFILE_REPLACE_EXISTING it does not replace an existing
+			destination, which is what makes the first committer win.
+			https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw
 		*/
 		inline bool save(const std::wstring &directory,
 						 const std::wstring &root,
-						 const std::vector<std::wstring> &loaded)
+						 const std::vector<std::wstring> &loaded,
+						 const std::vector<uint64_t> &stamps)
 		{
-			if(directory.empty() || root.empty() || loaded.empty())
+			if(directory.empty() || root.empty() || loaded.empty() || loaded.size() != stamps.size())
 				return false;
 
 			// One spelling for everything that is about to be compared against
@@ -476,11 +805,13 @@ namespace Nilesoft
 			Manifest manifest;
 			manifest.root = normalized_root.substr(cut + 1);
 
-			struct Pending { std::wstring source, relative; };
+			struct Pending { std::wstring source, relative; uint64_t stamp; };
 			std::vector<Pending> pending;
 
-			for(const auto &full : loaded)
+			for(size_t i = 0; i < loaded.size(); i++)
 			{
+				const auto &full = loaded[i];
+
 				// `source` stays as the caller gave it - both spellings open
 				// the same file - while the comparison and the shadow's own
 				// layout use the long one.
@@ -493,18 +824,35 @@ namespace Nilesoft
 
 				bool seen = false;
 				for(const auto &p : pending)
-					seen = seen || equal_ignoring_case(p.relative, relative);
+				{
+					if(!equal_ignoring_case(p.relative, relative))
+						continue;
+					// The same file read twice under two stamps changed in
+					// between; neither read is the file as it is now.
+					if(p.stamp != stamps[i])
+						return false;
+					seen = true;
+				}
 				if(!seen)
-					pending.push_back({ full, relative });
+					pending.push_back({ full, relative, stamps[i] });
 			}
 
 			if(pending.empty())
 				return false;
 
-			// Hash everything first. Nothing is written into the shadow until
-			// the whole set has been read successfully.
-			std::vector<std::pair<Pending, Digest>> hashed;
-			hashed.reserve(pending.size());
+			auto unchanged = [&pending]()
+			{
+				for(const auto &p : pending)
+					if(Nilesoft::Shell::config_file_stamp(p.source) != p.stamp)
+						return false;
+				return true;
+			};
+
+			if(!unchanged())
+				return false;
+
+			// Hash everything first. Nothing is written until the whole set
+			// has been read successfully.
 			for(const auto &p : pending)
 			{
 				auto file = open_for_read(p.source);
@@ -523,8 +871,10 @@ namespace Nilesoft
 				e.size = size;
 				e.digest = digest;
 				manifest.files.push_back(std::move(e));
-				hashed.push_back({ p, digest });
 			}
+
+			manifest.generation = to_hex(fnv_text(render_body(manifest)));
+			auto generation_path = join(directory, manifest.generation);
 
 			// Unchanged since last time: every process that parses the same
 			// configuration would otherwise rewrite the same bytes.
@@ -534,47 +884,93 @@ namespace Nilesoft
 			// a store whose copies were deleted or damaged would be skipped
 			// over for as long as the user left their configuration alone,
 			// which is exactly as long as there would be nothing to recover
-			// from. resolve() re-reads the copies, so the skip is only taken
-			// when there is something worth keeping.
+			// from. So the generation is re-read as well.
 			auto rendered = render(manifest);
+			auto manifest_path = join(directory, ManifestName);
 			std::wstring existing;
-			if(read_all(join(directory, ManifestName), existing)
-			   && existing == rendered
-			   && !resolve(directory).empty())
+			read_all(manifest_path, existing);
+			if(existing == rendered && verify(generation_path, manifest))
 				return true;
 
 			if(!ensure_directory(directory))
 				return false;
 
-			for(const auto &[p, digest] : hashed)
+			// The generation does not exist, or does not verify. Build it
+			// privately and rename it into place, so no other process ever
+			// sees a half-copied one under its final name.
+			if(!verify(generation_path, manifest))
 			{
-				auto target = join(directory, p.relative);
-				auto target_cut = target.find_last_of(L"\\/");
-				if(target_cut != std::wstring::npos && !ensure_directory(target.substr(0, target_cut)))
-					return false;
+				auto staging = join(directory, manifest.generation + L"." + unique_suffix() + L".tmp");
 
-				// CopyFileW rather than a hand-rolled loop: the bytes were
-				// already hashed above, and the copy is verified on load.
-				if(!::CopyFileW(p.source.c_str(), target.c_str(), FALSE))
+				bool ok = ensure_directory(staging);
+				for(size_t i = 0; ok && i < pending.size(); i++)
+				{
+					auto target = join(staging, pending[i].relative);
+					ok = ensure_directory(target.substr(0, target.find_last_of(L"\\/")))
+					  && ::CopyFileW(pending[i].source.c_str(), target.c_str(), FALSE);
+				}
+
+				// The copy is what gets named, so it is the copy that is
+				// checked against what was hashed: a write between the hash
+				// and the copy shows up here.
+				ok = ok && verify(staging, manifest);
+
+				if(ok && !::MoveFileExW(staging.c_str(), generation_path.c_str(), 0))
+				{
+					// Someone else committed this generation first - fine if
+					// theirs is intact. If it is damaged, replace it, but only
+					// when it is a real directory: whatever else sits at that
+					// name is not ours to delete.
+					auto attributes = ::GetFileAttributesW(generation_path.c_str());
+					if(verify(generation_path, manifest))
+						ok = true;
+					else if(attributes != INVALID_FILE_ATTRIBUTES
+							&& (attributes & FILE_ATTRIBUTE_DIRECTORY)
+							&& !(attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+					{
+						remove_entry(generation_path, attributes);
+						ok = ::MoveFileExW(staging.c_str(), generation_path.c_str(), 0) != 0;
+					}
+					else
+						ok = false;
+				}
+
+				remove_tree(staging);		// nothing left to remove after a successful move
+				if(!ok)
 					return false;
 			}
 
-			// The manifest is the commit point, and the only thing that has to
-			// land atomically: until it names them, the copies above are
-			// unreferenced. MOVEFILE_REPLACE_EXISTING "replaces its contents
-			// with the contents of the lpExistingFileName file".
-			// https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw
-			auto staged = join(directory, L"manifest.staging");
-			if(!write_all(staged, rendered))
+			touch_directory(generation_path);
+
+			// A write landed while we were saving: what is on disk is not what
+			// was parsed. The generation just built is valid for the bytes it
+			// holds and prune() will collect it; it is simply not named.
+			if(!unchanged())
 				return false;
 
-			if(!::MoveFileExW(staged.c_str(), join(directory, ManifestName).c_str(),
+			// The manifest is the commit point, and the only thing that has to
+			// land atomically. MOVEFILE_REPLACE_EXISTING "replaces its contents
+			// with the contents of the lpExistingFileName file". The staging
+			// name is per process so two savers never write the same file.
+			auto staged = join(directory, L"manifest." + unique_suffix() + L".staging");
+			if(!write_all(staged, rendered))
+			{
+				::DeleteFileW(staged.c_str());
+				return false;
+			}
+
+			if(!::MoveFileExW(staged.c_str(), manifest_path.c_str(),
 							  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 			{
 				::DeleteFileW(staged.c_str());
 				return false;
 			}
 
+			Manifest previous;
+			if(parse_manifest(existing, previous) && previous.generation.empty())
+				remove_legacy(directory, previous);
+
+			prune(directory, manifest.generation);
 			return true;
 		}
 
@@ -599,30 +995,11 @@ namespace Nilesoft
 			if(!parse_manifest(text, manifest))
 				return {};
 
-			bool root_present = false;
-			for(const auto &e : manifest.files)
-			{
-				auto path = join(directory, e.relative);
-				auto file = open_for_read(path);
-				if(file == INVALID_HANDLE_VALUE)
-					return {};
-
-				Digest digest{};
-				unsigned long long size = 0;
-				auto ok = digest_of(file, digest, size)
-					   && size == e.size
-					   && digest == e.digest;
-				::CloseHandle(file);
-				if(!ok)
-					return {};
-
-				root_present = root_present || equal_ignoring_case(e.relative, manifest.root);
-			}
-
-			if(!root_present)
+			auto base = manifest.generation.empty() ? directory : join(directory, manifest.generation);
+			if(!verify(base, manifest))
 				return {};
 
-			return join(directory, manifest.root);
+			return join(base, manifest.root);
 		}
 
 		// %LocalAppData%\Nilesoft\Shell\lkg

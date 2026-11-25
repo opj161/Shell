@@ -26,6 +26,7 @@
 #include <pch.h>
 
 #include "..\shared\ConfigShadow.h"
+#include "..\shared\ConfigStamp.h"
 
 #include <string>
 #include <vector>
@@ -78,13 +79,18 @@ namespace
 
 		std::wstring write(const wchar_t *name, const char *utf8)
 		{
+			return write_bytes(name, utf8, ::strlen(utf8));
+		}
+
+		std::wstring write_bytes(const wchar_t *name, const void *bytes, size_t size)
+		{
 			auto full = dir + name;
 			HANDLE h = ::CreateFileW(full.c_str(), GENERIC_WRITE, 0, nullptr,
 									 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 			if(h != INVALID_HANDLE_VALUE)
 			{
 				DWORD wrote = 0;
-				::WriteFile(h, utf8, (DWORD)::strlen(utf8), &wrote, nullptr);
+				::WriteFile(h, bytes, (DWORD)size, &wrote, nullptr);
 				::CloseHandle(h);
 			}
 			written.push_back(name);
@@ -118,6 +124,10 @@ namespace
 		// Every file the parse opened, root first. The last-known-good shadow
 		// is built from this.
 		std::vector<std::wstring> loaded;
+		// ConfigStamp.h stamps of those files, taken before they were read.
+		std::vector<uint64_t> stamps;
+		std::wstring root_path;
+		bool root_unavailable{};
 
 		explicit Parsed(const std::wstring &path)
 		{
@@ -130,6 +140,9 @@ namespace
 			error_code = (int)parser.Error();
 			root_items = cache.dynamic.items.size();
 			loaded = parser.LoadedFiles();
+			stamps = parser.LoadedStamps();
+			root_path = parser.RootPath().c_str();
+			root_unavailable = parser.RootUnavailable();
 		}
 	};
 }
@@ -276,7 +289,7 @@ TEST(parser_imports, a_broken_configuration_still_parses_from_its_shadow)
 	Parsed good(root);
 	CHECK_MSG(good.ok, "the configuration must parse before it can be shadowed");
 	CHECK_EQ(good.root_items, (size_t)2);
-	CHECK(shadow::save(store, root, good.loaded));
+	CHECK(shadow::save(store, root, good.loaded, good.stamps));
 
 	// The user saves a typo. This is what every process that starts from now
 	// on will read.
@@ -303,18 +316,15 @@ TEST(parser_imports, a_broken_configuration_still_parses_from_its_shadow)
 	Parsed fixed(root);
 	CHECK(fixed.ok);
 	CHECK_EQ(fixed.root_items, (size_t)3);
-	CHECK(shadow::save(store, root, fixed.loaded));
+	CHECK(shadow::save(store, root, fixed.loaded, fixed.stamps));
 
 	Parsed reshadowed(shadow::resolve(store));
 	CHECK(reshadowed.ok);
 	CHECK_MSG(reshadowed.root_items == 3, "the shadow follows the file it shadows");
 
-	// Clean up the store; TempConfigDir only removes the flat files it wrote.
-	::DeleteFileW(shadow::join(store, shadow::ManifestName).c_str());
-	::DeleteFileW(shadow::join(store, L"root.nss").c_str());
-	::DeleteFileW(shadow::join(shadow::join(store, L"imports"), L"extra.nss").c_str());
-	::RemoveDirectoryW(shadow::join(store, L"imports").c_str());
-	::RemoveDirectoryW(store.c_str());
+	// Clean up the store, generations included; TempConfigDir only removes the
+	// flat files it wrote.
+	shadow::remove_tree(store);
 	::DeleteFileW((tmp.dir + L"imports\\extra.nss").c_str());
 	::RemoveDirectoryW((tmp.dir + L"imports").c_str());
 }
@@ -362,6 +372,103 @@ TEST(parser_imports, a_file_that_was_read_is_recorded_even_when_it_declares_noth
 	CHECK_MSG(parsed.loaded.size() == 1,
 			  "a file with no declarations is still a file that was read");
 	CHECK_EQ(parsed.root_items, (size_t)0);
+}
+
+// The stamps are what the config watcher compares the disk against, so they have
+// to be the file's own stamp, in LoadedFiles() order, taken before the read.
+TEST(parser_imports, the_stamps_parallel_the_files_and_are_the_files_own)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto leaf = tmp.write(L"leaf.nss", "item(title='Leaf')\r\n");
+	auto root = tmp.write(L"root.nss", "import 'leaf.nss'\r\n");
+
+	auto root_stamp = config_file_stamp(root);
+	auto leaf_stamp = config_file_stamp(leaf);
+
+	Parsed parsed(root);
+	CHECK(parsed.ok);
+	CHECK_EQ(parsed.loaded.size(), (size_t)2);
+	CHECK_EQ(parsed.stamps.size(), parsed.loaded.size());
+	if(parsed.stamps.size() != 2)
+		return;
+
+	CHECK_MSG(root_stamp != 0 && leaf_stamp != 0, "an existing file stamps non-zero");
+	CHECK(parsed.stamps[0] == root_stamp);
+	CHECK(parsed.stamps[1] == leaf_stamp);
+}
+
+TEST(parser_imports, a_missing_root_is_unavailable_and_names_the_path)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto missing = tmp.dir + L"there_is_no_such_file.nss";
+	Parsed parsed(missing);
+
+	CHECK(parsed.ok);
+	CHECK(parsed.root_unavailable);
+	CHECK_MSG(parsed.root_path == missing, "the intended root is reported even though it never opened");
+}
+
+// An emptied shell.nss is a configuration with nothing in it, not a missing one.
+TEST(parser_imports, an_existing_tiny_or_empty_root_is_available)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto empty = tmp.write(L"empty.nss", "");
+	auto tiny = tmp.write(L"tiny.nss", "//");
+
+	Parsed from_empty(empty);
+	CHECK(from_empty.ok);
+	CHECK(!from_empty.root_unavailable);
+	CHECK(from_empty.root_path == empty);
+
+	Parsed from_tiny(tiny);
+	CHECK(from_tiny.ok);
+	CHECK(!from_tiny.root_unavailable);
+}
+
+TEST(parser_imports, a_root_that_cannot_be_opened_is_unavailable)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	auto root = tmp.write(L"locked.nss", "item(title='Locked')\r\n");
+
+	// Held open with no sharing, as an editor mid-save can: it exists, so the
+	// parser tries it, and the open fails.
+	HANDLE held = ::CreateFileW(root.c_str(), GENERIC_READ, 0, nullptr,
+								OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	CHECK(held != INVALID_HANDLE_VALUE);
+
+	Parsed parsed(root);
+	if(held != INVALID_HANDLE_VALUE)
+		::CloseHandle(held);
+
+	CHECK(parsed.root_unavailable);
+	CHECK(parsed.loaded.empty());
+}
+
+// The decoder used to set length one short for UTF-16, and at() reads nothing at
+// or past length, so a file whose last character is the closing brace and has no
+// newline after it failed with "'}' expected".
+TEST(parser_imports, a_utf16_file_ending_in_a_brace_without_a_newline_parses)
+{
+	ensure_initializer();
+	TempConfigDir tmp;
+
+	std::wstring text;
+	text.push_back(0xFEFF);		// BOM; little-endian on disk
+	text.append(L"menu(title='M') { item(title='A') }");
+
+	auto root = tmp.write_bytes(L"utf16.nss", text.data(), text.size() * sizeof(wchar_t));
+
+	Parsed parsed(root);
+	CHECK_MSG(parsed.ok, "the last character of a UTF-16 file is part of the file");
+	CHECK_EQ(parsed.root_items, (size_t)1);
 }
 
 // ---------------------------------------------------------------------------

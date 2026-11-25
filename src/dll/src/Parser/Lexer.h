@@ -177,6 +177,12 @@ namespace Nilesoft
 			wchar_t prev = 0;
 			wchar_t peek = 0;
 			TokenError error = TokenError::None;
+
+			// Set by load_File when there was no file to read: an empty path, or
+			// one that could not be opened. Not set for a file that opened but
+			// held fewer than four bytes - an intentionally emptied file is a
+			// legitimate (empty) configuration, an unreadable one is not.
+			bool open_failed = false;
 			Lexer *parent{};
 
 			// Which entry of Parser::LoadedFiles() this lexer is reading, so a
@@ -228,17 +234,25 @@ namespace Nilesoft
 				auto err = TokenError::InvalidFile;
 				//path = Path::Full(path).move();
 
+				open_failed = false;
+
 				try
 				{
 					clear();
 
 					// we don't know what kind of file it is, so assume its standard ascii with no BOM encoding
 					if(path.empty())
+					{
+						open_failed = true;
 						goto failed_none;
+					}
 
 					File file(path);
 					if(!file.Open(false, File::Encoding::Binary))
+					{
+						open_failed = true;
 						goto failed_none;
+					}
 
 					location = Path::Parent(Path::Full(path)).move();
 
@@ -305,7 +319,10 @@ namespace Nilesoft
 								}
 							}
 
-							length = (sz / sizeof(wchar_t)) - 1;
+							// A character count, as in the branches above: at() reads
+							// nothing at or past `length`, so one short would hide
+							// the file's last character.
+							length = sz / sizeof(wchar_t);
 							buffer = new wchar_t[length + 4]{ 0 };
 
 							::memcpy(buffer, data, sz);

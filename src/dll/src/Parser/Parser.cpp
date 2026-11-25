@@ -4,6 +4,7 @@
 #include "Expression\Variable.h"
 #include "Include\Theme.h"
 #include "RegistryConfig.h"
+#include "ConfigStamp.h"
 
 // Windows State (Hidden | Normal | Minimized | Maximized)
 namespace Nilesoft
@@ -25,6 +26,7 @@ namespace Nilesoft
 			if(!context.Application)
 			{
 				_log.warning(L"no application context; configuration not loaded.");
+				m_root_unavailable = true;
 				return;
 			}
 
@@ -56,6 +58,12 @@ namespace Nilesoft
 					}
 					ss += L"not found.";
 					_log.warning(ss);
+
+					// Nowhere recorded to look: name the portable path, so a
+					// watcher can wait for the file to be created.
+					if(m_path.empty())
+						m_path = context.Application->ConfigPortable;
+					m_root_unavailable = true;
 					return;
 				}
 			}
@@ -76,6 +84,7 @@ namespace Nilesoft
 			if(m_path.empty() || !Path::IsFileExists(m_path))
 			{
 				_log.warning(L"config file not found.");
+				m_root_unavailable = true;
 				return;
 			}
 
@@ -92,8 +101,13 @@ namespace Nilesoft
 			_imports.emplace_back(new Lexer);
 			l = _imports.front().get();
 
+			// Before the open, so a save after the read differs from it.
+			m_root_stamp = config_file_stamp(m_path.c_str());
+
 			if(!l->load_File(m_path.c_str()) || l->length < 5)
 			{
+				m_root_unavailable = l->open_failed;
+
 				if(HasError())
 				{
 					error(l->length < 5 ? TokenError::InvalidConfigFile : l->error, m_path.c_str());
@@ -103,6 +117,7 @@ namespace Nilesoft
 
 			l->file_index = m_loaded.size();
 			m_loaded.emplace_back(Path::Full(m_path).c_str());
+			m_stamps.push_back(m_root_stamp);
 		}
 
 		// Where the rule now being parsed was written. The lexer knows which
@@ -1239,6 +1254,9 @@ namespace Nilesoft
 
 			auto lex = import_push();
 
+			// Before the open, so a save after the read differs from it.
+			const auto stamp = config_file_stamp(path.c_str());
+
 			if(hash && lex->load_File(path, ignore_failed))
 			{
 				__trace(L"import '%s'", path.c_str());
@@ -1247,6 +1265,7 @@ namespace Nilesoft
 				// duplicate-import scan means this runs once per file.
 				lex->file_index = m_loaded.size();
 				m_loaded.emplace_back(path.c_str());
+				m_stamps.push_back(stamp);
 
 				l = lex;
 				skip();

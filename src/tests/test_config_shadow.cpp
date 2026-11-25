@@ -97,6 +97,88 @@ namespace
 		shadow::read_all(path, text);
 		return text;
 	}
+
+	// What the parser hands save(): the stamp of each file, taken before it
+	// was read. The tests take them just before saving, which is the same
+	// thing when nothing is writing.
+	std::vector<uint64_t> stamps_of(const std::vector<std::wstring> &files)
+	{
+		std::vector<uint64_t> out;
+		for(const auto &f : files)
+			out.push_back(Nilesoft::Shell::config_file_stamp(f));
+		return out;
+	}
+
+	bool save_now(const std::wstring &store, const std::wstring &root,
+				  const std::vector<std::wstring> &loaded)
+	{
+		return shadow::save(store, root, loaded, stamps_of(loaded));
+	}
+
+	shadow::Manifest manifest_of(const std::wstring &store)
+	{
+		shadow::Manifest manifest;
+		shadow::parse_manifest(read(shadow::join(store, shadow::ManifestName)), manifest);
+		return manifest;
+	}
+
+	// A file inside the generation the manifest currently names.
+	std::wstring shadowed(const TempTree &store, const std::wstring &relative)
+	{
+		return shadow::join(shadow::join(store.path, manifest_of(store.path).generation), relative);
+	}
+
+	std::vector<std::wstring> names_in(const std::wstring &directory)
+	{
+		std::vector<std::wstring> names;
+		WIN32_FIND_DATAW find{};
+		auto handle = ::FindFirstFileW(shadow::join(directory, L"*").c_str(), &find);
+		if(handle == INVALID_HANDLE_VALUE)
+			return names;
+		do
+		{
+			std::wstring name = find.cFileName;
+			if(name != L"." && name != L"..")
+				names.push_back(name);
+		}
+		while(::FindNextFileW(handle, &find));
+		::FindClose(handle);
+		return names;
+	}
+
+	// Backdates a file, directory or link itself (not its target).
+	bool set_age(const std::wstring &path, unsigned hours)
+	{
+		auto handle = ::CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES,
+									FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+									nullptr, OPEN_EXISTING,
+									FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if(handle == INVALID_HANDLE_VALUE)
+			return false;
+
+		FILETIME now{};
+		::GetSystemTimeAsFileTime(&now);
+		ULARGE_INTEGER value{};
+		value.LowPart = now.dwLowDateTime;
+		value.HighPart = now.dwHighDateTime;
+		value.QuadPart -= static_cast<unsigned long long>(hours) * 3600ULL * 10000000ULL;
+		FILETIME then{ value.LowPart, value.HighPart };
+
+		auto ok = ::SetFileTime(handle, nullptr, nullptr, &then) != 0;
+		::CloseHandle(handle);
+		return ok;
+	}
+
+	// A v1 manifest line for a file already in place under `store`.
+	std::wstring legacy_line(const std::wstring &path, const std::wstring &relative)
+	{
+		auto file = shadow::open_for_read(path);
+		shadow::Digest digest{};
+		unsigned long long size = 0;
+		shadow::digest_of(file, digest, size);
+		::CloseHandle(file);
+		return L"file\t" + relative + L"\t" + std::to_wstring(size) + L"\t" + shadow::to_hex(digest) + L"\n";
+	}
 }
 
 TEST(config_shadow, a_saved_set_comes_back_with_its_layout_intact)
@@ -110,14 +192,14 @@ TEST(config_shadow, a_saved_set_comes_back_with_its_layout_intact)
 	auto root = config.write(L"shell.nss", L"import 'imports/theme.nss'\n");
 	auto theme = config.write(L"imports\\theme.nss", L"theme { }\n");
 
-	CHECK(shadow::save(store.path, root, { root, theme }));
+	CHECK(save_now(store.path, root, { root, theme }));
 
 	auto resolved = shadow::resolve(store.path);
 	CHECK(!resolved.empty());
-	CHECK_MSG(resolved == store.at(L"shell.nss"), "the root keeps its own name");
-	CHECK_MSG(exists(store.at(L"imports\\theme.nss")),
+	CHECK_MSG(resolved == shadowed(store, L"shell.nss"), "the root keeps its own name");
+	CHECK_MSG(exists(shadowed(store, L"imports\\theme.nss")),
 			  "and an imported file keeps its position relative to the root");
-	CHECK(read(store.at(L"imports\\theme.nss")) == L"theme { }\n");
+	CHECK(read(shadowed(store, L"imports\\theme.nss")) == L"theme { }\n");
 }
 
 TEST(config_shadow, an_empty_store_offers_nothing)
@@ -137,10 +219,10 @@ TEST(config_shadow, a_shadow_whose_content_changed_is_refused)
 	TempTree store(L"store");
 
 	auto root = config.write(L"shell.nss", L"menu { }\n");
-	CHECK(shadow::save(store.path, root, { root }));
+	CHECK(save_now(store.path, root, { root }));
 	CHECK(!shadow::resolve(store.path).empty());
 
-	shadow::write_all(store.at(L"shell.nss"), L"menu { tampered }\n");
+	shadow::write_all(shadowed(store, L"shell.nss"), L"menu { tampered }\n");
 	CHECK_MSG(shadow::resolve(store.path).empty(), "content no longer matches its digest");
 }
 
@@ -151,10 +233,10 @@ TEST(config_shadow, a_shadow_missing_a_file_is_refused)
 
 	auto root = config.write(L"shell.nss", L"import 'a.nss'\n");
 	auto other = config.write(L"a.nss", L"item { }\n");
-	CHECK(shadow::save(store.path, root, { root, other }));
+	CHECK(save_now(store.path, root, { root, other }));
 	CHECK(!shadow::resolve(store.path).empty());
 
-	::DeleteFileW(store.at(L"a.nss").c_str());
+	::DeleteFileW(shadowed(store, L"a.nss").c_str());
 	CHECK_MSG(shadow::resolve(store.path).empty(),
 			  "a partial set must not be parsed as if it were whole");
 }
@@ -167,11 +249,12 @@ TEST(config_shadow, a_shadow_with_no_manifest_is_refused)
 	TempTree store(L"store");
 
 	auto root = config.write(L"shell.nss", L"menu { }\n");
-	CHECK(shadow::save(store.path, root, { root }));
+	CHECK(save_now(store.path, root, { root }));
 
+	auto copy = shadowed(store, L"shell.nss");
 	::DeleteFileW(store.at(shadow::ManifestName).c_str());
 	CHECK(shadow::resolve(store.path).empty());
-	CHECK_MSG(exists(store.at(L"shell.nss")), "the copy is still there, it just is not claimed");
+	CHECK_MSG(exists(copy), "the copy is still there, it just is not claimed");
 }
 
 TEST(config_shadow, a_manifest_this_build_does_not_understand_is_refused)
@@ -182,8 +265,30 @@ TEST(config_shadow, a_manifest_this_build_does_not_understand_is_refused)
 	shadow::Manifest manifest;
 
 	const std::wstring good = std::wstring(shadow::ManifestHeader)
-		+ L"\nroot\tshell.nss\nfile\tshell.nss\t9\t0123456789abcdef\n";
+		+ L"\ngeneration\t0123456789abcdef\nroot\tshell.nss\nfile\tshell.nss\t9\t0123456789abcdef\n";
 	CHECK_MSG(shadow::parse_manifest(good, manifest), "control: this one is understood");
+	CHECK(manifest.generation == L"0123456789abcdef");
+
+	const std::wstring legacy = std::wstring(shadow::LegacyManifestHeader)
+		+ L"\nroot\tshell.nss\nfile\tshell.nss\t9\t0123456789abcdef\n";
+	CHECK_MSG(shadow::parse_manifest(legacy, manifest), "v1 is still understood");
+	CHECK_MSG(manifest.generation.empty(), "and has no generation: its files sit in the store itself");
+	CHECK_MSG(!shadow::parse_manifest(legacy + L"generation\t0123456789abcdef\n", manifest),
+			  "a generation line in a v1 manifest is not v1");
+
+	CHECK_MSG(!shadow::parse_manifest(std::wstring(shadow::ManifestHeader)
+									  + L"\nroot\tshell.nss\nfile\tshell.nss\t9\t0123456789abcdef\n", manifest),
+			  "v2 without a generation names nowhere to look");
+	CHECK_MSG(!shadow::parse_manifest(std::wstring(shadow::ManifestHeader)
+									  + L"\ngeneration\tNOTHEX\nroot\tshell.nss\nfile\tshell.nss\t9\t0123456789abcdef\n", manifest),
+			  "a generation that is not a 16-digit name");
+
+	// The manifest decides what is read and, for v1 cleanup, deleted, so it
+	// must not be able to point outside the store.
+	for(auto bad : { L"..\\evil.nss", L"a\\..\\..\\evil.nss", L"C:\\evil.nss", L"\\evil.nss", L"a\\\\b.nss", L"." })
+		CHECK_MSG(!shadow::parse_manifest(L"nilesoft-shell-lkg\t1\nroot\tshell.nss\nfile\t" + std::wstring(bad)
+										  + L"\t9\t0123456789abcdef\n", manifest),
+				  "a file path that leaves the store is refused");
 
 	CHECK_MSG(!shadow::parse_manifest(L"nilesoft-shell-lkg\t99\n" + good.substr(good.find(L'\n') + 1), manifest),
 			  "a version this build does not know");
@@ -195,7 +300,8 @@ TEST(config_shadow, a_manifest_this_build_does_not_understand_is_refused)
 			  "a size that is not a number");
 	CHECK_MSG(!shadow::parse_manifest(good + L"file\ta.nss\t3\tzz\n", manifest),
 			  "a digest that is not a digest");
-	CHECK_MSG(!shadow::parse_manifest(std::wstring(shadow::ManifestHeader) + L"\nroot\tshell.nss\n", manifest),
+	CHECK_MSG(!shadow::parse_manifest(std::wstring(shadow::ManifestHeader)
+									  + L"\ngeneration\t0123456789abcdef\nroot\tshell.nss\n", manifest),
 			  "a root that names no files");
 }
 
@@ -240,11 +346,12 @@ TEST(config_shadow, saving_the_same_configuration_twice_rewrites_nothing)
 	TempTree store(L"store");
 
 	auto root = config.write(L"shell.nss", L"menu { }\n");
-	CHECK(shadow::save(store.path, root, { root }));
+	CHECK(save_now(store.path, root, { root }));
 
-	CHECK(stamp(store.at(L"shell.nss")));
-	CHECK(shadow::save(store.path, root, { root }));
-	CHECK_MSG(still_stamped(store.at(L"shell.nss")), "unchanged input, untouched copy");
+	auto copy = shadowed(store, L"shell.nss");
+	CHECK(stamp(copy));
+	CHECK(save_now(store.path, root, { root }));
+	CHECK_MSG(still_stamped(copy), "unchanged input, untouched copy");
 }
 
 TEST(config_shadow, a_damaged_shadow_is_repaired_by_the_next_save)
@@ -259,13 +366,13 @@ TEST(config_shadow, a_damaged_shadow_is_repaired_by_the_next_save)
 
 	auto root = config.write(L"shell.nss", L"menu { }\n");
 	auto other = config.write(L"imports\\a.nss", L"item { }\n");
-	CHECK(shadow::save(store.path, root, { root, other }));
+	CHECK(save_now(store.path, root, { root, other }));
 	CHECK(!shadow::resolve(store.path).empty());
 
-	::DeleteFileW(store.at(L"imports\\a.nss").c_str());
+	::DeleteFileW(shadowed(store, L"imports\\a.nss").c_str());
 	CHECK(shadow::resolve(store.path).empty());
 
-	CHECK_MSG(shadow::save(store.path, root, { root, other }), "same input, damaged store");
+	CHECK_MSG(save_now(store.path, root, { root, other }), "same input, damaged store");
 	CHECK_MSG(!shadow::resolve(store.path).empty(), "the store is rebuilt rather than skipped over");
 }
 
@@ -275,12 +382,12 @@ TEST(config_shadow, an_edited_configuration_replaces_the_previous_shadow)
 	TempTree store(L"store");
 
 	auto root = config.write(L"shell.nss", L"menu { first }\n");
-	CHECK(shadow::save(store.path, root, { root }));
-	CHECK(read(store.at(L"shell.nss")) == L"menu { first }\n");
+	CHECK(save_now(store.path, root, { root }));
+	CHECK(read(shadowed(store, L"shell.nss")) == L"menu { first }\n");
 
 	config.write(L"shell.nss", L"menu { second }\n");
-	CHECK(shadow::save(store.path, root, { root }));
-	CHECK(read(store.at(L"shell.nss")) == L"menu { second }\n");
+	CHECK(save_now(store.path, root, { root }));
+	CHECK(read(shadowed(store, L"shell.nss")) == L"menu { second }\n");
 	CHECK(!shadow::resolve(store.path).empty());
 }
 
@@ -297,9 +404,9 @@ TEST(config_shadow, a_file_outside_the_configuration_directory_makes_the_shadow_
 	auto root = config.write(L"shell.nss", L"menu { }\n");
 	auto outside = elsewhere.write(L"outside.nss", L"item { }\n");
 
-	CHECK(shadow::save(store.path, root, { root, outside }));
+	CHECK(save_now(store.path, root, { root, outside }));
 	CHECK(!shadow::resolve(store.path).empty());
-	CHECK(!exists(store.at(L"outside.nss")));
+	CHECK(!exists(shadowed(store, L"outside.nss")));
 
 	shadow::Manifest manifest;
 	CHECK(shadow::parse_manifest(read(store.at(shadow::ManifestName)), manifest));
@@ -311,8 +418,8 @@ TEST(config_shadow, nothing_worth_shadowing_is_not_an_error_that_writes_a_broken
 {
 	TempTree store(L"store");
 
-	CHECK(!shadow::save(store.path, L"", {}));
-	CHECK(!shadow::save(store.path, L"C:\\nowhere\\shell.nss", { L"C:\\nowhere\\shell.nss" }));
+	CHECK(!shadow::save(store.path, L"", {}, {}));
+	CHECK(!save_now(store.path, L"C:\\nowhere\\shell.nss", { L"C:\\nowhere\\shell.nss" }));
 	CHECK_MSG(shadow::resolve(store.path).empty(),
 			  "a failed save must not leave something that resolves");
 }
@@ -380,7 +487,7 @@ TEST(config_shadow, a_short_form_root_still_finds_its_own_files)
 
 	// `loaded` is long-form throughout, exactly as the parser reports it; only
 	// the root is handed over short.
-	CHECK_MSG(shadow::save(store.path, std::wstring(shortened), loaded),
+	CHECK_MSG(save_now(store.path, std::wstring(shortened), loaded),
 			  "a root spelled differently from the files under it is still that "
 			  "directory, and the shadow has to be written");
 
@@ -403,4 +510,227 @@ TEST(config_shadow, long_form_leaves_an_ordinary_path_alone)
 	// Does not exist: the documented zero return, and the caller's string back.
 	auto missing = tree.at(L"no-such-file-here.nss");
 	CHECK(shadow::long_form(missing) == missing);
+}
+
+// ---- only what was parsed is saved ------------------------------------------
+
+TEST(config_shadow, a_file_that_changed_after_it_was_stamped_is_not_shadowed)
+{
+	// ~24 hosts reload after an editor save. One that stamped the file, then
+	// found it rewritten by the time it saved, must not publish the newer
+	// bytes as "known good": it never parsed them. The previous shadow stays.
+	TempTree config(L"cfg");
+	TempTree store(L"store");
+
+	auto root = config.write(L"shell.nss", L"menu { good }\n");
+	CHECK(save_now(store.path, root, { root }));
+	auto before = manifest_of(store.path).generation;
+
+	auto parsed_stamp = stamps_of({ root });
+	config.write(L"shell.nss", L"menu { half-typed, and longer\n");
+
+	CHECK_MSG(!shadow::save(store.path, root, { root }, parsed_stamp),
+			  "the file is not the one that was parsed");
+	CHECK(manifest_of(store.path).generation == before);
+	auto resolved = shadow::resolve(store.path);
+	CHECK(!resolved.empty());
+	CHECK_MSG(read(resolved) == L"menu { good }\n", "the previous shadow still serves");
+
+	CHECK_MSG(!shadow::save(store.path, root, { root }, {}), "one stamp per file");
+}
+
+// ---- immutable generations ---------------------------------------------------
+
+TEST(config_shadow, a_new_save_leaves_the_previous_generation_intact_until_pruned)
+{
+	TempTree config(L"cfg");
+	TempTree store(L"store");
+
+	auto root = config.write(L"shell.nss", L"menu { first }\n");
+	CHECK(save_now(store.path, root, { root }));
+	auto first = manifest_of(store.path).generation;
+
+	config.write(L"shell.nss", L"menu { second, longer }\n");
+	CHECK(save_now(store.path, root, { root }));
+	auto second = manifest_of(store.path).generation;
+
+	CHECK_MSG(first != second, "different content, different generation");
+	CHECK(shadow::resolve(store.path) == shadow::join(shadow::join(store.path, second), L"shell.nss"));
+	CHECK_MSG(read(shadow::join(shadow::join(store.path, first), L"shell.nss")) == L"menu { first }\n",
+			  "a process still reading the old generation is not pulled out from under");
+
+	// Once it is old enough that no saver can be about to name it, the next
+	// save collects it.
+	CHECK(set_age(shadow::join(store.path, first), 1));
+	config.write(L"shell.nss", L"menu { third, longer still }\n");
+	CHECK(save_now(store.path, root, { root }));
+	CHECK(!exists(shadow::join(store.path, first)));
+	CHECK_MSG(exists(shadow::join(store.path, second)), "the one just superseded is still young");
+	CHECK(!shadow::resolve(store.path).empty());
+}
+
+TEST(config_shadow, identical_content_saved_twice_is_one_generation_and_no_leftovers)
+{
+	// Two hosts that parsed the same configuration derive the same name, so
+	// the second finds the first's generation and leaves it alone.
+	TempTree config(L"cfg");
+	TempTree store(L"store");
+
+	auto root = config.write(L"shell.nss", L"import 'a.nss'\n");
+	auto other = config.write(L"a.nss", L"item { }\n");
+
+	CHECK(save_now(store.path, root, { root, other }));
+	CHECK(save_now(store.path, root, { root, other }));
+
+	auto names = names_in(store.path);
+	CHECK_MSG(names.size() == 2, "the manifest and one generation; no .tmp, no .staging");
+	CHECK(!shadow::resolve(store.path).empty());
+}
+
+TEST(config_shadow, a_save_that_cannot_complete_keeps_the_previous_shadow)
+{
+	// Something that is not a directory sits where the new generation has to
+	// go, so the set cannot be put in place. The old manifest must still name
+	// an intact generation, and the failed attempt must not leave a staging
+	// tree behind.
+	TempTree config(L"cfg");
+	TempTree store(L"store");
+	TempTree scratch(L"scratch");
+
+	auto root = config.write(L"shell.nss", L"menu { first }\n");
+	CHECK(save_now(store.path, root, { root }));
+	auto first = manifest_of(store.path).generation;
+
+	// Learn the name the second content will get by saving it elsewhere.
+	config.write(L"shell.nss", L"menu { second, longer }\n");
+	CHECK(save_now(scratch.path, root, { root }));
+	auto second = manifest_of(scratch.path).generation;
+	CHECK(first != second);
+
+	shadow::write_all(shadow::join(store.path, second), L"in the way");
+
+	CHECK(!save_now(store.path, root, { root }));
+	CHECK(manifest_of(store.path).generation == first);
+	CHECK_MSG(!shadow::resolve(store.path).empty(), "the previous shadow still resolves");
+	CHECK_MSG(read(shadow::join(store.path, second)) == L"in the way", "and what was in the way is left alone");
+	CHECK_EQ(names_in(store.path).size(), size_t(3));		// manifest, first, the obstacle
+}
+
+// ---- manifest v1 -------------------------------------------------------------
+
+TEST(config_shadow, a_v1_shadow_still_resolves_and_is_removed_by_the_first_v2_save)
+{
+	TempTree config(L"cfg");
+	TempTree store(L"store");
+
+	auto root = config.write(L"shell.nss", L"import 'imports/a.nss'\n");
+	auto other = config.write(L"imports\\a.nss", L"item { }\n");
+
+	// What the previous build left behind: files directly under the store.
+	auto v1_root = store.write(L"shell.nss", L"import 'imports/a.nss'\n");
+	auto v1_other = store.write(L"imports\\a.nss", L"item { }\n");
+	shadow::write_all(store.at(shadow::ManifestName),
+					  std::wstring(shadow::LegacyManifestHeader) + L"\nroot\tshell.nss\n"
+					  + legacy_line(v1_root, L"shell.nss") + legacy_line(v1_other, L"imports\\a.nss"));
+
+	CHECK_MSG(shadow::resolve(store.path) == v1_root, "an upgraded machine keeps its fallback");
+
+	CHECK(save_now(store.path, root, { root, other }));
+
+	CHECK_MSG(!exists(v1_root) && !exists(v1_other), "the v1 files are gone");
+	CHECK_MSG(!exists(store.at(L"imports")), "and so is the directory they emptied");
+	auto resolved = shadow::resolve(store.path);
+	CHECK(!resolved.empty());
+	CHECK_MSG(resolved == shadowed(store, L"shell.nss"), "v2 serves now");
+	CHECK(exists(store.path));
+}
+
+// ---- pruning -----------------------------------------------------------------
+
+TEST(config_shadow, pruning_deletes_only_what_is_old_and_not_named)
+{
+	TempTree config(L"cfg");
+	TempTree store(L"store");
+
+	auto root = config.write(L"shell.nss", L"menu { }\n");
+	CHECK(save_now(store.path, root, { root }));
+	auto named = manifest_of(store.path).generation;
+
+	// Entries pruning is allowed to take once they are old.
+	auto old_generation = shadow::join(store.path, L"aaaaaaaaaaaaaaaa");
+	auto old_staging = shadow::join(store.path, L"aaaaaaaaaaaaaaaa.1-2.tmp");
+	auto old_manifest = shadow::join(store.path, L"manifest.1-2.staging");
+	// ... the same, but young.
+	auto young_generation = shadow::join(store.path, L"bbbbbbbbbbbbbbbb");
+	auto young_staging = shadow::join(store.path, L"bbbbbbbbbbbbbbbb.1-2.tmp");
+	auto young_manifest = shadow::join(store.path, L"manifest.3-4.staging");
+	// ... and things that are not ours at any age.
+	auto user_file = shadow::join(store.path, L"notes.txt");
+	auto user_directory = shadow::join(store.path, L"imports");
+	auto not_a_generation = shadow::join(store.path, L"gggggggggggggggg");
+
+	for(auto directory : { old_generation, old_staging, young_generation, young_staging,
+						   user_directory, not_a_generation })
+	{
+		shadow::ensure_directory(directory);
+		shadow::write_all(shadow::join(directory, L"x.nss"), L"x");
+	}
+	shadow::write_all(old_manifest, L"x");
+	shadow::write_all(young_manifest, L"x");
+	shadow::write_all(user_file, L"x");
+
+	for(auto path : { old_generation, old_staging, old_manifest, user_file, user_directory,
+					  not_a_generation, shadow::join(store.path, named) })
+		CHECK(set_age(path, 2));
+
+	shadow::prune(store.path, L"cccccccccccccccc");
+
+	CHECK_MSG(!exists(old_generation), "an old unreferenced generation goes");
+	CHECK_MSG(!exists(old_staging), "so does an old staging directory, contents and all");
+	CHECK_MSG(!exists(old_manifest), "and an old staging manifest");
+	CHECK_MSG(exists(young_generation), "nothing younger than the threshold is touched");
+	CHECK(exists(young_staging));
+	CHECK(exists(young_manifest));
+	CHECK_MSG(exists(shadow::join(store.path, named)), "the generation the manifest names stays however old");
+	CHECK_MSG(exists(user_file) && exists(user_directory) && exists(not_a_generation),
+			  "names this code does not create are not its to delete");
+
+	// And a caller's own commit is kept even when the manifest names another.
+	shadow::ensure_directory(shadow::join(store.path, L"dddddddddddddddd"));
+	CHECK(set_age(shadow::join(store.path, L"dddddddddddddddd"), 2));
+	shadow::prune(store.path, L"dddddddddddddddd");
+	CHECK(exists(shadow::join(store.path, L"dddddddddddddddd")));
+
+	// With no readable manifest nothing is known to be unnamed.
+	::DeleteFileW(store.at(shadow::ManifestName).c_str());
+	shadow::prune(store.path, L"cccccccccccccccc");
+	CHECK(exists(shadow::join(store.path, named)));
+}
+
+TEST(config_shadow, pruning_removes_a_link_without_following_it)
+{
+	// A link in the store, named like a generation, must be deleted as the
+	// entry it is. Following it would delete something outside the store.
+	// Creating a symbolic link needs developer mode or a privilege; where it
+	// cannot be made, the property cannot be exercised and the test says so
+	// rather than failing.
+	TempTree config(L"cfg");
+	TempTree store(L"store");
+	TempTree outside(L"outside");
+
+	auto root = config.write(L"shell.nss", L"menu { }\n");
+	CHECK(save_now(store.path, root, { root }));
+
+	auto sentinel = outside.write(L"keep.nss", L"must survive");
+	auto link = shadow::join(store.path, L"eeeeeeeeeeeeeeee");
+	if(!::CreateSymbolicLinkW(link.c_str(), outside.path.c_str(),
+							  SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))
+		return;
+
+	CHECK(set_age(link, 2));
+	shadow::prune(store.path, L"cccccccccccccccc");
+
+	CHECK_MSG(::GetFileAttributesW(link.c_str()) == INVALID_FILE_ATTRIBUTES, "the link is gone");
+	CHECK_MSG(exists(sentinel), "and what it pointed at is not");
+	::RemoveDirectoryW(link.c_str());
 }

@@ -16,6 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(MSBuildThisFileDirectory)ConfigShadow.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)ConfigStamp.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)FileSystemObjects.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)PerfExport.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)PerfReport.h" />

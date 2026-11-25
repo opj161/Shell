@@ -386,7 +386,6 @@ namespace Nilesoft
 		{
 			double val{};
 			bool sign = false;
-			bool isfloat = false;
 
 			if(l->tok == '0' && l->is('x', 1))
 			{
@@ -462,27 +461,25 @@ namespace Nilesoft
 				l->next();
 			}
 
-			int mantissa = 1;
 			while(l->is_digit())
-			{
 				val = val * 10.0 + (l->next() - '0');
-				mantissa = mantissa * 10;
-			}
 
-			if(isfloat)
-				val = val / (double)mantissa;
-			else if(l->tok == '.' && l->is_digit(1))
+			if(l->tok == '.' && l->is_digit(1))
 			{
 				l->next();// skip '.'
-				double mantissa_val = 0;
-				mantissa = 1;
+				double frac = 0, scale = 1;
 				while(l->is_digit())
 				{
-					mantissa_val = mantissa_val * 10.0 + (l->tok - '0');
+					// a double carries ~17 significant digits; further digits are consumed but
+					// cannot change the value, and an int/unbounded scale would overflow.
+					if(scale < 1e18)
+					{
+						frac = frac * 10.0 + (l->tok - '0');
+						scale *= 10.0;
+					}
 					l->next();
-					mantissa = mantissa * 10;
 				}
-				val += mantissa_val / (double)mantissa;
+				val += frac / scale;
 			}
 			
 			if(sign && val == 0) sign = false;
@@ -1027,7 +1024,9 @@ namespace Nilesoft
 			start_line = l->line;
 			start_col = l->column;
 
-			while(l->tok != close)
+			// tok is 0 at end of input and never equals close; without the eof exit an
+			// unterminated string spins here forever instead of reaching the error below.
+			while(l->tok != close && !l->eof)
 			{
 				string value;
 				if(l->tok == close) break;

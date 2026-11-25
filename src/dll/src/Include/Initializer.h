@@ -51,10 +51,20 @@ namespace Nilesoft
 			bool uninit();
 
 		private:
+			// What one parse read, to be watched. Filled whether the parse
+			// succeeded or not. With no file read it names the root the parse
+			// tried, so a watch can wait for it to appear or become readable.
+			struct ParseOutcome
+			{
+				std::vector<std::wstring> files;
+				std::vector<uint64_t> stamps;	// parallel to files, taken before each read
+			};
+
 			// One parse into one new generation, published only on success.
 			// Null path means the real configuration; non-null is the
-			// last-known-good shadow. See Initializer.cpp.
-			bool load_generation(const string *config_path);
+			// last-known-good shadow. Never touches the watcher: the caller
+			// decides what to watch from `outcome`. See Initializer.cpp.
+			bool load_generation(const string *config_path, ParseOutcome &outcome);
 
 			// Everything a Parser needs before Load() can be called: the CACHE
 			// it builds into, and the variable maps its context points at.
@@ -62,9 +72,11 @@ namespace Nilesoft
 			// same thing and then throws it away.
 			std::unique_ptr<Parser> prepare_parser(const string *config_path, CACHE *cache);
 
-			// Point the process's watcher at the set that was just loaded.
+			// Point the process's watcher at a set of files, with the stamps
+			// taken before they were read as its baseline.
 			// docs/refactor/03-config-safety.md section 3.
-			static void start_watching(const std::vector<std::wstring> &files);
+			static void start_watching(const std::vector<std::wstring> &files,
+									   const std::vector<uint64_t> &stamps);
 
 			// What the watcher calls when one of those files is written.
 			static void on_config_file_changed();

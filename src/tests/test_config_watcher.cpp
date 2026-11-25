@@ -21,7 +21,9 @@
 #include "..\dll\src\Include\ConfigWatcher.h"
 
 #include <atomic>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Nilesoft::Shell;
@@ -84,6 +86,22 @@ namespace
 
 	std::atomic<int> g_reloads{ 0 };
 	void count_reload() { g_reloads.fetch_add(1, std::memory_order_release); }
+
+	// What a reader would have stamped just before reading `files`.
+	std::vector<uint64_t> stamps_of(const std::vector<std::wstring> &files)
+	{
+		std::vector<uint64_t> stamps;
+		for(const auto &file : files)
+			stamps.push_back(config_file_stamp(file));
+		return stamps;
+	}
+
+	// start() with a baseline taken now.
+	bool begin(ConfigWatcher &watcher, const std::vector<std::wstring> &files,
+			   ConfigWatcher::Callback callback)
+	{
+		return watcher.start(files, stamps_of(files), callback);
+	}
 
 	// Waits for the watcher to have finished a reload, rather than sleeping for
 	// a duration and hoping. Returns false on timeout, which is a failure the
@@ -158,11 +176,11 @@ TEST(config_watcher, the_cap_is_honoured)
 TEST(config_watcher, the_shipping_cap_leaves_room_for_the_stop_event)
 {
 	// A compile-time fact, asserted at compile time: the wait takes the stop
-	// event plus one handle per directory, and MAXIMUM_WAIT_OBJECTS is the
-	// ceiling. CHECK() on a constant is a warning MSVC treats as an error here,
-	// and rightly - this never varies at run time.
-	static_assert(ConfigWatcher::MAX_DIRECTORIES + 1 <= MAXIMUM_WAIT_OBJECTS,
-				  "the watch set plus the stop event must fit in one wait");
+	// and wake events plus one handle per directory, and MAXIMUM_WAIT_OBJECTS
+	// is the ceiling. CHECK() on a constant is a warning MSVC treats as an
+	// error here, and rightly - this never varies at run time.
+	static_assert(ConfigWatcher::MAX_DIRECTORIES + 2 <= MAXIMUM_WAIT_OBJECTS,
+				  "the watch set plus the stop and wake events must fit in one wait");
 	CHECK_EQ(ConfigWatcher::MAX_DIRECTORIES, (size_t)15);
 }
 
@@ -171,12 +189,12 @@ TEST(config_watcher, the_shipping_cap_leaves_room_for_the_stop_event)
 TEST(config_watcher, a_watcher_with_nothing_to_watch_does_not_start)
 {
 	ConfigWatcher watcher;
-	CHECK(!watcher.start({}, &count_reload));
-	CHECK(!watcher.start({ L"shell.nss" }, &count_reload));
+	CHECK(!begin(watcher, {}, &count_reload));
+	CHECK(!begin(watcher, { L"shell.nss" }, &count_reload));
 
 	TempDir tmp;
 	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
-	CHECK(!watcher.start({ file }, nullptr));
+	CHECK(!begin(watcher, { file }, nullptr));
 	CHECK(!watcher.watching());
 }
 
@@ -187,8 +205,13 @@ TEST(config_watcher, writing_a_watched_file_triggers_exactly_one_reload)
 
 	ConfigWatcher watcher;
 	g_reloads.store(0);
-	CHECK(watcher.start({ file }, &count_reload));
+	CHECK(begin(watcher, { file }, &count_reload));
 	CHECK(watcher.watching());
+
+	// Let the thread make its first comparison against the baseline. A write
+	// that beat it would differ from the baseline and be reloaded for on its own
+	// account, which is correct, but is a second reload this test is not about.
+	::Sleep(50);
 
 	// A save that writes more than once, as editors do.
 	tmp.write(L"shell.nss", "item(title='B')\r\n");
@@ -214,7 +237,7 @@ TEST(config_watcher, an_unrelated_file_in_the_same_directory_reloads_nothing)
 	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
 
 	ConfigWatcher watcher;
-	CHECK(watcher.start({ file }, &count_reload));
+	CHECK(begin(watcher, { file }, &count_reload));
 
 	tmp.write(L"notes.txt", "nothing to do with the configuration");
 	tmp.write(L"other.nss", "item(title='NotImported')\r\n");
@@ -241,7 +264,7 @@ TEST(config_watcher, deleting_a_watched_file_is_a_change)
 	auto part = tmp.write(L"part.nss", "item(title='Imported')\r\n");
 
 	ConfigWatcher watcher;
-	CHECK(watcher.start({ root, part }, &count_reload));
+	CHECK(begin(watcher, { root, part }, &count_reload));
 
 	::DeleteFileW(part.c_str());
 
@@ -258,8 +281,8 @@ TEST(config_watcher, restarting_replaces_the_previous_watch)
 	auto second = tmp.write(L"two.nss", "item(title='Two')\r\n");
 
 	ConfigWatcher watcher;
-	CHECK(watcher.start({ first }, &count_reload));
-	CHECK(watcher.start({ second }, &count_reload));
+	CHECK(begin(watcher, { first }, &count_reload));
+	CHECK(begin(watcher, { second }, &count_reload));
 	CHECK(watcher.watching());
 
 	// The count belongs to the new watch; the old one's is gone with it.
@@ -276,23 +299,14 @@ TEST(config_watcher, restarting_replaces_the_previous_watch)
 
 	This is the shape the shipping code actually has and the one every other
 	test in this file misses. `Initializer::on_config_file_changed` calls
-	`init()`, a successful load calls `start_watching(parser->LoadedFiles())` -
-	because an edit can add or remove an import - and that lands in `start()`
-	**on the watcher's own thread**.
+	`init()`, a successful load calls `start_watching` - because an edit can
+	add or remove an import - and that lands in `start()` **on the watcher's
+	own thread**. start() must hand the new set to the running thread rather
+	than join it (joining the current thread throws,
+	`resource_deadlock_would_occur`, and once left the watcher dead after
+	exactly one reload).
 
-	`start()` used to call `stop()`, which joins that same thread. The standard
-	makes joining the current thread `resource_deadlock_would_occur`, so
-	`join()` throws; but `stop()` had already signalled the stop event, so the
-	run loop returned on its next wait. The exception was caught by
-	`load_generation`'s `catch(...)` and the watcher was simply gone -
-	`watching()` still answering true, no log line, nothing.
-
-	The symptom was one reload per Explorer lifetime. Found in a real Explorer
-	on 2026-08-25, by editing the installed shell.nss twice and noticing only
-	the first edit reached the menu; every test here called `start()` from the
-	test's own thread, which is the one caller the old code was correct for.
-
-	Two reloads is the whole assertion. One is what the defect produced.
+	Three reloads is the whole assertion. One is what the defect produced.
 */
 namespace
 {
@@ -307,15 +321,11 @@ namespace
 			return;
 
 		// Wrapped for the same reason Initializer::load_generation wraps its
-		// whole body in catch(...): without it the throw described below
-		// reaches the top of the watcher thread and takes the process with it,
-		// so the suite would terminate instead of reporting - the flaw
-		// docs/refactor/08-handoff.md section 1 rule 2 exists to catch. In the
-		// DLL that catch is what made the defect invisible; here it is what
-		// makes it legible.
+		// whole body in catch(...): a throw would otherwise reach the top of the
+		// watcher thread and take the suite with it instead of reporting.
 		try
 		{
-			g_repointing_watcher->start(g_repointing_files, &reload_and_repoint);
+			begin(*g_repointing_watcher, g_repointing_files, &reload_and_repoint);
 		}
 		catch(...)
 		{
@@ -335,7 +345,7 @@ TEST(config_watcher, a_callback_that_re_points_the_watcher_does_not_kill_it)
 	g_repointing_watcher = &watcher;
 	g_repointing_files = { file };
 
-	CHECK(watcher.start({ file }, &reload_and_repoint));
+	CHECK(begin(watcher, { file }, &reload_and_repoint));
 
 	// Every write here is a different length on purpose. The stamp folds the
 	// file size into the write time, so two same-sized writes landing inside
@@ -381,7 +391,7 @@ TEST(config_watcher, a_callback_can_re_point_the_watcher_at_a_different_file)
 	g_repointing_watcher = &watcher;
 	g_repointing_files = { second };		// what the "reload" decides to watch
 
-	CHECK(watcher.start({ first }, &reload_and_repoint));
+	CHECK(begin(watcher, { first }, &reload_and_repoint));
 
 	tmp.write(L"one.nss", "item(title='OneAgain')\r\n");
 	CHECK_MSG(wait_for_reloads(watcher, 1, 8000), "the original watch is live");
@@ -403,7 +413,7 @@ TEST(config_watcher, stopping_twice_is_harmless)
 	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
 
 	ConfigWatcher watcher;
-	CHECK(watcher.start({ file }, &count_reload));
+	CHECK(begin(watcher, { file }, &count_reload));
 	watcher.stop();
 	watcher.stop();
 	CHECK(!watcher.watching());
@@ -459,7 +469,7 @@ TEST(config_watcher, a_failed_wait_ends_the_watch_and_says_so)
 
 	ConfigWatcher watcher;
 	watcher.set_wait_for_testing(&wait_that_fails);
-	CHECK(watcher.start({ file }, &count_reload));
+	CHECK(begin(watcher, { file }, &count_reload));
 
 	CHECK_MSG(wait_until_not_watching(watcher, 4000),
 			  "the thread returned on WAIT_FAILED, so watching() must be false");
@@ -475,7 +485,7 @@ TEST(config_watcher, an_out_of_range_wait_result_ends_the_watch_and_says_so)
 
 	ConfigWatcher watcher;
 	watcher.set_wait_for_testing(&wait_that_answers_out_of_range);
-	CHECK(watcher.start({ file }, &count_reload));
+	CHECK(begin(watcher, { file }, &count_reload));
 
 	CHECK_MSG(wait_until_not_watching(watcher, 4000),
 			  "the thread returned on an unusable index, so watching() must be false");
@@ -492,10 +502,10 @@ TEST(config_watcher, a_re_point_with_nothing_watchable_ends_the_watch_and_says_s
 	// keyboard combos remain.
 	//
 	// A bare filename rather than an empty list, because start() rejects an
-	// empty list before it reaches the re-entrancy check and would therefore
-	// never ask for the re-point at all. config_watch_directories answers
-	// nothing for a path with no directory part - FindFirstChangeNotification's
-	// page: the path "cannot be a relative path or an empty string".
+	// empty list outright and would never ask for the re-point at all.
+	// config_watch_directories answers nothing for a path with no directory
+	// part - FindFirstChangeNotification's page: the path "cannot be a
+	// relative path or an empty string".
 	TempDir tmp;
 	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
 
@@ -504,7 +514,7 @@ TEST(config_watcher, a_re_point_with_nothing_watchable_ends_the_watch_and_says_s
 	g_repointing_watcher = &watcher;
 	g_repointing_files = { L"nothing-watchable.nss" };
 
-	CHECK(watcher.start({ file }, &reload_and_repoint));
+	CHECK(begin(watcher, { file }, &reload_and_repoint));
 
 	tmp.write(L"shell.nss", "item(title='BB')\r\n");
 
@@ -519,5 +529,194 @@ TEST(config_watcher, a_re_point_with_nothing_watchable_ends_the_watch_and_says_s
 			  "and the save did reach the callback first");
 
 	g_repointing_watcher = nullptr;
+	watcher.stop();
+}
+
+/*
+	A re-point from another thread must not wait for the watcher thread.
+
+	Initializer::init() holds _reload_mutex across the load and re-points the
+	watcher from there; the watcher's callback is init() too, so while a reload
+	is in flight the watcher thread is blocked on that same mutex. A start()
+	that joined the watcher thread would wait for a thread that is waiting for
+	the caller - a permanent hang of whichever thread called it, in the product
+	Explorer's UI thread.
+
+	The callback blocks on a mutex the calling thread holds; start() runs on a
+	helper thread and is waited for with a timeout, so a regression fails the
+	suite instead of hanging it. On failure the watcher is deliberately leaked,
+	because destroying it would join the stuck thread.
+*/
+namespace
+{
+	std::mutex g_gate;
+	std::atomic<bool> g_gate_held{ false };
+	std::atomic<bool> g_callback_entered{ false };
+	std::atomic<bool> g_start_returned{ false };
+
+	void gated_callback()
+	{
+		g_callback_entered.store(true, std::memory_order_release);
+		{
+			std::lock_guard<std::mutex> wait_for_the_caller(g_gate);
+		}
+		g_reloads.fetch_add(1, std::memory_order_release);
+	}
+
+	bool wait_for(const std::atomic<bool> &flag, DWORD timeout_ms)
+	{
+		auto deadline = ::GetTickCount64() + timeout_ms;
+		while(::GetTickCount64() < deadline)
+		{
+			if(flag.load(std::memory_order_acquire))
+				return true;
+			::Sleep(10);
+		}
+		return flag.load(std::memory_order_acquire);
+	}
+}
+
+TEST(config_watcher, a_re_point_while_the_callback_waits_on_the_caller_does_not_hang)
+{
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	auto *watcher = new ConfigWatcher();
+	g_reloads.store(0);
+	g_gate_held.store(false);
+	g_callback_entered.store(false);
+	g_start_returned.store(false);
+
+	CHECK(begin(*watcher, { file }, &gated_callback));
+
+	// The "init()" thread: takes the lock the callback will want, waits for the
+	// callback to be stuck behind it, and only then re-points the watcher.
+	std::thread caller([&]
+	{
+		std::lock_guard<std::mutex> reload_lock(g_gate);
+		g_gate_held.store(true, std::memory_order_release);
+
+		wait_for(g_callback_entered, 8000);
+
+		begin(*watcher, { file }, &gated_callback);
+		g_start_returned.store(true, std::memory_order_release);
+	});
+
+	CHECK(wait_for(g_gate_held, 4000));
+	tmp.write(L"shell.nss", "item(title='BB')\r\n");
+
+	if(!wait_for(g_start_returned, 12000))
+	{
+		CHECK_MSG(false, "start() must not wait for a watcher thread blocked in its callback");
+		caller.detach();
+		return;		// leaks the stuck watcher on purpose
+	}
+	caller.join();
+
+	// The caller released the lock, so the blocked callback finishes and the
+	// watcher goes on working.
+	CHECK_MSG(wait_for_reloads(*watcher, 1, 8000), "the blocked reload completes");
+	CHECK(watcher->watching());
+
+	::Sleep(ConfigWatcher::DEBOUNCE_MS * 2);
+	tmp.write(L"shell.nss", "item(title='CCC')\r\n");
+	CHECK_MSG(wait_for_reloads(*watcher, 2, 8000), "and the watch is still live afterwards");
+
+	watcher->stop();
+	delete watcher;
+}
+
+// A save that lands after the reader stamped its files and before the watch
+// exists has no notification to wake on. The stamp is what remembers it.
+TEST(config_watcher, a_file_changed_after_its_stamp_was_taken_reloads_without_another_write)
+{
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	auto before_the_read = stamps_of({ file });
+	tmp.write(L"shell.nss", "item(title='Edited after the read')\r\n");
+
+	ConfigWatcher watcher;
+	g_reloads.store(0);
+	CHECK(watcher.start({ file }, before_the_read, &count_reload));
+
+	CHECK_MSG(wait_for_reloads(watcher, 1, 8000),
+			  "the stale baseline must be noticed with no further write");
+	::Sleep(ConfigWatcher::DEBOUNCE_MS * 2);
+	CHECK_MSG(watcher.reloads() == 1, "and once, not repeatedly");
+
+	watcher.stop();
+}
+
+TEST(config_watcher, a_baseline_that_matches_the_disk_reloads_nothing)
+{
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	ConfigWatcher watcher;
+	CHECK(begin(watcher, { file }, &count_reload));
+
+	::Sleep(ConfigWatcher::DEBOUNCE_MS * 2);
+	CHECK_EQ(watcher.reloads(), 0ull);
+
+	watcher.stop();
+}
+
+// A re-point after the same lost-update window: the new set's baseline is older
+// than the disk.
+TEST(config_watcher, a_re_point_with_a_stale_baseline_reloads)
+{
+	TempDir tmp;
+	auto first = tmp.write(L"one.nss", "item(title='One')\r\n");
+	auto second = tmp.write(L"two.nss", "item(title='Two')\r\n");
+
+	ConfigWatcher watcher;
+	g_reloads.store(0);
+	CHECK(begin(watcher, { first }, &count_reload));
+
+	auto before_the_read = stamps_of({ second });
+	tmp.write(L"two.nss", "item(title='Two, edited after the read')\r\n");
+	CHECK(watcher.start({ second }, before_the_read, &count_reload));
+
+	CHECK_MSG(wait_for_reloads(watcher, 1, 8000), "the re-pointed baseline is compared at once");
+	watcher.stop();
+}
+
+TEST(config_watcher, a_mismatched_baseline_is_rejected)
+{
+	TempDir tmp;
+	auto file = tmp.write(L"shell.nss", "item(title='A')\r\n");
+
+	ConfigWatcher watcher;
+	CHECK(!watcher.start({ file }, {}, &count_reload));
+	CHECK(!watcher.watching());
+}
+
+// start() from a thread that is not the watcher's, while it runs: the set is
+// replaced, the old one stops mattering, and nothing is joined.
+TEST(config_watcher, a_re_point_from_another_thread_lands)
+{
+	TempDir tmp;
+	auto first = tmp.write(L"one.nss", "item(title='One')\r\n");
+	auto second = tmp.write(L"two.nss", "item(title='Two')\r\n");
+
+	ConfigWatcher watcher;
+	g_reloads.store(0);
+	CHECK(begin(watcher, { first }, &count_reload));
+
+	bool accepted = false;
+	std::thread other([&] { accepted = begin(watcher, { second }, &count_reload); });
+	other.join();
+	CHECK(accepted);
+	CHECK(watcher.watching());
+
+	// The old set no longer matters, even though its directory is the same one.
+	tmp.write(L"one.nss", "item(title='OneAgain')\r\n");
+	::Sleep(ConfigWatcher::DEBOUNCE_MS * 4);
+	CHECK_MSG(watcher.reloads() == 0, "a file that left the set causes no reload");
+
+	tmp.write(L"two.nss", "item(title='TwoAgain')\r\n");
+	CHECK_MSG(wait_for_reloads(watcher, 1, 8000), "a file that joined the set does");
+
 	watcher.stop();
 }

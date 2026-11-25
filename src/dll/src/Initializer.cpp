@@ -64,8 +64,20 @@ namespace Nilesoft
 		{
 			std::unique_lock<std::mutex> reload_lock(_reload_mutex);
 
-			if(load_generation(nullptr))
+			// Under _reload_mutex on purpose: start() never joins a running
+			// watcher, so re-pointing it from here cannot wait on the watcher
+			// thread, which may itself be blocked on this mutex.
+			ParseOutcome outcome;
+			if(load_generation(nullptr, outcome))
+			{
+				// Watch what was actually read, whichever set that turned out
+				// to be. Re-pointed on every successful load, because an edit
+				// can add or remove an import and the old watch set would then
+				// be watching the wrong directories.
+				// docs/refactor/03-config-safety.md section 3.
+				start_watching(outcome.files, outcome.stamps);
 				return true;
+			}
 
 			// Where and why the file the user edits failed. Captured before
 			// anything else runs, because a successful shadow parse clears it.
@@ -90,8 +102,11 @@ namespace Nilesoft
 				auto shadow = ConfigShadow::resolve(ConfigShadow::default_directory());
 				if(!shadow.empty())
 				{
+					// Its files are the shadow's copies under %LocalAppData%, not
+					// anything the user edits, so its outcome is dropped.
 					string path = shadow.c_str();
-					if(load_generation(&path))
+					ParseOutcome shadow_outcome;
+					if(load_generation(&path, shadow_outcome))
 					{
 						served = true;
 						Logger::Warning(L"configuration failed to parse; serving the last known good copy from '%s'",
@@ -99,6 +114,11 @@ namespace Nilesoft
 					}
 				}
 			}
+
+			// Watch the user's own files - the set the failed parse read, or the
+			// root it could not - so fixing or creating them reloads. Pointing
+			// at the shadow's would leave the fix unnoticed.
+			start_watching(outcome.files, outcome.stamps);
 
 			// A successful parse - of the shadow - reports itself as a healthy
 			// load, and that is the wrong story to tell here: the file the user
@@ -263,16 +283,17 @@ namespace Nilesoft
 		}
 
 		/*
-			Point the watcher at the set that was just loaded.
+			Point the watcher at a set of files.
 
 			Best-effort throughout: a configuration on a network share may never
 			notify at all (FindFirstChangeNotification's own page says so), so a
 			watcher that fails to start is not an error and the keyboard combos
 			remain exactly as they were.
 		*/
-		void Initializer::start_watching(const std::vector<std::wstring> &files)
+		void Initializer::start_watching(const std::vector<std::wstring> &files,
+										 const std::vector<uint64_t> &stamps)
 		{
-			config_watcher().start(files, &Initializer::on_config_file_changed);
+			config_watcher().start(files, stamps, &Initializer::on_config_file_changed);
 		}
 
 		/*
@@ -445,7 +466,7 @@ namespace Nilesoft
 			the file being read is not the one the user edits - so it is also
 			the one case that must not overwrite the shadow with itself.
 		*/
-		bool Initializer::load_generation(const string *config_path)
+		bool Initializer::load_generation(const string *config_path, ParseOutcome &outcome)
 		{
 			try
 			{
@@ -454,8 +475,42 @@ namespace Nilesoft
 
 				auto parser = prepare_parser(config_path, new_cache.get());
 
-				if(!parser->Load())
+				auto parsed = parser->Load();
+
+				// What to watch, on success and failure alike. A parse that read
+				// no file still names the root it tried, with the stamp taken
+				// before the attempt (zero if absent), so creating or releasing
+				// that file triggers a reload.
+				outcome.files = parser->LoadedFiles();
+				outcome.stamps = parser->LoadedStamps();
+				if(outcome.files.empty() && !parser->RootPath().empty())
+				{
+					outcome.files.emplace_back(parser->RootPath().c_str());
+					outcome.stamps.push_back(parser->RootStamp());
+				}
+
+				if(!parsed)
 					return false;
+
+				/*
+					A root that does not exist or could not be opened is a
+					*successful* parse as far as Load() is concerned - a machine
+					with no shell.nss must still get a working shell. But when
+					something better is already in hand, publishing the resulting
+					empty configuration over it is wrong: the file is routinely
+					unreadable for a moment (an editor holding it, a rename-replace
+					save in flight) and the next load would find it fine. An
+					emptied-but-readable file is not this case.
+				*/
+				if(parser->RootUnavailable() &&
+				   (has_snapshot() || !ConfigShadow::resolve(ConfigShadow::default_directory()).empty()))
+				{
+					LastError = { TokenError::CannotFoundConfigFile, 0, 0 };
+					Logger::Error(L"error %s, \"%s\"",
+								  ParserException::errortostr(TokenError::CannotFoundConfigFile),
+								  parser->RootPath().c_str());
+					return false;
+				}
 
 				// Carry the file list into the generation before the parser is
 				// destroyed. Every rule's provenance is an index into it, and
@@ -490,7 +545,6 @@ namespace Nilesoft
 				Status.Error.store(false, std::memory_order_relaxed);
 				Status.Stale.store(false, std::memory_order_relaxed);
 				Status.Refresh.store(false, std::memory_order_relaxed);
-				Status.Disabled.store(false, std::memory_order_relaxed);
 
 				// Shadow the set that just parsed, so a process that starts
 				// after this file is broken still has something to serve. Not
@@ -501,8 +555,9 @@ namespace Nilesoft
 				if(!config_path)
 				{
 					const auto &loaded = parser->LoadedFiles();
+					const auto &loaded_stamps = parser->LoadedStamps();
 					if(!loaded.empty())
-						ConfigShadow::save(ConfigShadow::default_directory(), loaded.front(), loaded);
+						ConfigShadow::save(ConfigShadow::default_directory(), loaded.front(), loaded, loaded_stamps);
 				}
 
 				// Compile the activation policy from the generation that has
@@ -510,13 +565,6 @@ namespace Nilesoft
 				// the configuration serving menus.
 				// docs/refactor/01-takeover-contract.md section 9.
 				compile_com_policy(new_cache.get());
-
-				// Watch what was actually read, whichever set that turned out
-				// to be. Re-pointed on every successful load, because an edit
-				// can add or remove an import and the old watch set would then
-				// be watching the wrong directories.
-				// docs/refactor/03-config-safety.md section 3.
-				start_watching(parser->LoadedFiles());
 
 				return true;
 			}
