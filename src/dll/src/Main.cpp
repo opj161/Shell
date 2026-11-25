@@ -1126,6 +1126,11 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 	auto result = FALSE;
 	auto invoked = false;
 
+	// The point the host asked for. Shell's own placement moves x/y below, and a
+	// menu handed back to the host after that must open where it was clicked.
+	const int host_x = x;
+	const int host_y = y;
+
 	// Whether this click got as far as trying to build Shell's menu. Only then
 	// is a fail-open a *failure* rather than a decision - an unregistered
 	// process, a disabled shell, a bypass gesture and an open breaker all reach
@@ -1447,6 +1452,8 @@ BOOL WINAPI NtUserTrackPopupMenu(HMENU hMenu, uint32_t uFlags, int x, int y, HWN
 						perf::session_decision(perf::TakeoverDecision::Declined);
 						attempted_takeover = false;
 						invoked = false;
+						x = host_x;
+						y = host_y;
 						__leave;
 					}
 

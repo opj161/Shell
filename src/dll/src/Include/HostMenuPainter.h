@@ -20,10 +20,11 @@
 	system module. A Delphi object-instance thunk lives in no module at all,
 	which counts.
 
-	The old-style replacement is also why the backdrop could outlive the menu:
-	"It is difficult to remove a subclass after it is created" - restoring the
-	saved procedure cuts comctl32's chain, and Shell's subclass with it, out
-	before WM_NCDESTROY.
+	In WizTree the backdrop also outlived the menu: no #32768 was left, yet
+	Shell's subclass never saw WM_NCDESTROY. An old-style replacement explains it
+	- "It is difficult to remove a subclass after it is created", and restoring
+	the saved procedure cuts comctl32's chain out - but that is inferred, not
+	traced. ContextMenu::Uninitialize() destroys a leftover backdrop either way.
 	https://learn.microsoft.com/en-us/windows/win32/controls/subclassing-overview
 	https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexw
 */

@@ -502,7 +502,9 @@ namespace Nilesoft
 					editor holding it for write, measured) is not "no configuration",
 					and neither case may publish an empty one over a generation or
 					shadow already in hand. init() then asks the next menu to retry,
-					because releasing a file changes no stamp the watcher could see.
+					because releasing a file changes no stamp the watcher could see -
+					logged once, not once per retry, since a file that stays
+					unreadable would otherwise add a line to shell.log per right-click.
 					An emptied-but-readable file is not this case.
 				*/
 				outcome.unreadable = parser->RootUnavailable() && parser->RootStamp() != 0;
@@ -510,10 +512,12 @@ namespace Nilesoft
 				   (parser->RootUnavailable() &&
 					(has_snapshot() || !ConfigShadow::resolve(ConfigShadow::default_directory()).empty())))
 				{
+					const bool reported = LastError.code == TokenError::CannotFoundConfigFile;
 					LastError = { TokenError::CannotFoundConfigFile, 0, 0 };
-					Logger::Error(L"error %s, \"%s\"",
-								  ParserException::errortostr(TokenError::CannotFoundConfigFile),
-								  parser->RootPath().c_str());
+					if(!reported)
+						Logger::Error(L"error %s, \"%s\"",
+									  ParserException::errortostr(TokenError::CannotFoundConfigFile),
+									  parser->RootPath().c_str());
 					return false;
 				}
 
