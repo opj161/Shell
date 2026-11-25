@@ -279,7 +279,14 @@ namespace Nilesoft
 				sei.lpFile = getpath(file);
 				sei.lpVerb = verb;
 				sei.lpParameters = parameters;
-				sei.lpDirectory = directory;
+				// Left unset when there is no directory, which is what Run() above
+				// does: ShellExecuteEx documents lpDirectory as "the default
+				// directory" and NULL as "the current directory is used", while an
+				// empty string is not a documented value. A string converting to
+				// L"" rather than nullptr would otherwise land here.
+				// https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shellexecuteinfow
+				if(!string::IsNullOrWhiteSpace(directory))
+					sei.lpDirectory = directory;
 				sei.nShow = showCmd;
 				if(::ShellExecuteExW(&sei))
 				{

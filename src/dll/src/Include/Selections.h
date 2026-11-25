@@ -181,7 +181,13 @@ namespace Nilesoft
 				string get(const string &quote = nullptr, const wchar_t* sep = nullptr) const
 				{
 					string result = Path;
-					if(sep) result.replace(L"\\", sep);
+					// `sep && *sep`, not `sep`: an empty separator must mean "no
+					// replacement", or replace() strips every backslash and hands
+					// back a mangled path. This became reachable when c_str()
+					// started answering L"" for an empty string instead of nullptr
+					// - callers reach this through `eval_arg(1).to_string().c_str()`.
+					// Selections::Sel already guards path_sep the same way.
+					if(sep && *sep) result.replace(L"\\", sep);
 					return !quote.empty() ? Quote(result, quote).move() : result.move();
 				}
 

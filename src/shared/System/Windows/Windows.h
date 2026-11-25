@@ -60,6 +60,26 @@ namespace Nilesoft
 				//OSVERSIONINFOEXW osvi = { };
 				//osvi.dwOSVersionInfoSize = sizeof(osvi);
 				//DLL::Invoke<long>(L"ntdll", "RtlGetVersion", &osvi);
+				// RtlGetNtVersionNumbers is an undocumented ntdll export - there is
+				// no Learn page for it - so what it returns is established by
+				// measurement, not by reading. It is used rather than GetVersionEx
+				// or the VersionHelpers because those are manifest-gated and report
+				// 6.2 to an unmanifested caller, which this DLL is: it is loaded by
+				// whatever host activates it, so it cannot rely on a manifest of
+				// its own.
+				//
+				// Probed 2026-11-25 on Windows 11 26H2 26300.9974 x64, against
+				// HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\CurrentBuild:
+				//
+				//   build returned : 0xF00066BC
+				//   masked         : 26300
+				//   CurrentBuild   : 26300   -> match
+				//
+				// The high nibble carries flags, which is what the mask below
+				// removes; 0x66BC is the build. Re-run that comparison if the
+				// version ever reads wrong - a changed flag layout would show up
+				// as a build number in the billions, and every IsWindows11OrGreater
+				// branch depends on it.
 				DLL::Invoke(L"ntdll", "RtlGetNtVersionNumbers", &Major, &Minor, &Build);
 				if(Major > 0)
 				{

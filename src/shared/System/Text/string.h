@@ -604,9 +604,24 @@ for (const char* p = s; *p != 0; p++) {
 				return nullptr;
 			}
 
+			// An empty string answers L"", not nullptr. valid() is
+			// `m_data && m_length > 0`, so the old nullptr return applied to every
+			// legitimately empty string, and std::wstring_view's pointer
+			// constructor calls char_traits::length on whatever it is given - so
+			// `std::wstring_view(s.c_str())` faulted on every empty s. A top-level
+			// menu item's path is empty, which made that the first item of every
+			// menu rather than an edge case, and the fault landed inside the hook's
+			// SEH region where catch(...) under /EHsc does not reach it: a menu
+			// that never appeared, with nothing in any log.
+			//
+			// Nothing depended on the nullptr: of 532 c_str() call sites, none
+			// tested the result against null. A sink that means "absent" must test
+			// emptiness, which is what the codebase already does everywhere it
+			// matters (`if(x && *x)`).
+			// https://learn.microsoft.com/en-us/cpp/standard-library/basic-string-view-class
 			const wchar_t *c_str() const
 			{
-				return valid() ? m_data : nullptr;
+				return valid() ? m_data : L"";
 			}
 
 			wchar_t *data() { return this->m_data; }
@@ -1958,8 +1973,13 @@ std::wstring replace(std::wstring const &original,
 			operator Char() const { return (Char)(valid() ? m_data[0] : 0); }
 			operator char() const { return valid() ? (char)m_data[0] : 0; }
 			operator wchar_t() const { return valid() ? m_data[0] : 0; }
+			// The const conversion matches c_str() above: empty means L"".
+			// The mutable one deliberately does not - handing out a writable
+			// pointer into a shared string literal is worse than handing out
+			// nullptr, and anything writing through it on an empty string is
+			// already wrong.
 			operator wchar_t *() const { return valid() ? m_data : nullptr; }
-			operator wchar_t const *() const { return valid() ? m_data : nullptr; }
+			operator wchar_t const *() const { return valid() ? m_data : L""; }
 			operator string() const { return *this; }
 
 			operator std::wstring() const
