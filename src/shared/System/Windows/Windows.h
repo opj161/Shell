@@ -5,7 +5,6 @@ namespace Nilesoft
 {
 	namespace Windows
 	{
-		constexpr auto LEXPLORER = L"explorer.exe";
 		constexpr auto SHGETSETSETTINGS = "SHGetSetSettings";
 		constexpr auto SHCHANGENOTIFY="SHChangeNotify";
 		constexpr auto SHELL32=L"Shell32.dll";
@@ -358,58 +357,18 @@ namespace Nilesoft
 		*/
 
 
-		/*
-			 INPUT input[2] {};
-			 input[0].type = INPUT_KEYBOARD;
-			 input[0].ki.wVk = VK_F5;
-			 input[0].ki.dwFlags = 0;
-			 input[0].ki.dwExtraInfo = 0;
-
-			 input[1].type = INPUT_KEYBOARD;
-			 input[1].ki.wVk = VK_F5;
-			 input[1].ki.dwFlags = KEYEVENTF_KEYUP;
-			 input[1].ki.dwExtraInfo = 0;
-
-			 SendInput(2, input, sizeof(INPUT));
-		 */
 		class Explorer
 		{
 		public:
-			static void PressKey(WORD vkey)
-			{
-				INPUT ip{};
-				// Set up a generic keyboard event.
-				ip.type = INPUT_KEYBOARD;
-				// Press vkey key
-				ip.ki.wVk = vkey; // virtual-key code for the vkey
-				//ip.ki.dwFlags = 0; // 0 for key press
-				::SendInput(1, &ip, sizeof(INPUT));
-				// Release the "F5" key
-				ip.ki.dwFlags = KEYEVENTF_KEYUP; // KEYEVENTF_KEYUP for key release
-				::SendInput(1, &ip, sizeof(INPUT));
-			}
-
-			// https://stackoverflow.com/questions/5689904/gracefully-exit-explorer-programmatically
-			static BOOL Exit()
-			{
-				auto hWndTray = ::FindWindowExW(nullptr, nullptr, L"Shell_TrayWnd", nullptr);
-				return hWndTray ? ::PostMessageW(hWndTray, 0x5B4, 0, 0) : FALSE;
-			}
-
+			// Live: ToggleHiddenFiles / ToggleExtensions call it below Windows 10.
 			static void Refresh(bool all_windows = false)
 			{
-				//PostMessageW(::GetActiveWindow(), WM_KEYDOWN, VK_F5, NULL);
-				//PostMessageW(::GetActiveWindow(), WM_KEYUP, VK_F5, NULL);
-				//SendMessage(wnd, WM_COMMAND, 1 << 16 | 41504, 0);
-				 //28931 Windows XP
-				 //41504 Windows vista or greater
+				// 28931 Windows XP, 41504 Windows Vista or greater.
 				auto refresh = 41504;
 				if(all_windows)
 					::SendMessageW(HWND_BROADCAST, WM_COMMAND, refresh, NULL);
 				else
 					::SendMessageW(::GetActiveWindow(), WM_COMMAND, refresh, NULL);
-				//PressKey(VK_F5);
-				//DLL::Invoke(SHELL32, SHCHANGENOTIFY, SHCNE_ASSOCCHANGED, SHCNF_FLUSH, nullptr, nullptr);
 			}
 
 			static bool Restart()
@@ -450,105 +409,6 @@ namespace Nilesoft
 				return res > 0;
 			}
 
-			static bool Restart0()
-			{
-				if(auto hShell_TrayWnd = Window::FindTaskbar(); hShell_TrayWnd)
-				{
-					DWORD dwProcessId = 0;
-					if(::GetWindowThreadProcessId(hShell_TrayWnd, &dwProcessId) && dwProcessId)
-					{
-						if(auto hProcess = ::OpenProcess(PROCESS_TERMINATE, FALSE, dwProcessId); hProcess)
-						{
-							return ::TerminateProcess(hProcess, 0);
-						}
-					}
-				}
-				return false;
-			}
-
-			static bool Restart1()
-			{
-				if(auto hShell_TrayWnd = Window::FindTaskbar(); hShell_TrayWnd)
-				{
-					DWORD dwProcessId;
-					::GetWindowThreadProcessId(hShell_TrayWnd, &dwProcessId);
-					auto hProcess = ::OpenProcess(PROCESS_TERMINATE, FALSE, dwProcessId);
-					if(hProcess)
-					{
-						if(::TerminateProcess(hProcess, 0))
-						{
-							/*::Sleep(2000);
-							hShell_TrayWnd =  Window::FindTaskbar();
-							if(!hShell_TrayWnd)
-							{
-								::ShellExecuteW(nullptr, nullptr, EXPLORER, nullptr, nullptr, SW_NORMAL);
-							}*/
-
-							return true;
-						}
-					}
-				}
-				return false;
-				/*
-				//get desktop HWND
-				auto hProgMan = FindWindowW(DESKTOP_PROGMAN, nullptr);
-				int t = 0;
-				while(hProgMan == nullptr)
-				{
-					::Sleep(500);
-					hProgMan = ::FindWindowW(DESKTOP_PROGMAN, nullptr);
-					if(++t > 100 && (hProgMan == nullptr))
-						break;
-				}
-
-				if(hProgMan)
-				{
-					::PostMessageW(hProgMan, WM_QUIT, 0, TRUE);   // <=  lParam == TRUE !
-					return;
-				}
-
-				// get taskbar HWND
-				auto hTaskBar = Window::Find(WC_Shell_TrayWnd);
-				t = 0;
-				while(hTaskBar == nullptr)
-				{
-					::Sleep(500);
-					hTaskBar = Window::Find(WC_Shell_TrayWnd);
-					if(++t > 100 && (hTaskBar == nullptr))
-						break;
-				}
-
-				if(hTaskBar != nullptr)
-					::PostMessageW(hTaskBar, WM_USER + 436, 0, FALSE);   // <=  lParam == FALSE !
-				*/
-			}
-			static bool Restart2()
-			{
-				auto hTaskBar = Window::FindTaskbar();
-				int t = 0;
-				while(hTaskBar == nullptr)
-				{
-					::Sleep(500);
-					hTaskBar = Window::FindTaskbar();
-					if(++t > 100 && (hTaskBar == nullptr))
-						return false;
-				}
-
-				DWORD dwPID;
-				if(::GetWindowThreadProcessId(hTaskBar, &dwPID))
-				{
-					if(auto hProcess = ::OpenProcess(PROCESS_TERMINATE, FALSE, dwPID))
-					{
-						if(::TerminateProcess(hProcess, 0))
-						{
-							Sleep(2000);
-							::ShellExecuteW(NULL, NULL, LEXPLORER, NULL, NULL, SW_SHOWNORMAL);
-							return true;
-						}
-					}
-				}
-				return false;
-			}
 			/*
 				RegRead, HiddenFilesStatus, HKEY_CURRENT_USER, Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced, Hidden
 				HiddenFilesStatus := HiddenFilesStatus != 1 ? 1 : 2 ; 1 = show hidden files / 2 = hide hidden files

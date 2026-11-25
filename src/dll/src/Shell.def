@@ -4,6 +4,3 @@ EXPORTS
 	DllCanUnloadNow			PRIVATE
 	DllGetClassObject		PRIVATE
 	ShellCheckConfig		PRIVATE
-	;DllRegisterServer		PRIVATE
-	;DllUnregisterServer		PRIVATE
-	;DllInstall				PRIVATE

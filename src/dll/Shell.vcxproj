@@ -202,9 +202,7 @@
     <ClInclude Include="src\Include\RegistryConfig.h" />
     <ClInclude Include="src\Include\Theme.h" />
     <ClInclude Include="src\Include\Keyboard.h" />
-    <ClInclude Include="src\Include\Styles.h" />
     <ClInclude Include="src\Include\Tip.h" />
-    <ClInclude Include="src\Include\UTheme.h" />
     <ClInclude Include="src\Include\win32_hook.h" />
     <ClInclude Include="src\Parser\IdentHash.h" />
     <ClInclude Include="src\Parser\Lexer.h" />

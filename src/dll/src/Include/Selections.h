@@ -245,9 +245,6 @@ namespace Nilesoft
 			IShellItemArray *ItemArray{};
 			bool			ItemArrayOwned{};
 
-			IShellView *ShellView{};
-			IFolderView2 *FolderView{};
-
 			struct
 			{
 				bool		explorer{};
@@ -287,18 +284,10 @@ namespace Nilesoft
 				if(ItemArrayOwned && ItemArray)
 					ItemArray->Release();
 
-				if(ShellView)
-					ShellView->Release();
-
-				if(FolderView)
-					FolderView->Release();
-
 				ShellBrowser = {};
 				ShellBrowserOwned = false;
 				ItemArray = {};
 				ItemArrayOwned = false;
-				ShellView = {};
-				FolderView = {};
 			}
 
 			Selections(const Selections &other) = delete;

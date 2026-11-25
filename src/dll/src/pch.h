@@ -104,7 +104,6 @@ using namespace Nilesoft;
 #include "Expression\IdentExpression.h"
 
 
-#include "Include\Styles.h"
 #include "Include\Menu.h"
 #include "Include\MenuItem.h"
 #include "Include\Cache.h"

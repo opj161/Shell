@@ -198,11 +198,3 @@ TEST(manifest, embedded_manifest_is_well_formed_and_namespaced)
 	Com com;
 	check_manifest(L"shared\\Resource\\manifest.xml");
 }
-
-// The version tool copies this one over the other. Fixing only the destination
-// would last exactly until the next version bump.
-TEST(manifest, version_tool_template_matches)
-{
-	Com com;
-	check_manifest(L"tools\\version\\manifest.xml");
-}

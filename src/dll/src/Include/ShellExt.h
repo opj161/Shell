@@ -70,7 +70,6 @@ namespace Nilesoft
 	{
 		// Outstanding COM objects, so DllCanUnloadNow can answer honestly.
 		inline std::atomic<long> com_object_count{ 0 };
-		inline std::atomic<bool> hooks_installed{ false };
 
 		// Minimal owning COM pointer. ShellExt.h stays free of the DLL's include
 		// order so the test project can compile ShellExt.cpp on its own.

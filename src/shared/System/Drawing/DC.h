@@ -323,24 +323,6 @@ private GraphicsPath svgMLQZToGraphicsPath(string svgString)
 				return ::CreateCompatibleDC(_handle);
 			}
 
-			DC &GetWindowDC(HWND hWnd, bool save = false)
-			{
-				auto release();
-				_handle = ::GetWindowDC(hWnd);
-				_hWnd = hWnd; 
-				_release = save ? 0 : 2;
-				return *this;
-			}
-		
-			DC &GetDC(HWND hWnd, bool save = false)
-			{
-				auto release();
-				_handle = ::GetDC(hWnd);
-				_hWnd = hWnd;
-				_release = save ? 0 : 2;
-				return *this;
-			}
-
 			int save() { _savedDC = ::SaveDC(_handle); return _savedDC; }
 			bool restore(int savedDC = 0) { return ::RestoreDC(_handle, savedDC == 0 ? _savedDC : savedDC); }
 
