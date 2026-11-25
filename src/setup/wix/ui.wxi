@@ -135,7 +135,6 @@
 			<Control Id='OK' Type='PushButton' X='240' Y='243' Width='56' Height='17' Text='OK' TabSkip='no' Default='yes'>
 				<Publish Event='SetTargetPath' Value='[_BrowseProperty]' />
 				<Publish Event='EndDialog' Value='Return' />
-				<Publish Condition='0' Event='SpawnDialog' Value='InvalidDirDlg' />
 			</Control>
 			<Control Id='Cancel' Type='PushButton' X='304' Y='243' Width='56' Height='17' Text='Cancel' TabSkip='no' Cancel='yes'>
 				<Publish Event='Reset' Value='0' />
@@ -162,7 +161,6 @@
 		<Dialog Id='InstallDirDlg' X='50' Y='50' Width='370' Height='270' Title='[ProductName] Setup'>
 			<Control Id='Next' Type='PushButton' X='236' Y='243' Width='56' Height='17' Text='&amp;Next' TabSkip='no' Default='yes'>
 				<Publish Event='SetTargetPath' Value='[WIXUI_INSTALLDIR]' />
-				<Publish Condition='0' Event='SpawnDialog' Value='InvalidDirDlg' />
 				<Publish Event='NewDialog' Value='VerifyReadyDlg' />
 			</Control>
 			<Control Id='Back' Type='PushButton' X='180' Y='243' Width='56' Height='17' Text='&amp;Back' TabSkip='no'>
@@ -198,13 +196,6 @@
 				<Publish Event='EndDialog' Value='Exit' />
 			</Control>
 			<Control Id='Text' Type='Text' X='48' Y='15' Width='194' Height='30' Text='Are you sure you want to cancel [ProductName] installation?' NoPrefix='yes' TabSkip='yes' />
-			<Control Id='Icon' Type='Icon' X='15' Y='15' Width='24' Height='24' Text='WixUI_Ico_Info' Disabled='yes' FixedSize='yes' IconSize='32' ToolTip='Information icon' TabSkip='yes' />
-		</Dialog>
-		<Dialog Id='InvalidDirDlg' X='50' Y='50' Width='260' Height='85' Title='[ProductName] Setup'>
-			<Control Id='OK' Type='PushButton' X='102' Y='57' Width='56' Height='17' Text='OK' TabSkip='no' Default='yes' Cancel='yes'>
-				<Publish Event='EndDialog' Value='Return' />
-			</Control>
-			<Control Id='Text' Type='Text' X='48' Y='22' Width='194' Height='30' Text='Installation directory must be on a local hard drive.' TabSkip='yes' />
 			<Control Id='Icon' Type='Icon' X='15' Y='15' Width='24' Height='24' Text='WixUI_Ico_Info' Disabled='yes' FixedSize='yes' IconSize='32' ToolTip='Information icon' TabSkip='yes' />
 		</Dialog>
 		<Dialog Id='WelcomeDlg' X='50' Y='50' Width='370' Height='270' Title='[ProductName] Setup'>

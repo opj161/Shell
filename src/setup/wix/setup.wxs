@@ -34,7 +34,6 @@
 		InstallerVersion='500'
 		Compressed='yes'
 		Scope='perMachine'
-		ProductCode='$(var.ProductCode)'
 		UpgradeCode='$(var.UpgradeCode)'
 		Manufacturer='$(var.Manufacturer)'
 		Name='$(var.FullName)'
@@ -66,6 +65,102 @@
 		<Property Id='BURNMSIMODIFY' Value='0' Secure='yes' />
 		<Property Id='BURNMSIREPAIR' Value='0' Secure='yes' />
 		<Property Id='BURNMSIUNINSTALL' Value='1' Secure='yes' />
+
+		<?if $(sys.BUILDARCH) = x86 ?>
+		<!--
+			This package carries a 32-bit shell.dll, which the 64-bit Explorer on a
+			64-bit Windows cannot load, and its registration would land in the 32-bit
+			registry view where nothing that matters reads it. So it installs only on
+			32-bit Windows. 'Installed OR' keeps an uninstall or repair of an existing
+			x86 install possible on a machine that has since become 64-bit: a launch
+			condition is evaluated in maintenance mode too, and without it the
+			package could not remove itself.
+
+			  .bin/wix-docs/schema/wxs/launch.mdx
+			  https://learn.microsoft.com/windows/win32/msi/launchcondition-table
+			  https://learn.microsoft.com/windows/win32/msi/versionnt64
+		-->
+		<Launch Condition='Installed OR NOT VersionNT64'
+			Message='This is the 32-bit package, which is only for 32-bit Windows. Shell loads into the 64-bit Explorer on 64-bit Windows, and that cannot load a 32-bit shell.dll. Install the x64 or ARM64 package instead.' />
+		<?else?>
+		<!--
+			The Windows build number, because Windows Installer's own WindowsBuild
+			property does not report it: it is 9600 and VersionNT is 603 on Windows
+			10 and 11 (verbose logs on Windows 11 26200 and 26300), and the
+			operating-system property table stops at 8.1. A condition of
+			WindowsBuild >= 22000 was therefore never true, and no TreatAs action
+			ever ran. The registry is where Windows records it:
+			CurrentBuildNumber is a REG_SZ, which a 'raw' search returns unprefixed.
+
+			A comparison of an integer with a property that cannot be converted to
+			one is false, so a search that finds nothing disables the redirect rather
+			than enabling it by accident.
+
+			Secure because AppSearch runs in the UI sequence and the TreatAs
+			conditions are evaluated in the execute sequence, which on a managed
+			install is the elevated server side; only secure properties cross.
+			64-bit view because that is where Windows 11 lives, whatever the bitness
+			of the package.
+
+			  .bin/wix-docs/schema/wxs/registrysearch.mdx
+			  https://learn.microsoft.com/windows/win32/msi/operating-system-property-values
+			  https://learn.microsoft.com/windows/win32/msi/conditional-statement-syntax
+			  https://learn.microsoft.com/windows/win32/msi/securecustomproperties
+		-->
+		<Property Id='WINDOWSCURRENTBUILD' Secure='yes'>
+			<RegistrySearch Id='WindowsCurrentBuildNumber' Root='HKLM'
+				Key='SOFTWARE\Microsoft\Windows NT\CurrentVersion' Name='CurrentBuildNumber'
+				Type='raw' Bitness='always64' />
+		</Property>
+		<?endif?>
+
+		<!--
+			The folder a previous Shell was installed to, found through its
+			APPLICATION component's key path (shell.exe). Nothing else seeds
+			INSTALLFOLDER from an existing install, so without this an upgrade
+			resolves it to the default folder; BackupLegacyConfig then looks for
+			shell.nss there, finds nothing, and the old upstream product's removal
+			deletes the real one in the custom folder. AppSearch: "A signature that
+			is not in the Signature table denotes a directory and the action sets
+			the property to the directory path for that signature."
+
+			Upstream used one component code for every architecture, and the x64
+			package keeps it as its own, so only arm64 and x86 need it listed.
+
+			  .bin/wix-docs/schema/wxs/componentsearch.mdx
+			  https://learn.microsoft.com/windows/win32/msi/appsearch-action
+			  https://learn.microsoft.com/windows/win32/msi/complocator-table
+		-->
+		<Property Id='PREVIOUSINSTALLFOLDER' Secure='yes'>
+			<ComponentSearch Id='PreviousApplication' Guid='$(var.ApplicationComponentGuid)' />
+			<?if $(sys.BUILDARCH) != x64 ?>
+			<ComponentSearch Id='PreviousUpstreamApplication' Guid='{ED9EFE4B-E83D-42BB-8938-F72B13A2FAD2}' />
+			<?endif?>
+		</Property>
+		<!--
+			Seeds INSTALLFOLDER with a type 51 action, which is SetProperty and not
+			SetDirectory on purpose. SetDirectory emits a type 35 action scheduled
+			after CostFinalize (1001 in the built package), and type 35 "should not
+			change the target directory path if some components that use that path
+			are already installed" - which the x64 package is in exactly this case,
+			because it shares upstream's APPLICATION component code. Type 51 before
+			CostFinalize only changes the directory's default, and CostFinalize
+			resolves the directory from the property: "If the custom action is to run
+			before the CostFinalize Action, you can use a Custom Action Type 51".
+
+			Directory properties are not resolved until CostFinalize (see AGENTS.md),
+			so before it INSTALLFOLDER is empty unless someone set it, and
+			NOT INSTALLFOLDER leaves a command-line INSTALLFOLDER alone. 'first' is
+			the UI sequence, or the execute sequence only when the UI was skipped:
+			run again in the execute sequence it would overwrite the folder the user
+			chose in the dialog. Both sequences, so the folder dialog shows it.
+
+			  .bin/wix-docs/schema/wxs/setproperty.mdx
+			  https://learn.microsoft.com/windows/win32/msi/changing-the-target-location-for-a-directory
+			  https://learn.microsoft.com/windows/win32/msi/custom-action-type-51
+		-->
+		<SetProperty Id='INSTALLFOLDER' Value='[PREVIOUSINSTALLFOLDER]' After='AppSearch' Sequence='first'
+			Condition='NOT Installed AND PREVIOUSINSTALLFOLDER AND NOT INSTALLFOLDER' />
 		
 		<StandardDirectory Id='$(var.PlatformProgramFilesFolder)'>
 			<Directory Id='INSTALLFOLDER' Name='$(var.FullName)'>
@@ -190,6 +285,25 @@
 						Name='Content Type' Type='string' Value='text/plain' />
 					<RegistryValue Id='NssOpenCommand' Root='HKCR' Key='.nss\shell\open\command'
 						Type='string' Value='notepad &quot;%1&quot;' />
+
+					<!--
+						Servicing only. This package never registers FolderExtensions, but
+						`shell.exe -register -force` did until upstream ed826e1, and the MSI no
+						longer runs `shell.exe -unregister`, which was what deleted them. A
+						machine registered that way still carries the CLSID and Shell's own
+						subkey under Drive\shellex\FolderExtensions, and uninstalling would
+						strand both. Only Shell's own subkey: the FolderExtensions parent is
+						shared. Neither key is created here, so a clean machine is a no-op.
+						The 64-bit view is the one shell.exe wrote, and the component's
+						bitness is what selects it.
+
+						  .bin/wix-docs/schema/wxs/removeregistrykey.mdx
+						  https://learn.microsoft.com/windows/win32/msi/registry-table
+					-->
+					<RemoveRegistryKey Id='LegacyFolderExtensionsClass' Action='removeOnUninstall' Root='HKCR'
+						Key='CLSID\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF3}' />
+					<RemoveRegistryKey Id='LegacyFolderExtensionsDrive' Action='removeOnUninstall' Root='HKLM'
+						Key='SOFTWARE\Classes\Drive\shellex\FolderExtensions\{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF3}' />
 				</Component>
 				<!--
 					shell.nss is the user's own file, and three separate mechanisms keep
@@ -349,6 +463,13 @@
 			HideTarget='yes' keeps the path out of the log. Actions use explicit
 			HKLM and the 64-bit registry view.
 
+			Not in the x86 package. It is refused on 64-bit Windows (launch condition
+			above), so it only ever runs on 32-bit Windows, which has no Windows 11
+			menu to redirect - and a build of it that did run on 64-bit Windows would
+			write a redirect to a CLSID that exists only in the 32-bit registry view.
+
+			The condition reads WINDOWSCURRENTBUILD, not WindowsBuild; see the property.
+
 			  .bin/wix-docs/schema/wxs/customaction.mdx
 			  https://learn.microsoft.com/windows/win32/com/treatas
 			  https://learn.microsoft.com/windows/win32/sysinfo/merged-view-of-hkey-classes-root
@@ -357,6 +478,7 @@
 			  https://learn.microsoft.com/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
 			  https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regcreatekeyexw
 		-->
+		<?if $(sys.BUILDARCH) != x86 ?>
 		<CustomAction Id='PrepareTreatAs' Return='check' BinaryRef='CA' DllEntry='PrepareTreatAs' />
 		<CustomAction Id='TreatAsRollback' Execute='rollback' Impersonate='no' Return='check'
 					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsRollback' />
@@ -364,6 +486,7 @@
 					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsApply' />
 		<CustomAction Id='TreatAsCommit' Execute='commit' Impersonate='no' Return='ignore'
 					  HideTarget='yes' BinaryRef='CA' DllEntry='TreatAsCommit' />
+		<?endif?>
 		<!--
 			Registration is declarative above. Notify the Shell after the MSI
 			transaction commits; SHCNE_ASSOCCHANGED requires SHCNF_IDLIST and null
@@ -378,20 +501,24 @@
 			<Custom Action='OnDowngrading' After='FindRelatedProducts' Condition='NEWPRODUCTFOUND' />
 			<Custom Action='BackupLegacyConfig' After='CostFinalize'
 				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
+			<?if $(sys.BUILDARCH) != x86 ?>
 			<Custom Action='PrepareTreatAs' After='InstallValidate'
-					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+					Condition='VersionNT64 AND (WINDOWSCURRENTBUILD &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+			<?endif?>
 			<Custom Action='RestoreLegacyConfigRollback' After='InstallFiles'
 				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
 			<Custom Action='RestoreLegacyConfig' After='RestoreLegacyConfigRollback'
 				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
 			<Custom Action='CleanupLegacyConfig' After='RestoreLegacyConfig'
 				Condition='(NOT Installed) AND (NOT REMOVE) AND UPGRADEFOUND AND LEGACYCONFIGUPGRADE' />
+			<?if $(sys.BUILDARCH) != x86 ?>
 			<Custom Action='TreatAsRollback' After='WriteRegistryValues'
-					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+					Condition='VersionNT64 AND (WINDOWSCURRENTBUILD &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
 			<Custom Action='TreatAsApply' After='TreatAsRollback'
-					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+					Condition='VersionNT64 AND (WINDOWSCURRENTBUILD &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
 			<Custom Action='TreatAsCommit' After='TreatAsApply'
-					Condition='VersionNT64 AND (WindowsBuild &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+					Condition='VersionNT64 AND (WINDOWSCURRENTBUILD &gt;= 22000) AND (((NOT Installed) AND (NOT REMOVE)) OR ((REMOVE=&quot;ALL&quot;) AND (NOT UPGRADINGPRODUCTCODE)))' />
+			<?endif?>
 			<Custom Action='NotifyShellChanged' After='InstallFinalize' />
 			<!--
 				The old product is removed entirely before the new one is installed. It

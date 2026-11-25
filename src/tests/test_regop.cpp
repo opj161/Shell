@@ -5,6 +5,7 @@
 #include "Globals.h"
 #include "System.h"
 #include "RegistryConfig.h"
+#include "TreatAsRegistry.h"
 
 using Nilesoft::REGOP;
 using Nilesoft::unregister_if_present;
@@ -137,4 +138,18 @@ TEST(regop, a_legacy_folderextensions_key_still_reports_as_registered)
 			CHECK_MSG(!RegistryConfig::IsFolderExtensions(),
 					  "and stops reporting once the key is gone");
 	}
+}
+
+// shell.exe's redirect code and the installer's custom action share one
+// definition of the target (src/shared/TreatAsRegistry.h); RegistryConfig
+// registers the CLSID under CLS_ContextMenu. If the two ever differ the redirect
+// would point Windows at a class nothing registered - which main.cpp also
+// refuses to compile, but a test says why.
+TEST(regop, the_redirect_target_is_the_registered_context_menu_clsid)
+{
+	using Nilesoft::TreatAsRegistry::same_text;
+	using Nilesoft::TreatAsRegistry::TargetClsid;
+
+	CHECK(same_text(TargetClsid, CLS_ContextMenu));
+	CHECK(!same_text(TargetClsid, CLS_IconOverlay));
 }

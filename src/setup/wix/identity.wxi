@@ -1,5 +1,23 @@
 <!--
-	Stable package identity. Nothing generated belongs in this file.
+	Stable package identity: the component codes below. Nothing generated belongs
+	in this file.
+
+	There is deliberately no ProductCode here. It used to be one hard-coded GUID
+	per architecture, and the version tool never changed this file, so every
+	release carried the ProductCode of the one before it. A major upgrade "needs
+	a change of the ProductCode Property"; with the same one Windows Installer
+	treats the newer package as a reinstall of the installed product and refuses
+	with 1638, "another version of this product is already installed".
+	setup.wxs leaves ProductCode unset, so WiX generates a new one with every
+	build - "enabling major upgrades" - and the UpgradeCode, which is what ties
+	the releases together, stays in setup.wxs.
+
+	  https://learn.microsoft.com/windows/win32/msi/major-upgrades
+	  .bin/wix-docs/schema/wxs/package.mdx
+
+	A rebuild of the *same* version gets a different ProductCode too, which is
+	fine: the Upgrade table's NEWPRODUCTFOUND row (Minimum = this version,
+	inclusive, detect only) catches it, and OnDowngrading refuses it.
 
 	The version tool (src\tools\version\version.ps1) used to copy a three-line
 	template over this file, which deleted every GUID below and left setup.wxs
@@ -8,13 +26,6 @@
 	if this one changes underneath it.
 -->
 <Include xmlns='http://wixtoolset.org/schemas/v4/wxs'>
-<?if $(sys.BUILDARCH) = x64 ?>
-	<?define ProductCode = '{7BCA6512-254B-456F-8F08-AAD7508BE640}' ?>
-<?elseif $(sys.BUILDARCH) = arm64 ?>
-	<?define ProductCode = '{7BCA6512-254B-456F-8F08-AAD7508BEAA0}' ?>
-<?else ?>
-	<?define ProductCode = '{7BCA6512-254B-456F-8F08-AAD7508BE320}' ?>
-<?endif ?>
 
 <!--
 	Component codes.

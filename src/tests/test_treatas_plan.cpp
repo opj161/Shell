@@ -4,6 +4,7 @@
 #include <string>
 
 #include "../setup/ca/TreatAsPlan.h"
+#include "TreatAsRegistry.h"
 
 namespace
 {
@@ -77,4 +78,34 @@ TEST(treatas_plan, rollback_deletes_treatas_only_when_this_transaction_created_i
 	Nilesoft::TreatAsPlan::Plan uninstall;
 	CHECK(Nilesoft::TreatAsPlan::Parse(L"uninstall-ours", uninstall));
 	CHECK(!Nilesoft::TreatAsPlan::RollbackRemovesTreatAs(uninstall, true));
+}
+
+// The state machine itself writes HKLM and so cannot run here; what can be
+// pinned is the read half, which is what both shell.exe and the custom action
+// plan from. Whatever this machine has, the answer must be one of the four
+// states, and only "inaccessible" may carry an error.
+TEST(treatas_plan, reading_the_redirect_is_total_and_reports_errors_only_when_inaccessible)
+{
+	using Nilesoft::TreatAsRegistry::State;
+
+	LSTATUS error = ERROR_GEN_FAILURE;
+	auto state = Nilesoft::TreatAsRegistry::Query(&error);
+	CHECK(state == State::absent || state == State::ours
+		|| state == State::foreign || state == State::inaccessible);
+	if(state == State::inaccessible)
+		CHECK(error != ERROR_SUCCESS);
+	else
+		CHECK_EQ(error, ERROR_SUCCESS);
+}
+
+TEST(treatas_plan, same_text_compares_whole_strings)
+{
+	using Nilesoft::TreatAsRegistry::same_text;
+
+	static_assert(same_text(L"abc", L"abc"));
+	static_assert(!same_text(L"abc", L"abd"));
+	static_assert(!same_text(L"abc", L"ab"));
+	static_assert(!same_text(L"ab", L"abc"));
+	static_assert(same_text(L"", L""));
+	CHECK(same_text(L"{x}", L"{x}"));
 }

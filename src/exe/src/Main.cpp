@@ -11,7 +11,7 @@
 #include <shlobj.h>
 #include <Library/PlutoVGWrap.h>
 #include <RegistryConfig.h>
-#include <BorrowedKeyAccess.h>
+#include <TreatAsRegistry.h>
 #include <ConfigCheck.h>
 #include <PerfReport.h>
 #include <ProviderQuarantine.h>
@@ -95,11 +95,16 @@ string loadstring(UINT id, HMODULE hmodule = nullptr)
 }
 
 
-// BorrowedKeyAccess and EnablePrivilege now live in src/shared so the
-// installer custom action uses the same mechanism rather than none. It reports
-// through a callback because the two callers have different places to report
-// to: this one has the log file, the custom action has MSI's message stream.
-using Nilesoft::Security::BorrowedKeyAccess;
+// The redirect's state machine - read, create, remove, with the
+// BorrowedKeyAccess borrow inside - lives in src/shared/TreatAsRegistry.h so the
+// installer custom action runs the same code rather than a copy. It reports the
+// borrow through a callback because the two callers have different places to
+// report to: this one has the log file, the custom action has MSI's message
+// stream. What is left here is only this caller's reporting.
+namespace TreatAs = Nilesoft::TreatAsRegistry;
+
+static_assert(TreatAs::same_text(TreatAs::TargetClsid, CLS_ContextMenu),
+	"the redirect must name the CLSID that RegistryConfig registers");
 
 static void borrow_report(const wchar_t *message)
 {
@@ -107,105 +112,10 @@ static void borrow_report(const wchar_t *message)
 		_log->error(message);
 }
 
-enum class TreatAsState
-{
-	absent,
-	ours,
-	foreign,
-	inaccessible
-};
-
-static constexpr wchar_t TreatAsParent[] =
-	L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}";
-static constexpr wchar_t TreatAsKey[] =
-	L"SOFTWARE\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\TreatAs";
-
-static TreatAsState QueryTreatAs(LSTATUS *error = nullptr)
-{
-	auto_regkey key{};
-	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TreatAsKey, 0,
-		KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_WOW64_64KEY, key);
-	if(rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
-	{
-		if(error) *error = ERROR_SUCCESS;
-		return TreatAsState::absent;
-	}
-	if(rc != ERROR_SUCCESS)
-	{
-		if(error) *error = rc;
-		return TreatAsState::inaccessible;
-	}
-
-	DWORD subkeys = 0;
-	DWORD values = 0;
-	rc = ::RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, &subkeys, nullptr,
-		                     nullptr, &values, nullptr, nullptr, nullptr, nullptr);
-	if(rc != ERROR_SUCCESS)
-	{
-		if(error) *error = rc;
-		return TreatAsState::inaccessible;
-	}
-
-	wchar_t value[64]{};
-	DWORD bytes = sizeof(value);
-	rc = ::RegGetValueW(key, nullptr, nullptr,
-		RRF_RT_REG_SZ | RRF_ZEROONFAILURE, nullptr, value, &bytes);
-	if(rc != ERROR_SUCCESS)
-	{
-		if(error) *error = rc == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : rc;
-		return rc == ERROR_FILE_NOT_FOUND ? TreatAsState::foreign : TreatAsState::inaccessible;
-	}
-
-	if(error) *error = ERROR_SUCCESS;
-	if(subkeys == 0 && values == 1
-	   && ::CompareStringOrdinal(value, -1, CLS_ContextMenu, -1, TRUE) == CSTR_EQUAL)
-		return TreatAsState::ours;
-	return TreatAsState::foreign;
-}
-
-static LSTATUS CreateTreatAsIfAbsent()
-{
-	auto_regkey parent{};
-	auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, TreatAsParent, 0,
-		KEY_CREATE_SUB_KEY | KEY_WOW64_64KEY, parent);
-	if(rc != ERROR_SUCCESS)
-		return rc;
-
-	HKEY raw = nullptr;
-	DWORD disposition = 0;
-	rc = ::RegCreateKeyExW(parent, L"TreatAs", 0, nullptr, REG_OPTION_NON_VOLATILE,
-		KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_WOW64_64KEY, nullptr, &raw, &disposition);
-	if(rc != ERROR_SUCCESS)
-		return rc;
-	auto_regkey key{ raw };
-
-	if(disposition != REG_CREATED_NEW_KEY)
-		return QueryTreatAs() == TreatAsState::ours ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
-
-	rc = ::RegSetValueExW(key, nullptr, 0, REG_SZ,
-		reinterpret_cast<const BYTE *>(CLS_ContextMenu), sizeof(CLS_ContextMenu));
-	if(rc != ERROR_SUCCESS)
-		::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TreatAsKey, KEY_WOW64_64KEY, 0);
-	return rc;
-}
-
-static LSTATUS RemoveTreatAsIfOurs()
-{
-	LSTATUS error = ERROR_SUCCESS;
-	auto state = QueryTreatAs(&error);
-	if(state == TreatAsState::absent)
-		return ERROR_SUCCESS;
-	if(state == TreatAsState::foreign)
-		return ERROR_ALREADY_EXISTS;
-	if(state == TreatAsState::inaccessible)
-		return error;
-	return ::RegDeleteKeyExW(HKEY_LOCAL_MACHINE, TreatAsKey, KEY_WOW64_64KEY, 0);
-}
-
 // One warning at the call site said only that the redirect "was not applied",
 // for every one of the ways this can fail - so the machine where it did fail
 // (2026-08-27, stock TrustedInstaller ACL) gave the reader nothing to act on.
-static bool report_treatas(const wchar_t *what, TreatAsState state, DWORD error)
+static bool report_treatas(const wchar_t *what, TreatAs::State state, DWORD error)
 {
 	static constexpr const wchar_t *names[] = { L"absent", L"ours", L"foreign", L"inaccessible" };
 	wchar_t detail[192]{};
@@ -218,34 +128,25 @@ static bool report_treatas(const wchar_t *what, TreatAsState state, DWORD error)
 
 bool disable_modern(bool register_redirect)
 {
-	auto state = QueryTreatAs();
+	auto state = TreatAs::Query();
 	if(register_redirect)
 	{
-		if(state == TreatAsState::ours)
+		if(state == TreatAs::State::ours)
 			return true;
-		if(state != TreatAsState::absent)
+		if(state != TreatAs::State::absent)
 			return report_treatas(L"another handler owns it, leaving it alone", state, 0);
 
-		auto rc = CreateTreatAsIfAbsent();
-		if(rc != ERROR_ACCESS_DENIED)
-			return rc == ERROR_SUCCESS ? true : report_treatas(L"create failed", state, rc);
-
-		// Expected on a stock machine: {86ca1aa0-...} is owned by
-		// NT SERVICE\TrustedInstaller and Administrators hold ReadKey.
-		BorrowedKeyAccess borrowed(borrow_report);
-		if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TreatAsParent, KEY_CREATE_SUB_KEY))
+		auto rc = TreatAs::Create(borrow_report);
+		if(rc == ERROR_SUCCESS)
+			return true;
+		if(rc == TreatAs::BorrowFailed)
 			return report_treatas(L"could not borrow write access", state, ERROR_ACCESS_DENIED);
-
-		rc = CreateTreatAsIfAbsent();
-		const bool restored = borrowed.restore();
-		if(rc != ERROR_SUCCESS)
-			return report_treatas(L"create failed even with borrowed access", state, rc);
-		if(!restored)
+		if(rc == ERROR_NOT_ALL_ASSIGNED)
 			return report_treatas(L"created, but owner or DACL was not restored", state, 0);
-		return true;
+		return report_treatas(L"create failed", state, rc);
 	}
 
-	if(state == TreatAsState::absent || state == TreatAsState::foreign)
+	if(state == TreatAs::State::absent || state == TreatAs::State::foreign)
 		return true;
 
 	// Every give-up below says which one it was. The install branch above was
@@ -253,26 +154,17 @@ bool disable_modern(bool register_redirect)
 	// which left the *removal* path - the one that fails outright on a stock
 	// machine, and the reason the installer could not uninstall - reporting
 	// nothing at all.
-	if(state != TreatAsState::ours)
+	if(state != TreatAs::State::ours)
 		return report_treatas(L"cannot read it, so leaving it alone", state, 0);
 
-	auto rc = RemoveTreatAsIfOurs();
-	if(rc != ERROR_ACCESS_DENIED)
-		return rc == ERROR_SUCCESS ? true : report_treatas(L"remove failed", state, rc);
-
-	BorrowedKeyAccess borrowed(borrow_report);
-	if(!borrowed.acquire(HKEY_LOCAL_MACHINE, TreatAsKey, DELETE))
-		return report_treatas(L"could not borrow delete access", state, ERROR_ACCESS_DENIED);
-
-	rc = RemoveTreatAsIfOurs();
+	auto rc = TreatAs::Remove(borrow_report);
 	if(rc == ERROR_SUCCESS)
-	{
-		borrowed.release_deleted();
 		return true;
-	}
-	borrowed.restore();
-	return report_treatas(L"remove failed even with borrowed access", state, rc);
+	if(rc == TreatAs::BorrowFailed)
+		return report_treatas(L"could not borrow delete access", state, ERROR_ACCESS_DENIED);
+	return report_treatas(L"remove failed", state, rc);
 }
+
 
 //printf("Please wait shell we'll process your command \n");
 // r		register
@@ -318,6 +210,22 @@ bool Registration(REGOP reg)
 
 		if(reg.REGISTER || reg.UNREGISTER)
 		{
+			// A 32-bit process on 64-bit Windows is redirected to the WOW64 view of
+			// the registry, so it would register the 32-bit shell.dll for a 32-bit
+			// Explorer that does not exist, and unregistering would look in the same
+			// wrong view and report success. Neither direction is meaningful, so
+			// both are refused and the 64-bit shell.exe is the one to run.
+			// https://learn.microsoft.com/windows/win32/winprog64/registry-keys-affected-by-wow64
+			// https://learn.microsoft.com/windows/win32/api/sysinfoapi/nf-sysinfoapi-getnativesysteminfo
+			if(!ver->Is64BitProcess() && ver->Is64Bit())
+			{
+				msg = L"This is the 32-bit shell.exe, running on 64-bit Windows. It cannot register or unregister Shell for the 64-bit Explorer. Run the 64-bit shell.exe from the 64-bit installation instead.";
+				_log->error(msg);
+				if(!reg.SILENT)
+					MessageBox::Show(msg, APP_FULLNAME, MessageBoxIcon::Error, MessageBoxButtons::OK);
+				return false;
+			}
+
 			if(!is_elevated)
 			{
 				// Missing administrative privileges!
@@ -364,11 +272,23 @@ bool Registration(REGOP reg)
 			}
 			else
 			{
+				// The Windows 11 redirect goes first, and on every unregister rather
+				// than only with -treat: deleting the CLSID below while the redirect
+				// stands leaves Windows pointing its main menu at a class that no
+				// longer exists. Doing it first means a redirect that cannot be
+				// removed stops the unregister with the registration intact, instead
+				// of a dangling redirect. The key's stock ACL gives Administrators
+				// only ReadKey, so this is the borrowing path, not a plain delete.
+				// -treat is still accepted and is now a no-op here.
+				const bool redirect_cleared = !ver->IsWindows11OrGreater() || disable_modern(false);
+				if(!redirect_cleared)
+					_log->error(L"Windows 11 primary-menu redirect could not be removed, so the registration was left in place.");
+
 				// Registry deletion APIs report success only when they delete an
 				// existing resource. At the command level, however, an already absent
 				// registration is the requested end state and is therefore success.
 				// https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regdeletetreew
-				if(!unregister_if_present(RegistryConfig::IsRegistered(), []
+				if(!redirect_cleared || !unregister_if_present(RegistryConfig::IsRegistered(), []
 					{
 						return RegistryConfig::Unregister();
 					}))
@@ -382,11 +302,6 @@ bool Registration(REGOP reg)
 					}
 					return false;
 				}
-
-				// is windows 11 or later
-				if(ver->IsWindows11OrGreater() && reg.TREAT)
-					if(!disable_modern(false))
-						_log->warning(L"Windows 11 primary-menu redirect could not be removed safely.");
 
 				msg = string::Extract(IDS_UNREGISTER_SUCCESS).move();
 			}
@@ -600,12 +515,12 @@ static int CheckConfig(const wchar_t *config_path)
 	*/
 	if(code == CONFIG_CHECK_OK
 	   && result.priority == CONFIG_CHECK_PRIORITY_OFF
-	   && QueryTreatAs() == TreatAsState::ours)
+	   && TreatAs::Query() == TreatAs::State::ours)
 	{
 		write_console_line(
 			L"  note: priority = 0 asks for the Windows 11 menu, but this machine is\r\n"
 			L"        registered with -treat, which redirects that menu to Shell and\r\n"
-			L"        overrules the setting. Run `shell.exe -unregister -treat` (as\r\n"
+			L"        overrules the setting. Run `shell.exe -unregister` (as\r\n"
 			L"        administrator) to get the Windows 11 menu back.");
 	}
 
@@ -651,7 +566,7 @@ static int CheckConfig(const wchar_t *config_path)
 */
 static void AppendTakeoverStatus(string &out)
 {
-	auto treat = QueryTreatAs();
+	auto treat = TreatAs::Query();
 	auto registered = RegistryConfig::IsRegistered();
 
 	out.append(L"Takeover\r\n");
@@ -662,10 +577,10 @@ static void AppendTakeoverStatus(string &out)
 
 	switch(treat)
 	{
-		case TreatAsState::ours:
+		case TreatAs::State::ours:
 			out.append(L"    Windows 11 menu  redirected to Shell (-treat)\r\n");
 			break;
-		case TreatAsState::absent:
+		case TreatAs::State::absent:
 			// Not an error. Plenty of people run this way on purpose; it just
 			// means the classic menu is behind "Show more options" unless the
 			// configuration asks for it.
@@ -674,7 +589,7 @@ static void AppendTakeoverStatus(string &out)
 					   L"                     unless `settings { priority = 1 }` is set. "
 					   L"`shell.exe -register -treat` changes this.\r\n");
 			break;
-		case TreatAsState::foreign:
+		case TreatAs::State::foreign:
 			out.append(L"    Windows 11 menu  redirected to something that is NOT Shell - "
 					   L"left alone deliberately\r\n");
 			break;
@@ -1858,114 +1773,6 @@ bool Register(REGOP reg, HWND hwnd = nullptr)
 	return ret;
 }
 
-/*
-class Console
-{
-	FILE *_handle = nullptr;
-	HWND _hwnd = nullptr;
-
-	bool init()
-	{
-		if(!_handle)
-		{
-			if(::AttachConsole(ATTACH_PARENT_PROCESS))
-			{
-				_hwnd = ::GetConsoleWindow();
-				if(_hwnd) if(0 == ::freopen_s(&_handle, "CONOUT$", "w", stdout))
-					::setvbuf(stdout, nullptr, _IONBF, 0);
-			}
-		}
-		return _handle;
-	}
-
-public:
-	Console()
-	{
-		init();
-	}
-
-	~Console()
-	{
-		if(_handle)
-		{
-			if(_hwnd)
-				::PostMessageW(_hwnd, WM_KEYUP, VK_RETURN, 0);
-			::fflush(_handle);
-			::fclose(_handle);
-			::FreeConsole();
-		}
-	}
-
-	Console &write(const wchar_t *buff = nullptr)
-	{
-		wprintf(buff);
-		return *this;
-	}
-
-	Console &writel(const wchar_t *buff = nullptr)
-	{
-		wprintf(L"%s%c", buff, L'\n');
-		return *this;
-	}
-};
-
-void check()
-{
-	Console c;
-	c.writel(L"\n\nNilesoft Shell\n");
-
-	_log->info(L"BEGIN CHECK");
-
-	auto ver = &Windows::Version::Instance();
-
-	auto clsid =[](const string &s)->string
-	{
-		return (L"CLSID\\" + s).move();
-	};
-
-	auto clsid_shex = [=](const string &s)->string
-	{
-		return (s + L"\\shellex\\ContextMenuHandlers\\nilesoft.shell").move();
-	};
-
-	auto exists_key = [=](HKEY k, const string &name)
-	{
-		if(!Registry::Exists(k, name))
-		{
-			wprintf(L"[warning] %s\n", name.c_str());
-			_log->warning(name);
-		}
-	};
-
-	auto exists_value_name = [=](HKEY k, const string &subkey, const string &name)
-	{
-		if(!Registry::ExistsValue(k, subkey, name))
-		{
-			wprintf(L"[warning] %s\\%s\n", name.c_str(), name.c_str());
-			_log->warning(subkey + L"\\" + name);
-		}
-	};
-
-	exists_key(HKCR, clsid(CLS_ContextMenu));
-	exists_key(HKCR, clsid(CLS_FolderExtensions));
-	exists_key(HKCR, clsid(CLS_IconOverlay));
-
-	if(ver->IsWindows11OrGreater())
-	{
-		exists_key(HKCR, string().format(L"CLSID\\%s\\TreatAs", string::ToString(IID_FileExplorerContextMenu, 2).c_str()));
-	}
-
-	exists_key(HKCR, clsid_shex(L"*"));
-	exists_key(HKCR, clsid_shex(L"Directory"));
-	exists_key(HKCR, clsid_shex(L"Directory\\Background"));
-	exists_key(HKCR, clsid_shex(L"Drive"));
-	exists_key(HKCR, clsid_shex(L"DesktopBackground"));
-
-	exists_value_name(HKLM, HKLM_APPROVED, CLS_ContextMenu);
-	
-	_log->info(L"END CHECK");
-}
-*/
 
 struct Theme
 {
@@ -2384,8 +2191,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 			// Register returns a bool, and this returned it straight out of
 			// wWinMain - so a successful registration exited with 1 and a failed
 			// one with 0, which is backwards from what every caller of a process
-			// assumes. Nothing checked it, so nothing noticed; the installer
-			// checks it now.
+			// assumes. The MSI no longer runs shell.exe, so the callers that rely
+			// on this exit code are scripts and people.
 			return Register(reg) ? 0 : 1;
 		}
         else

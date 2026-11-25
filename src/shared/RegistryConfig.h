@@ -39,16 +39,6 @@ namespace Nilesoft
 		//reg.exe add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve
 
 		public:
-			static const wchar_t *GetKeyPath()
-			{/*
-#ifndef _WIN64
-				//if(Is64BitWindows())
-				return L"Software\\Classes\\Wow6432Node";
-#endif
-*/
-				return L"Software\\Classes";
-			}
-
 			static bool IsRegistered()
 			{
 				return IsContextMenu() || IsIconOverlay() || IsFolderExtensions();
@@ -267,29 +257,11 @@ namespace Nilesoft
 				ret += Registry::DeleteSubKey(HKCR, L"CLSID\\" CLS_ContextMenu);
 				ret += RegisterContextMenuHandler(false);
 
-				// The Windows 11 modern menu reaches us through a TreatAs redirect on
-				// {86ca1aa0-...}. Deleting our CLSID above without clearing it strands
-				// the redirect on a class that no longer resolves, so the user
-				// uninstalls and is left on the classic menu with nothing to explain
-				// it. This used to be handled only by shell.exe -unregister -treat, so
-				// a bare -unregister left the machine modified.
-				//
-				// Only removed when it actually names our server. The key is closed
-				// before the delete rather than deleted through a live handle.
-				{
-					string key_treatas;
-					key_treatas.format(L"CLSID\\%s\\TreatAs",
-									   string::ToString(IID_FileExplorerContextMenu, 2).c_str());
-
-					wchar_t treatas[64]{};
-					DWORD cb = sizeof(treatas);
-					auto ours = ERROR_SUCCESS == ::RegGetValueW(HKCR, key_treatas.c_str(), nullptr,
-																RRF_RT_REG_SZ, nullptr, treatas, &cb)
-							 && string(treatas).equals(CLS_ContextMenu);
-
-					if(ours)
-						Registry::DeleteSubKey(HKCR, key_treatas);
-				}
+				// The Windows 11 TreatAs redirect is deliberately not touched here.
+				// The key's stock ACL gives Administrators only ReadKey, so a delete
+				// through HKCR fails and this used to ignore the result; removing it
+				// needs the borrowing path in src/shared/TreatAsRegistry.h, which
+				// shell.exe runs on every unregister before it calls this.
 				/*
 					Remove what registration put under .nss, not the whole key.
 
@@ -329,20 +301,6 @@ namespace Nilesoft
 			{
 				if(!fileType || !fileType[0])
 					return false;
-
-				wchar_t default_value[MAX_PATH] { 0 };
-				if(*fileType == L'.')
-				{
-					auto key = Registry::ClassesRoot.OpenSubKey(fileType);
-					// If the key exists and its default value is not empty,
-					// use the ProgID as the file type.
-					if(key)
-					{
-						if(key.GetString(nullptr, default_value, MAX_PATH))
-							fileType = default_value;
-						key.Close();
-					}
-				}
 
 				string subKey = fileType;
 				subKey += HKCR_CONTEXTMENUHANDLERS;
