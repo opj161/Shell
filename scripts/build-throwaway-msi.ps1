@@ -62,6 +62,9 @@ Edit-File (Join-Path $wix 'setup.wxs') {
     param($t)
     $t = $t -replace "(<\?define UpgradeCode = ')[^']+", '${1}{D2A1F6E4-5B3C-4E0A-9C11-7A3E00000001}'
     $t = $t -replace "(<\?define Name = ')Shell(')", '${1}Shell Test${2}'
+    # The upstream component code the arm64/x86 previous-folder search names, so
+    # a throwaway never seeds INSTALLFOLDER from the real installation.
+    $t = $t -replace "\{ED9EFE4B-", '{D2A1F6E4-'
     if ($Legacy) {
         $t = $t -replace "(<Component Id='CONFIG' Guid='\`$\(var\.ConfigComponentGuid\)') Permanent='yes'", '$1'
         $t = $t -replace "(<RemoveFile Id='PurgeLog')", "<RemoveFile Id='PurgeAllLegacy' Name='*.*' On='uninstall' Directory='INSTALLFOLDER' />`r`n`t`t`t`t`t`$1"

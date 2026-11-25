@@ -109,3 +109,57 @@ TEST(treatas_plan, same_text_compares_whole_strings)
 	static_assert(same_text(L"", L""));
 	CHECK(same_text(L"{x}", L"{x}"));
 }
+
+// Query against a scratch key, because HKLM is not the test's to write. A
+// redirect somebody else wrote is "foreign" - left alone - however its default
+// value is shaped. Classing an unexpected type or an oversized value as
+// "inaccessible" used to fail an uninstall and stop `shell.exe -unregister`.
+TEST(treatas_plan, a_redirect_of_any_shape_that_is_not_ours_is_foreign)
+{
+	using Nilesoft::TreatAsRegistry::State;
+	using Nilesoft::TreatAsRegistry::Query;
+	using Nilesoft::TreatAsRegistry::TargetClsid;
+
+	const wchar_t *key = L"Software\\Nilesoft\\ShellTests\\TreatAs";
+	auto set_default = [&](DWORD type, const void *data, DWORD bytes)
+	{
+		::RegDeleteTreeW(HKEY_CURRENT_USER, key);
+		HKEY h{};
+		CHECK_EQ(::RegCreateKeyExW(HKEY_CURRENT_USER, key, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &h, nullptr), ERROR_SUCCESS);
+		if(data)
+			CHECK_EQ(::RegSetValueExW(h, nullptr, 0, type, static_cast<const BYTE *>(data), bytes), ERROR_SUCCESS);
+		::RegCloseKey(h);
+	};
+	auto query = [&]()
+	{
+		LSTATUS error = -1;
+		auto state = Query(&error, HKEY_CURRENT_USER, key);
+		CHECK_EQ(error, ERROR_SUCCESS);
+		return state;
+	};
+
+	::RegDeleteTreeW(HKEY_CURRENT_USER, key);
+	CHECK(query() == State::absent);
+
+	set_default(REG_SZ, TargetClsid, sizeof(TargetClsid));
+	CHECK(query() == State::ours);
+
+	// RegGetValue expands a REG_EXPAND_SZ and returns it as a REG_SZ (measured),
+	// so only its text decides.
+	const wchar_t other[] = L"{00000000-0000-0000-0000-000000000001}";
+	set_default(REG_EXPAND_SZ, other, sizeof(other));
+	CHECK(query() == State::foreign);
+
+	DWORD number = 1;		// ERROR_UNSUPPORTED_TYPE (1630, measured)
+	set_default(REG_DWORD, &number, sizeof(number));
+	CHECK(query() == State::foreign);
+
+	const wchar_t longer[] = L"{00000000-0000-0000-0000-000000000000}{00000000-0000-0000-0000-000000000000}";
+	set_default(REG_SZ, longer, sizeof(longer));		// ERROR_MORE_DATA (234)
+	CHECK(query() == State::foreign);
+
+	set_default(REG_SZ, nullptr, 0);
+	CHECK(query() == State::foreign);
+
+	::RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Nilesoft\\ShellTests");
+}

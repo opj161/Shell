@@ -70,10 +70,11 @@ namespace Nilesoft
 			};
 		}
 
-		inline State Query(LSTATUS *error = nullptr)
+		// `root`/`path` exist for the test, which cannot write HKLM.
+		inline State Query(LSTATUS *error = nullptr, HKEY root = HKEY_LOCAL_MACHINE, const wchar_t *path = Key)
 		{
 			detail::Handle key;
-			auto rc = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, Key, 0,
+			auto rc = ::RegOpenKeyExW(root, path, 0,
 				KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_WOW64_64KEY, &key.key);
 			if(rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
 			{
@@ -100,10 +101,22 @@ namespace Nilesoft
 			DWORD bytes = sizeof(value);
 			rc = ::RegGetValueW(key.key, nullptr, nullptr,
 				RRF_RT_REG_SZ | RRF_ZEROONFAILURE, nullptr, value, &bytes);
+			// A default that is absent, not a REG_SZ, or longer than any CLSID was
+			// read fine; it is just not ours, and a redirect somebody else wrote is
+			// left alone rather than failing an uninstall. RegGetValue reports the
+			// latter two as failures: "If the data type of the value does not meet
+			// this criteria, the function fails", and a buffer that is "not large
+			// enough to hold the data ... the function returns ERROR_MORE_DATA".
+			// https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-reggetvaluew
+			if(rc == ERROR_FILE_NOT_FOUND || rc == ERROR_UNSUPPORTED_TYPE || rc == ERROR_MORE_DATA)
+			{
+				if(error) *error = ERROR_SUCCESS;
+				return State::foreign;
+			}
 			if(rc != ERROR_SUCCESS)
 			{
-				if(error) *error = (rc == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : rc);
-				return rc == ERROR_FILE_NOT_FOUND ? State::foreign : State::inaccessible;
+				if(error) *error = rc;
+				return State::inaccessible;
 			}
 
 			if(error) *error = ERROR_SUCCESS;

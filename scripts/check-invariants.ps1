@@ -263,7 +263,14 @@ $rules = @(
     @{ Name  = 'Menu item text must use the documented two-call GetMenuItemInfo (AGENTS.md)'
        Dir   = @('src\dll\src', 'src\tests\hostprobe'); Include = @('*.cpp', '*.h')
        Regex = '\bcch\s*=\s*(ARRAYSIZE|_countof|std::size|sizeof)\b'
-       Why   = 'GetMenuItemInfo truncates silently to the cch it was given; a fixed buffer loses everything past it and still returns TRUE. Third-party extension titles cross 260 characters routinely. Ask with dwTypeData = nullptr first, then read into cch + 1 - Include/MenuText.h in the DLL, hostprobe/Probe.h and hostprobe/MenuReader.h in the harness.' }
+       Why   = 'GetMenuItemInfo truncates silently to the cch it was given; a fixed buffer loses everything past it and still returns TRUE. Third-party extension titles cross 260 characters routinely. Ask with dwTypeData = nullptr first, then read into cch + 1 - Include/MenuText.h in the DLL, hostprobe/Probe.h and hostprobe/MenuReader.h in the harness.' },
+
+    # validate-msi-lifecycle.ps1 only rejects the three retired codes; any new
+    # fixed one would pass it.
+    @{ Name  = 'The installer authors no ProductCode (src/setup/wix/identity.wxi)'
+       Dir   = 'src\setup\wix'; Include = @('*.wxs', '*.wxi')
+       Regex = 'ProductCode\s*=\s*[''"]|define\s+ProductCode\b'
+       Why   = 'a major upgrade "needs a change of the ProductCode Property"; a fixed one makes the next release fail with 1638. WiX generates a new one per build when none is authored.' }
 )
 
 # Enable each of these as its phase lands; see docs/refactor/06 and 07.
