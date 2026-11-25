@@ -148,7 +148,12 @@ $alreadyCurrent = (Test-Path $installedDll) -and
 Write-Host "`n1. Backing up the current installation..." -ForegroundColor Cyan
 if (Test-Path $installDir) {
     if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
-    Copy-Item -Path "$installDir\*" -Destination $backupDir -Recurse -Force
+    # The previous installation, not every rotation it still has on disk: those
+    # are copies of builds already superseded, and copying them on every deploy
+    # is how this folder grew to 68 of them. shell.nss is never only here - an
+    # edited one is moved aside in the install folder before it is replaced.
+    Copy-Item -Path "$installDir\*" -Destination $backupDir -Recurse -Force `
+              -Exclude 'shell.dll.old*', 'shell.exe.old*', 'shell.old', 'shell.nss.bak.*'
     Write-Host "[OK] $backupDir" -ForegroundColor Green
 }
 else {
@@ -255,12 +260,21 @@ try {
     $installedNss = Join-Path $installDir 'shell.nss'
 
     if ($ResetConfig -or -not (Test-Path $installedNss)) {
+        # The backup folder is overwritten by every deploy, so it cannot be the
+        # only copy of an edited config: a second deploy would replace it with
+        # the stock one just installed. Keep the user's file beside the new one.
+        if ((Test-Path $installedNss) -and
+            ((Get-FileHash $installedNss -Algorithm SHA256).Hash -ne (Get-FileHash $stockNss -Algorithm SHA256).Hash)) {
+            $kept = "$installedNss.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
+            Move-Item -Path $installedNss -Destination $kept
+            Write-Host "[OK] Your shell.nss was kept as $(Split-Path $kept -Leaf)." -ForegroundColor Green
+        }
         Copy-Item -Path $stockNss -Destination $installedNss -Force
         Write-Host '[OK] Stock shell.nss installed.' -ForegroundColor Green
     }
     else {
-        # shell.nss belongs to whoever edited it. Same contract the MSI gives it
-        # (NeverOverwrite + Permanent): never clobbered, never silently rewritten.
+        # shell.nss belongs to whoever edited it - the MSI marks it Permanent for
+        # the same reason: never clobbered, never silently rewritten.
         Write-Host '[OK] Existing shell.nss kept.' -ForegroundColor Green
 
         $a = (Get-FileHash $installedNss -Algorithm SHA256).Hash

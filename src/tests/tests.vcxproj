@@ -102,6 +102,7 @@
 	<ClInclude Include="..\dll\src\Expression\SelectionPathResolver.h" />
 	<ClInclude Include="..\shared\LegacyConfigTransfer.h" />
 	<ClInclude Include="..\shared\ConfigShadow.h" />
+    <ClInclude Include="..\shared\ConfigStamp.h" />
     <ClInclude Include="..\shared\StoreFile.h" />
     <ClInclude Include="..\dll\src\Include\FavoritesStore.h" />
     <ClInclude Include="..\dll\src\Include\ProviderQuarantineStore.h" />
@@ -217,9 +218,7 @@
     <ResourceCompile Include="tests.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <!-- Run the suite as part of the build so a regression fails CI, not just a
-       later manual step. Cross-compiled binaries cannot run on the host. -->
-  <Target Name="RunTests" AfterTargets="Build" Condition="'$(Platform)'=='x64' AND '$(RunTestsAfterBuild)'!='false'">
-    <Exec Command="&quot;$(TargetPath)&quot;" WorkingDirectory="$(OutDir)" />
-  </Target>
+  <!-- No post-build test run. build.ps1 and the CI "Run unit tests" step run
+       tests.exe explicitly for every architecture the host can execute; a target
+       here ran the x64 suite a second time on each of them. -->
 </Project>

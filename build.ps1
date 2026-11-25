@@ -3,8 +3,7 @@
     Canonical multi-architecture build and test script for Nilesoft Shell.
 .PARAMETER Platform
     Architecture to build: 'all', 'x64', 'x86', or 'arm64'. Default: 'x64'.
-.PARAMETER Configuration
-    Build configuration: 'Release' or 'Debug'. Default: 'Release'.
+    Always Release: the solution defines no other configuration.
 .PARAMETER AllowNoVCLTL
     Build without VC-LTL, linking the static CRT instead. Skips the package
     restore. The result is roughly 361 KB larger per binary and is NOT what CI
@@ -18,9 +17,6 @@
 param(
     [ValidateSet("all", "x64", "x86", "arm64")]
     [string]$Platform = "x64",
-
-    [ValidateSet("Release", "Debug")]
-    [string]$Configuration = "Release",
 
     [switch]$AllowNoVCLTL
 )
@@ -75,31 +71,38 @@ else {
     }
 }
 
+# Which test binaries this machine can execute: x86 runs everywhere, x64 also
+# runs on Windows 11 on ARM through emulation, and arm64 only natively.
+$hostArch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+$runnable = @{
+    x86   = $true
+    x64   = $hostArch -in @('X64', 'Arm64')
+    arm64 = $hostArch -eq 'Arm64'
+}
+
 foreach ($p in $platforms) {
     Write-Host "`n========================================================" -ForegroundColor Cyan
-    Write-Host " Building Platform: $p | Configuration: $Configuration" -ForegroundColor Cyan
+    Write-Host " Building Platform: $p | Configuration: Release" -ForegroundColor Cyan
     Write-Host "========================================================" -ForegroundColor Cyan
 
-    & $msbuildPath /m /p:Configuration=$Configuration /p:Platform=$p @extraProps $solutionPath
+    & $msbuildPath /m /p:Configuration=Release /p:Platform=$p @extraProps $solutionPath
     if ($LASTEXITCODE -ne 0) {
-        throw "Build failed for platform $p ($Configuration)."
+        throw "Build failed for platform $p."
     }
 
-    # Run unit tests on compatible host architectures
+    # The suite runs here and only here; tests.vcxproj has no post-build run.
     $testExe = Join-Path $PSScriptRoot "src\bin\$p\tests.exe"
-    if (Test-Path $testExe) {
-        $canRun = ($p -eq "x64" -and [Environment]::Is64BitOperatingSystem) -or 
-                  ($p -eq "x86" -and ([Environment]::Is64BitOperatingSystem -or -not [Environment]::Is64BitOperatingSystem))
-
-        if ($canRun) {
-            Write-Host "`nRunning Unit Tests for $p..." -ForegroundColor Green
-            & $testExe
-            if ($LASTEXITCODE -ne 0) {
-                throw "Unit tests failed for platform $p."
-            }
-        } else {
-            Write-Host "Skipping execution of $p tests on current host architecture." -ForegroundColor Yellow
+    if (-not (Test-Path $testExe)) {
+        throw "The build for $p produced no tests.exe at '$testExe'."
+    }
+    if ($runnable[$p]) {
+        Write-Host "`nRunning Unit Tests for $p..." -ForegroundColor Green
+        & $testExe
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unit tests failed for platform $p."
         }
+    } else {
+        Write-Host "Skipping $p tests: a $hostArch host cannot run them." -ForegroundColor Yellow
     }
 }
 

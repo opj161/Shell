@@ -58,3 +58,6 @@ deploy_fix.ps1
 
 # Agent session transcripts written at the repository root
 /2???-??-??-*.txt
+
+# Claude Code agent worktrees
+.claude/worktrees/

@@ -109,7 +109,7 @@ function Get-CodeText
 $rules = @(
     @{ Name  = 'Recycle Bin query must not return to menu construction (docs/refactor/02 section 4)'
        Dir   = 'src\dll\src'; Include = @('ContextMenu.cpp')
-       Regex = 'SHQueryRecycleBin[AW]?"?\s*[,)]'
+       Regex = 'SHQueryRecycleBin[AW]?"?\s*[,()]'
        Why   = 'enumerates every drive synchronously before first paint' },
 
     @{ Name  = 'Direct2D/DirectWrite link dependencies stay removed (dead renderer, docs/refactor/04 section 2)'
@@ -257,7 +257,7 @@ $rules = @(
     # still given the check, so this rule has no exceptions to remember.
     @{ Name  = 'A Win32 read whose failure is not safe must not discard its result (AGENTS.md)'
        Dir   = @('src\dll\src', 'src\exe\src', 'src\shared', 'src\tests\hostprobe'); Include = @('*.cpp', '*.h')
-       Regex = '(?m)^[ \t]*::?(SystemParametersInfo(W|A|ForDpi)?\s*\(\s*SPI_GET|DwmGetCompositionTimingInfo\s*\()'
+       Regex = '(?m)^[ \t]*(::)?(SystemParametersInfo(W|A|ForDpi)?\s*\(\s*SPI_GET|DwmGetCompositionTimingInfo\s*\()'
        Why   = 'the out-parameter is then read as though it had been written. DwmGetCompositionTimingInfo leaves DWM_TIMING_INFO untouched on failure and a zero refresh period divides by zero on the host UI thread; an SPI_GET that fails leaves the read-modify-restore pair without a value to put back, so the override is never taken off. Test the return, or wrap it in FAILED().' },
 
     @{ Name  = 'Menu item text must use the documented two-call GetMenuItemInfo (AGENTS.md)'

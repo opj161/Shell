@@ -34,7 +34,6 @@ namespace Nilesoft
 
 #define	APP_PRODUCT_VERSION		L"1.9"
 #define	APP_VERSION				L"1.9.20"
-//#define APP_VERSION_FULL		L"1.9 build 20"
 
 constexpr auto APP_EMAIL		= L"support@nilesoft.org";
 constexpr auto APP_WEBSITE		= L"www.nilesoft.org";
