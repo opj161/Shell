@@ -255,6 +255,11 @@ $targets = @(
     @{ Name = 'static-bg-repo';     Args = @('bg', $repo) },
     @{ Name = 'static-bg-drive-c';  Args = @('bg', 'C:\') },
     @{ Name = 'static-item-readme'; Args = @('item', (Join-Path $repo 'README.md')) },
+    # An archive, because 26H2's release notes name new archive formats (uu,
+    # cpio, xar, nupkg) and the first baseline censused no archive at all - so
+    # when "Extract All..." turned up on a .nupkg afterwards there was nothing to
+    # compare it against and no way to tell a new verb from an old one.
+    @{ Name = 'static-item-nupkg';  Args = @('item', (Join-Path $repo 'packages\choco\nilesoft-shell.1.9.nupkg')) },
     @{ Name = 'static-item-folder'; Args = @('item', (Join-Path $repo 'docs')) },
     @{ Name = 'static-multi';       Args = @('item', (Join-Path $repo 'README.md'), (Join-Path $repo 'LICENSE')) }
 )
