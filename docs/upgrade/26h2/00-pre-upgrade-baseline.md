@@ -576,10 +576,15 @@ at **26200.9974**, eleven cumulative revisions on. Those numbers were stale befo
    directly changes, and it is the one surface the recorder cannot collect on its
    own.
 
-Still open, and it is a judgement call rather than a task:
-
-9. **Put `shell.nss` somewhere off this machine.** Two copies on one disk, both
-   outside version control (§4). Not a 26H2 risk; a standing one.
+9. ~~Put `shell.nss` somewhere safer.~~ Copied to `C:\Users\j_opp\Downloads\shell.nss`
+   on 2026-11-25, verified byte-identical to the installed file
+   (`07D4F706B68EA27635A4EB60…`, 1 010 bytes). That is enough for this upgrade:
+   it is outside `C:\Program Files`, so a Shell uninstall or an `msiexec /f`
+   repair cannot take it, and an enablement package does not touch either
+   location. It is **not** off-machine — `Downloads` is not redirected into
+   OneDrive on this account (`HKCU\…\User Shell Folders` has it at
+   `C:\Users\j_opp\Downloads`), so a disk failure or a Windows reset still takes
+   every copy. `C:\Users\j_opp\OneDrive` would fix that.
 
 ### The upgrade itself
 
