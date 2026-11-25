@@ -12,7 +12,7 @@ Companion files, all in `docs/upgrade/26h2/`:
 | `census.ps1` | Records the context menus on six surfaces plus the live desktop menu, normalised so two runs diff cleanly. Also diffs two censuses. |
 | `menucensus.cpp` | The probe `census.ps1` builds and drives. Kept in the tree rather than the scratchpad because it has to survive the upgrade's reboot. |
 | `baseline/pre-26h2-state.json` | Machine snapshot, 2026-11-25 at 26200.9974, taken **after** the prep below. **This is the thing to diff against.** |
-| `baseline/census/` | The settled menu census. `live-desktop.tsv` plus six `static-*.tsv`; `runs/` holds the individual live readings. |
+| `baseline/census/` | The settled menu census. `live-desktop.tsv` plus six `static-*.tsv`; `runs/` holds the individual readings, and `live-desktop.volatile.txt` the rows known to come and go. |
 | `baseline/tests-x64-26200.9974.txt` | Full x64 unit-suite output, 80 suites, `34794 checks, 0 failure(s)`. |
 | `baseline/check-invariants.txt` | `check-invariants: OK (15 rules, 0 deferred)`. |
 | `baseline/hostprobe-native.txt`, `baseline/hostprobe-takeover.txt` | Ten runs each, full output. |
@@ -57,6 +57,31 @@ update lands with it). It does not replace `explorer.exe`, `shell32.dll`,
 already the files 26H2 runs. Note that every one of them already reports
 `10.0.26100.xxxx`, because 26100 is the branch base for all three versions.
 
+### What Windows Update is actually offering, as of 2026-11-25
+
+Read out of the Windows Update agent on this machine (`Microsoft.Update.Session`,
+a read-only search):
+
+```
+Title       : Windows 11, version 26H2
+KB          : 5132061
+Categories  : Upgrades
+IsMandatory : False
+RebootBehavior : 2 (canRequest)
+```
+
+**KB5132061 is the same KB already installed here as the November cumulative** —
+the machine is at 26200.9974, which that KB produced. That is the enablement
+path, in the machine's own words.
+
+Do **not** use the download size to judge this. The agent reports
+`MinDownloadSize 0` and `MaxDownloadSize 96 818 MB` for it, and 1 509 MB for a
+Defender signature update — both are bundle aggregates, not what gets
+transferred. An earlier draft of this document suggested judging eKB versus full
+upgrade by "tens of megabytes versus gigabytes"; that was wrong and is removed.
+The discriminators that do work are the two above (category `Upgrades`, KB equal
+to the installed cumulative) and, afterwards, the snapshot diff below.
+
 ### Testable prediction
 
 Re-running `capture-state.ps1` after the upgrade and diffing should report
@@ -64,6 +89,18 @@ Re-running `capture-state.ps1` after the upgrade and diffing should report
 cumulative update lands in the same session. If that section shows changed
 binaries, something larger than an enablement package happened and the rest of
 this assessment needs revisiting.
+
+### Known issues, checked 2026-11-25
+
+Microsoft's 26H2 known-issues page lists three items: SQL Server linked-server
+connections leaking (open), USB Audio Class 1.0 devices failing (resolved in
+KB5132061, which this machine already has), and Remote Desktop failing for
+non-admin users where Administrator protection is enabled (resolved in
+KB5127936). **Nothing involving Explorer, the shell, context menus or shell
+extensions.** No safeguard hold is described for this class of device.
+<https://learn.microsoft.com/windows/release-health/status-windows-11-26h2>
+
+Re-read that page after the upgrade before blaming Shell for anything.
 
 ### What *does* change, and why it still matters
 
@@ -231,7 +268,7 @@ under test rather than the installed copy. The override and the staged
 
 | Surface | Rows | What it is |
 | --- | --- | --- |
-| `live-desktop` | **29** | what Explorer actually shows on the desktop background |
+| `live-desktop` | **27** | what Explorer actually shows on the desktop background |
 | `static-bg-desktop` | 19 | handler contributions, Desktop folder background |
 | `static-bg-repo` | 20 | handler contributions, a normal folder background |
 | `static-bg-drive-c` | 20 | handler contributions, `C:\` background |
@@ -239,10 +276,34 @@ under test rather than the installed copy. The override and the staged
 | `static-item-folder` | 51 | one folder selected |
 | `static-multi` | 35 | two files selected |
 
-The live reading settles exactly as `AGENTS.md` warns: consecutive readings after
-the Explorer restart gave **26, 27, 29, 29**, and five further readings all gave
-29. `census.ps1` therefore keeps reading until two consecutive readings agree
-rather than trusting the first.
+The live reading settles as `AGENTS.md` warns: consecutive readings after the
+Explorer restart gave **26, 27, 29, 29**, then five more at 29.
+
+**Two agreeing readings are not enough, and finding that out is the most useful
+thing in this section.** An hour later the same recorder settled just as
+convincingly at **27**, five readings running, because `NanaZip` and PowerToys'
+`Unlock with File Locksmith` had stopped contributing to the desktop background
+menu. Nothing was upgraded in between. So the recorder now requires **three**
+consecutive identical readings, and writes any row that was not present in every
+reading to `<surface>.volatile.txt`; `-Diff` annotates those rows and does not
+count them as a change. Those two rows are recorded there explicitly, because a
+single lucky run would not have produced them.
+
+Read that as the accuracy limit of this instrument: a diff of one or two
+third-party rows on this machine is noise. A new *Microsoft* verb is not.
+
+Timing, from posting `WM_CONTEXTMENU` to the menu being readable and then to its
+item count holding still, across the recorded readings:
+
+| | popup appears | HMENU readable | count stable |
+| --- | --- | --- | --- |
+| desktop background | 141-235 ms | 172-235 ms | 375-438 ms |
+
+Those are end-to-end numbers for the whole host, not Shell's share of it, and
+they include the probe's own 25 ms polling granularity and its six-poll quiet
+period — so the *floor* is about 150 ms by construction. They are worth
+re-measuring after the upgrade only as a gross check: a jump to seconds means
+something real, a 30 ms difference means nothing.
 
 Shell demonstrably composed that menu: `Repomix`, `Terminal`, `File manage`,
 `Develop` and `Go To` are all items from this machine's `shell.nss`, and they
@@ -409,11 +470,50 @@ into `AGENTS.md`.
    cycle. That asymmetry is the whole argument.
 
 The one case that would change this answer: if Windows Update offers a *full*
-24H2/25H2→26H2 upgrade on this machine rather than the enablement package (the
-snapshot diff in §1 detects this after the fact; before the fact, a download
-measured in gigabytes rather than megabytes is the tell). Then the removal
-argument becomes real again, and it should be reconsidered with the generation-B
-package built and ready first.
+24H2/25H2→26H2 upgrade on this machine rather than the enablement package. The
+offer read in §1 says it is the enablement path, and the snapshot diff detects it
+after the fact. Then the removal argument becomes real again, and it should be
+reconsidered with the generation-B package built and ready first.
+
+### There is probably no going back, and that is the real argument for a backup
+
+The usual safety net for a feature update is *Settings > System > Recovery > Go
+back*, within ten days. It very likely does not apply here. Microsoft's own
+guidance on rolling back feature updates states:
+
+> "Uninstallation will not be successful when the feature update was applied
+> using an Enablement Package."
+
+— <https://learn.microsoft.com/intune/device-updates/windows/manage-update-rings>
+(the *Uninstall* tab)
+
+That page is about Intune's Uninstall action, which drives the same
+feature-update uninstall mechanism the consumer "Go back" button and
+`setup.exe /uninstall` use. An enablement package also creates no `Windows.old`
+to roll back *to*, which is what that mechanism needs — that part is inference,
+not a cited contract, and it is cheap to settle after the upgrade by looking for
+`C:\Windows.old`.
+
+The honest position, then: **26H2 is very low risk and very hard to undo.** Those
+are not in tension — little changes, so little should break, but if something
+does, the way out is forward (a fix, or a repair install) rather than back.
+
+Two consequences, neither of them done:
+
+- **System Protection state here is unknown.** `RPSessionInterval` is 1, but
+  `Get-ComputerRestorePoint` and the `SystemRestore` CIM class both answer
+  *Access denied* without elevation, so whether protection is on for `C:` and
+  whether any restore point exists could not be read. Worth checking in an
+  elevated prompt, and worth creating one — or a full image — before upgrading,
+  precisely because "Go back" probably is not available.
+- **The user's `shell.nss` is not in version control.** It exists at
+  `C:\Program Files\Nilesoft Shell\shell.nss` and in `backup_installed_shell\`,
+  which is in `.gitignore` — two copies, one disk, nothing off-machine. An
+  enablement package will not touch `C:\Program Files`, so this is not a 26H2
+  risk; it is a standing one, and a repair install or a reset would take both
+  copies. It was left out of this commit deliberately: `opj161/Shell` is a public
+  fork, and a personal config is the owner's call to publish, not this
+  document's.
 
 ---
 
@@ -431,6 +531,7 @@ Ranked by expected cost, with the check that detects each and the fix.
 | 6 | `{86ca1aa0-…}` ACL widened again by a re-register | Low | `scripts/repair-treatas-acl.ps1 -WhatIfOnly` | same script without the flag |
 | 7 | IAT hook on `win32u!NtUserTrackPopupMenuEx` stops matching | Very low (no binary change) | menu does not appear at all | investigate; `src/dll/src/Main.cpp:1712` |
 | 8 | Shell extensions disabled by a policy the upgrade turns on | Low | snapshot `Blocked` | remove the block |
+| 9 | Something does break and there is no way back | Low, but **not mitigable after the fact** | `C:\Windows.old` absent, "Go back" greyed out | restore point or image taken *before* (§4) |
 
 On #7: `IsWindows11OrGreater()` is `Major > 10 || (Major == 10 && Build >= 22000)`
 (`src/shared/System/Windows/Windows.h:191`), so build 26300 keeps every Windows 11
@@ -459,10 +560,18 @@ at **26200.9974**, eleven cumulative revisions on. Those numbers were stale befo
 3. ~~Re-run the snapshot so the baseline describes what is deployed.~~ Done.
 4. ~~Record a settled menu census.~~ Done, 7 surfaces, §2.
 5. ~~Record a hostprobe result as _N of M_.~~ Done, 10 of 10 both modes, §2.
-6. Commit `docs/upgrade/26h2/` so a `git clean` cannot take the baseline with it.
-   (Untracked files survive a reboot perfectly well — the reason to commit is
-   that the diff is worthless if half of it is missing.) **Stage these paths
-   explicitly**; the working tree carries unrelated in-flight edits.
+6. ~~Commit `docs/upgrade/26h2/`~~ so a `git clean` cannot take the baseline with
+   it. Done. (Untracked files survive a reboot perfectly well — the reason to
+   commit is that the diff is worthless if half of it is missing.)
+
+Still open, and all three need either elevation or a human at the keyboard:
+
+7. **Create a restore point, or an image.** "Go back" is probably unavailable for
+   an eKB (§4), and System Protection state could not be read without elevation.
+8. **Right-click the taskbar and record what it shows**, before and after. The
+   probe cannot reach it (§7) and it is the surface 26H2 most directly changes.
+9. **Put `shell.nss` somewhere off this machine.** Two copies on one disk, both
+   outside version control (§4).
 
 ### The upgrade itself
 
@@ -523,6 +632,13 @@ In this order, because each step is cheaper than the next:
 1. `capture-state.ps1 -Diff` — is `TreatAs` still there?
 2. If not: elevated `"C:\Program Files\Nilesoft Shell\shell.exe" -register -treat`,
    then restart Explorer. That is the whole fix for risk #1.
+
+   **Do not try to restore it with `baseline/reg-clsid-86ca1aa0-treatas.reg`.**
+   That export exists to show what the key held, not to put it back:
+   `{86ca1aa0-…}` is owned by `NT SERVICE\TrustedInstaller` and grants
+   `BUILTIN\Users` only `ReadKey` (§2), so `reg import` fails even elevated.
+   `shell.exe -register -treat` goes through `BorrowedKeyAccess`, which borrows
+   the access, writes, and puts the security descriptor back.
 3. If the registration is gone too: elevated `shell.exe -register`, then the
    `-treat` step.
 4. If `shell.dll` itself is gone: redeploy with
@@ -537,14 +653,35 @@ In this order, because each step is cheaper than the next:
 
 ## 7. What this baseline does not cover
 
-- **The live census covers the desktop background only.** The other six surfaces
-  are read through `IContextMenu` out of process, which is deterministic and is
-  the right instrument for "what do the handlers contribute", but it is not what
-  Explorer shows: Shell contributes nothing that way, so a change in how Shell
-  *composes* a folder, file or multi-selection menu will not appear there.
-  Driving a real Explorer window to a known selection needs UI Automation and was
-  not built. **The taskbar menu is not censused at all**, which is the gap that
-  matters most given that 26H2 turns on taskbar app actions — check it by hand.
+- **The live census covers the desktop background only**, and the two attempts to
+  widen it both failed for reasons worth recording rather than retrying:
+
+  - **The taskbar cannot be reached by posting a message.** `Shell_TrayWnd`
+    ignores a posted `WM_CONTEXTMENU` — ten attempts, no popup window ever
+    appeared — and so does the real child under the point, which is a
+    `Windows.UI.Composition.DesktopWindowContentBridge`. The Windows 11 taskbar
+    is a XAML surface. Reaching its menu needs synthetic input, and if Windows
+    answers with a XAML flyout rather than an `HMENU` there is no menu handle to
+    read at all. Since 26H2 turns taskbar app actions on by default, **this is
+    the gap that matters most: right-click the taskbar by hand, before and
+    after.** (Shell does track a popup for the taskbar — `src/dll/src/Main.cpp`
+    passes `hTaskbar` to the tracking hook — so a real right-click probably does
+    produce a readable `HMENU`; that is untested.)
+  - **A folder window could not be opened from this shell at all.** Neither the
+    probe's `ShellExecuteW` nor `Start-Process explorer.exe <path>` produced a
+    `CabinetWClass` window, across ten attempts; the process started and no
+    window arrived. The probe's window lookups are fine — it finds `Progman`,
+    `SHELLDLL_DefView` and `Shell_TrayWnd` in the same run — so this is about UI
+    launched from an agent shell not reaching the user's desktop. That rhymes
+    with the registry-write asymmetry `AGENTS.md` records for this shell, but the
+    two are not established to share a cause. Run `menucensus live-folder <path>`
+    from an ordinary terminal if the folder surface is wanted.
+
+  So for folders, files and multi-selections the only reading available here is
+  the `IContextMenu` one, which is deterministic and is the right instrument for
+  "what do the handlers contribute" — but it is not what Explorer shows, because
+  Shell contributes nothing through that interface. A change in how Shell
+  *composes* those menus will not appear in it.
 - **Twenty clean hostprobe runs do not prove the drain fix.** See §2.
 - **The MSI upgrade matrix** remains unverifiable here, per `AGENTS.md`. Nothing
   in §4 claims an uninstall/reinstall *would* fail; it claims the path is

@@ -92,11 +92,26 @@ if ($Diff) {
             Write-Output ("same     {0,-26} {1} rows" -f $name, $a.Count)
             continue
         }
+        # Rows a recorder saw come and go are annotated rather than hidden: they
+        # are still differences, they are just not evidence of anything.
+        $volatileRows = @()
+        foreach ($dir in @($Diff, $Against)) {
+            $vp = Join-Path $dir (($name -replace '\.tsv$', '') + '.volatile.txt')
+            if (Test-Path -LiteralPath $vp) { $volatileRows += @(Get-Content -LiteralPath $vp) }
+        }
+
+        $real = @($delta | Where-Object { $volatileRows -notcontains $_.InputObject })
+        if ($real.Count -eq 0) {
+            Write-Output ("same*    {0,-26} {1} rows (differences are all known-volatile)" -f $name, $a.Count)
+            continue
+        }
+
         $changed++
         Write-Output ("CHANGED  {0,-26} {1} -> {2} rows" -f $name, $a.Count, $b.Count)
         foreach ($row in $delta) {
             $mark = if ($row.SideIndicator -eq '=>') { '  + ' } else { '  - ' }
-            Write-Output "$mark$($row.InputObject)"
+            $note = if ($volatileRows -contains $row.InputObject) { '   (known volatile)' } else { '' }
+            Write-Output "$mark$($row.InputObject)$note"
         }
     }
     Write-Output ''
@@ -141,36 +156,100 @@ if (-not $Out) { $Out = Join-Path $PSScriptRoot 'baseline\census' }
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 # --- live census, repeated until two consecutive readings agree -------------
-Write-Host 'Live desktop menu (waiting for two identical readings)...' -ForegroundColor Cyan
+$desktop = [Environment]::GetFolderPath('Desktop')
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+
 # The individual readings go in a subdirectory: only the settled census belongs
 # at the top level, or -Diff walks the unsettled ones too and reports noise.
 $runDir = Join-Path $Out 'runs'
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-$settled = $false
-$previous = $null
-for ($i = 1; $i -le $MaxLiveRuns; $i++) {
-    $path = Join-Path $runDir "live-desktop-run$i.tsv"
-    & $exe live-desktop 2>$null | Out-File -LiteralPath $path -Encoding utf8
-    $rows = ConvertTo-CensusRows $path
-    Write-Host ("  run {0}: {1} rows" -f $i, $rows.Count)
 
-    if ($previous -and -not (Compare-Object $previous $rows)) {
-        Copy-Item -LiteralPath $path -Destination (Join-Path $Out 'live-desktop.tsv') -Force
-        Write-Host ("  settled at {0} rows after {1} readings" -f $rows.Count, $i) -ForegroundColor Green
-        $settled = $true
-        break
+# One live surface, not three, and the reason is worth keeping.
+#
+# menucensus also has live-taskbar and live-folder modes, and neither can be
+# recorded from an agent shell - measured 2026-11-25, ten attempts each:
+#
+#   live-taskbar  Shell_TrayWnd ignores a posted WM_CONTEXTMENU, and so does the
+#                 real child under the point, which is a
+#                 Windows.UI.Composition.DesktopWindowContentBridge. The Windows
+#                 11 taskbar is a XAML surface; reaching its menu needs synthetic
+#                 input, and if Windows answers with a XAML flyout rather than an
+#                 HMENU there is no menu handle to read at all. Check the taskbar
+#                 by hand.
+#   live-folder   no new CabinetWClass window ever appeared, from the probe's own
+#                 ShellExecuteW or from Start-Process explorer.exe. The probe
+#                 finds Progman, SHELLDLL_DefView and Shell_TrayWnd in the same
+#                 breath, so its window lookups work; a folder window launched
+#                 from here simply does not arrive. Consistent with the
+#                 registry-write asymmetry AGENTS.md records for this shell,
+#                 though that is not established as the same cause.
+#
+# Run those two modes by hand from an ordinary terminal if you want them.
+$live = @(
+    @{ Name = 'live-desktop'; Args = @('live-desktop') }
+)
+
+# Three consecutive identical readings, not two. Two agreeing readings only
+# means nothing changed in the five seconds between them: measured 2026-11-25,
+# the desktop menu settled at 29 rows across seven readings and then settled
+# just as convincingly at 27 an hour later, because NanaZip and PowerToys' "Unlock
+# with File Locksmith" had stopped contributing. Rows that did not appear in
+# every reading are written to <surface>.volatile.txt, so a later diff can tell
+# a real change from a handler that comes and goes.
+foreach ($surface in $live) {
+    Write-Host "$($surface.Name) (waiting for three identical readings)..." -ForegroundColor Cyan
+    $settled = $false
+    $previous = $null
+    $agree = 1
+    $seen = @()
+    $lastPath = $null
+    for ($i = 1; $i -le $MaxLiveRuns; $i++) {
+        $path = Join-Path $runDir "$($surface.Name)-run$i.tsv"
+        & $exe @($surface.Args) 2>$null | Out-File -LiteralPath $path -Encoding utf8
+        $rows = ConvertTo-CensusRows $path
+        $timing = (Select-String -LiteralPath $path -Pattern '^# timing-ms').Line
+        Write-Host ("  run {0}: {1} rows   {2}" -f $i, $rows.Count, $timing)
+        if ($rows.Count -gt 0) { $seen += , $rows }
+        $lastPath = $path
+
+        if ($null -ne $previous -and $rows.Count -gt 0 -and -not (Compare-Object $previous $rows)) {
+            $agree++
+            if ($agree -ge 3) {
+                Copy-Item -LiteralPath $path -Destination (Join-Path $Out "$($surface.Name).tsv") -Force
+                Write-Host ("  settled at {0} rows after {1} readings" -f $rows.Count, $i) -ForegroundColor Green
+                $settled = $true
+                break
+            }
+        }
+        else {
+            $agree = 1
+        }
+        $previous = $rows
+        Start-Sleep 5
     }
-    $previous = $rows
-    Start-Sleep 6
-}
-if (-not $settled) {
-    Write-Warning "live census never produced two identical readings in $MaxLiveRuns tries - the menu is genuinely unstable, do not treat a diff against it as signal"
+
+    if (-not $settled) {
+        if ($seen.Count -eq 0) {
+            Write-Warning "$($surface.Name): produced no readings at all in $MaxLiveRuns tries - see $lastPath for why"
+        }
+        else {
+            Write-Warning "$($surface.Name): no three identical readings in $MaxLiveRuns tries - treat a diff against it as noise, not signal"
+        }
+    }
+
+    if ($seen.Count -gt 1) {
+        $union = @($seen | ForEach-Object { $_ } | Sort-Object -Unique)
+        $stable = @($union | Where-Object { $row = $_; -not ($seen | Where-Object { $_ -notcontains $row }) })
+        $volatileRows = @($union | Where-Object { $stable -notcontains $_ })
+        if ($volatileRows.Count -gt 0) {
+            $volatileRows | Set-Content -LiteralPath (Join-Path $Out "$($surface.Name).volatile.txt") -Encoding utf8
+            Write-Host ("  {0} row(s) were not present in every reading - recorded as volatile" -f $volatileRows.Count) -ForegroundColor Yellow
+        }
+    }
 }
 
 # --- static census, one reading per surface ---------------------------------
 Write-Host 'Static handler census...' -ForegroundColor Cyan
-$desktop = [Environment]::GetFolderPath('Desktop')
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $targets = @(
     @{ Name = 'static-bg-desktop';  Args = @('bg', $desktop) },
     @{ Name = 'static-bg-repo';     Args = @('bg', $repo) },
