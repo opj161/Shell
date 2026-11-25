@@ -1,0 +1,2981 @@
+hostprobe native, 10 runs, 2026-11-25T03:07:46
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)
+
+[select.plain.classic]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.plain.ex]
+  flags RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.classic]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd.ex]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.classic]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.nonotify.ex]
+  flags NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 1 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_COMMAND           id=5002 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.classic]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[select.returncmd_nonotify.ex]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenuEx
+  returned 5002 (GetLastError 0)
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[cancel.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[cancel.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[submenu.returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  returned 5011 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5011, lasterror none, ownerdrawn not drawn
+
+[submenu.plain]
+  flags RIGHTBUTTON, TrackPopupMenu
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5003 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=3 flags=POPUP|HILITE menu=menu#1
+WM_INITMENUPOPUP     menu=menu#2 position=3 windowmenu=0
+WM_MENUSELECT        item=5011 flags=HILITE menu=menu#2
+WM_UNINITMENUPOPUP   menu=menu#2 sysmenu=0
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_COMMAND           id=5011 notify=0 from=menu
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_an_index]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Using Menus: the low word of an MNC_EXECUTE reply is the zero-based index of the item
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_low_word_is_not_an_identifier]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: returning an identifier where an index is expected must not select that identifier's item
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x0002138B
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.returncmd_alone_sends_no_wm_command]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: docs/refactor/01 section 3: TPM_RETURNCMD alone is enough, so exactly one component observes the selection
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn not drawn
+
+[question.nonotify_still_measures_ownerdraw]
+  flags RETURNCMD|NONOTIFY|RIGHTBUTTON, TrackPopupMenu
+  asking: the pages say only 'does not send notification messages' without enumerating which
+  returned 5002 (GetLastError 0)
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.ownerdraw_control_without_nonotify]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: control for the NONOTIFY comparison
+  returned 5002 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5002, lasterror none, ownerdrawn drawn
+
+[question.notifybypos_reports_a_position]
+  flags RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: WM_MENUCOMMAND wParam is the zero-based index of the item selected
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+WM_MENUCOMMAND       position=1 menu=menu#1
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.notifybypos_with_returncmd]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu, MNS_NOTIFYBYPOS
+  asking: undecided in the plan; recorded so the replay rule can be written against what Windows does
+  returned 1 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 1, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_executes_an_ownerdrawn_item]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Shell renders every item owner-drawn, so this is the configuration mnemonics actually run in
+  returned 5003 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MEASUREITEM       ctl=1 id=5003 data=49374
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00020002
+WM_MENUSELECT        item=5003 flags=HILITE|OWNERDRAW|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 5003, lasterror none, ownerdrawn drawn
+
+[question.menuchar_select_moves_the_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: MNC_SELECT is what a duplicated mnemonic returns on its first press; the menu must stay open
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=-1  -> 0x00030003
+WM_MENUSELECT        item=5004 flags=HILITE|MOUSESELECT menu=menu#1
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.menuchar_sees_the_current_highlight]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: the reply for a duplicated mnemonic depends on where the highlight already is
+  returned 0 (GetLastError 0)
+WM_ENTERMENULOOP
+WM_INITMENU          menu=menu#1
+WM_INITMENUPOPUP     menu=menu#1 position=0 windowmenu=0
+WM_MENUSELECT        item=5001 flags=HILITE menu=menu#1
+WM_MENUSELECT        item=5002 flags=HILITE menu=menu#1
+WM_MENUCHAR          char=90 type=POPUP menu=menu#1 hilite=1  -> 0x00000000
+WM_UNINITMENUPOPUP   menu=menu#1 sysmenu=0
+WM_MENUSELECT        item=0 flags=CLOSED menu=null
+WM_EXITMENULOOP
+= returned 0, lasterror none, ownerdrawn not drawn
+
+[question.a_failed_track_sets_a_last_error]
+  flags RETURNCMD|RIGHTBUTTON, TrackPopupMenu
+  asking: Include/HostContract.h has to answer a notifying host TRUE for a cancel and FALSE for a failure
+  returned 0 (GetLastError 1401)
+= returned 0, lasterror set, ownerdrawn not drawn
+
+verified against .\src\tests\hostprobe\fixtures
+
+23 scenario(s), 0 failure(s), 10 skipped (need --takeover against the registered copy)

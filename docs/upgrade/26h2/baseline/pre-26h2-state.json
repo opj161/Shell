@@ -1,0 +1,1179 @@
+{
+  "CapturedUtc": "2026-11-25T02:18:57",
+  "Os": {
+    "ProductName": "Windows 10 Pro for Workstations",
+    "DisplayVersion": "25H2",
+    "CurrentBuild": "26200",
+    "Ubr": 9974,
+    "EditionId": "ProfessionalWorkstation",
+    "CompositionEditionId": "Enterprise",
+    "BuildBranch": "ge_release",
+    "BuildLabEx": "26100.1.amd64fre.ge_release.240331-1435"
+  },
+  "ShellFiles": [
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\LICENSE",
+      "Present": true,
+      "Length": 1084,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "6AEF50956245B6CA8BC5191B98B101ADB5460B6D947940CA457321D3022C6C2D",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\readme.txt",
+      "Present": true,
+      "Length": 936,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "A0E5F59C5D9C568F6810C274C4A35A8C89F37FD0D641113491FAB611604CE214",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\shell.dll",
+      "Present": true,
+      "Length": 2054656,
+      "LastWriteUtc": "2026-11-25T02:00:24",
+      "Sha256": "F3A7F31CB8B52A466FABB6FE141551AEE2AE37118445F109B7754CF765FA80D8",
+      "FileVersion": "1.9.20",
+      "SizeOfImage": 2072576,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2026-11-25T02:00:24"
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\shell.dll.old.20261125030255_8746",
+      "Present": true,
+      "Length": 2054144,
+      "LastWriteUtc": "2026-09-06T02:45:32",
+      "Sha256": "149732542E2AEE074797C8F52A980FFE3DEFF079AC4441FABC8BD7894D5E677C",
+      "FileVersion": "1.9.20",
+      "SizeOfImage": 2072576,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2026-09-06T02:45:32"
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\shell.exe",
+      "Present": true,
+      "Length": 378368,
+      "LastWriteUtc": "2026-11-25T02:00:01",
+      "Sha256": "7F4CBE2D22E006A6F79FA7E2AA2FCF7659AC5B0AEB30DFB217F9D530124D2A4B",
+      "FileVersion": "1.9.20",
+      "SizeOfImage": 397312,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2026-11-25T02:00:01"
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\shell.nss",
+      "Present": true,
+      "Length": 1010,
+      "LastWriteUtc": "2026-08-24T17:05:23",
+      "Sha256": "07D4F706B68EA27635A4EB6017A335CE010AF91C0797D00E9D10F7B459B3D5A2",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\shell.nss.stock-new",
+      "Present": true,
+      "Length": 2840,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "B0C17E5E8C58D59B3BCB0503AA49C56F0FBC0D0BA852A7FE846E52777D01478C",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\develop.nss",
+      "Present": true,
+      "Length": 2221,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "B8735969083461B6D3716488F45C598F05C7021F46EFD7759C93E5E263F499B4",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\file-manage.nss",
+      "Present": true,
+      "Length": 4183,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "447CF06415CB8D31748173DF135066A4F0F963862E4C0FE734CAAC1BB60E518C",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\goto.nss",
+      "Present": true,
+      "Length": 3422,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "0810E8B0E2CB29BE06471224B9A01C1B2E519769CFDE6499246B4EC2D149EFF6",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\images.nss",
+      "Present": true,
+      "Length": 111296,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "CD7B5CE437028663ECADBCC036B58E4588E16158889D781125893400661121B1",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\modify.nss",
+      "Present": true,
+      "Length": 1040,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "4EABAC27D4A5323D4FCBA5B8859FA497CF4635200012707F3228982CC6B461B8",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\taskbar.nss",
+      "Present": true,
+      "Length": 1669,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "7555B1AE2DE0456D7D7D6638D66E1DB74B81BA7F548B040EC5C0523A6442D3E1",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\terminal.nss",
+      "Present": true,
+      "Length": 806,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "13CB750DE91BE9B592C52B742AB609DA6EE2F7DB9619D5280A6665BA2B32917B",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\theme.nss",
+      "Present": true,
+      "Length": 124,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "10F8ECC6EC94C09DBB7CB19353D7CBBE2F5C2FB2A770D7CD5C5B09B1DDFAC5FB",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\ar.nss",
+      "Present": true,
+      "Length": 1027,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "33C13F415D68862E81A1F0A53863F4B3C9494F2CB8035480B61BF3B4BC8DA3FB",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\de-DE.nss",
+      "Present": true,
+      "Length": 1965,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "98F86247665E6B860B4E8797A3FF1FA0AA0678BDF1A815C7197080C81EC9A1B6",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\en.nss",
+      "Present": true,
+      "Length": 1870,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "3E3AED86C2A28B2CE23244EAAFF71BAD17720E8A09A5C957BC610B4BBA141696",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\es-ES.nss",
+      "Present": true,
+      "Length": 2126,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "DB731EBACAE251196212984BF8D16A43223A5331E663EE1AA8875D14949AB038",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\it.nss",
+      "Present": true,
+      "Length": 2008,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "81E226F6B19854D72C9BFC54E86CBD68FAF9DECB4C574609C206A5F39C88957A",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\ja.nss",
+      "Present": true,
+      "Length": 2272,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "3CBAF75629750EFC563EC15F9282DC64E5A1C15CCA7A1C2F976ED29AF16546E2",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\ko.nss",
+      "Present": true,
+      "Length": 1981,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "34067AB02FCAA6975A16773D7F32D65A723B1ABAD10AA6D7AB53D452245C39E4",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\nb.nss",
+      "Present": true,
+      "Length": 1920,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "2159A5DDDD3D2EB64871373667FD81461F6610C29612F8783DAC0D6A6BD174F5",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\no.nss",
+      "Present": true,
+      "Length": 1842,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "836B274C85539269CE34039A79A60CD59153B02ED11A7446EE48E7D2996BCABE",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\pt-BR.nss",
+      "Present": true,
+      "Length": 2057,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "C35B9EF34E6E04EEF08A16FE4AED111417D6F937748384CC88D3D416FB8B2B3E",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\ro.nss",
+      "Present": true,
+      "Length": 2140,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "EF4029658DE7FD99F055FB195AF0DF8D0AC0A1A007817E34A93E9A963874417F",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\ru.nss",
+      "Present": true,
+      "Length": 2919,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "7CAC7AEEAFF6E259382FD4C78F2BC6B9BF12D28F10522E8A1AC2902499D3266F",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\sl.nss",
+      "Present": true,
+      "Length": 2039,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "C130E37F0DDFE9910247CA192C310055D5F097C5998BC6282A777F92D020DEF9",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\tr.nss",
+      "Present": true,
+      "Length": 2124,
+      "LastWriteUtc": "2026-08-20T15:47:04",
+      "Sha256": "4BBABEEBB49F0767B648BA859DAA70F234214FC311DC752B009E3FA476F829C5",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\ua.nss",
+      "Present": true,
+      "Length": 2931,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "9C06DFAB7E0FF732313444F48522C17702BBF0C47E90740185D8D4E4AB19FBC0",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\uk.nss",
+      "Present": true,
+      "Length": 2931,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "9C06DFAB7E0FF732313444F48522C17702BBF0C47E90740185D8D4E4AB19FBC0",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\zh-CN.nss",
+      "Present": true,
+      "Length": 1952,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "832899131FFADA20DA7F1E250CD0F401BABB72CB0FB71421821A6E99C52F46B3",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    },
+    {
+      "Path": "C:\\Program Files\\Nilesoft Shell\\imports\\lang\\zh-TW.nss",
+      "Present": true,
+      "Length": 2006,
+      "LastWriteUtc": "2026-08-20T11:46:02",
+      "Sha256": "23D402DF81483924E64E7387074822A125BCA20828C8CCD3FD61A1383512B5CD",
+      "FileVersion": null,
+      "SizeOfImage": null,
+      "Machine": null,
+      "LinkTimeUtc": null
+    }
+  ],
+  "SystemFiles": [
+    {
+      "Path": "C:\\WINDOWS\\System32\\Windows.UI.FileExplorer.dll",
+      "Present": true,
+      "Length": 2000896,
+      "LastWriteUtc": "2026-11-14T20:33:19",
+      "Sha256": "4CE847CBBE84BEDAB2799BC7DE9AA1D85684E66B95E2C59DAF4ECEE759AEF0B1",
+      "FileVersion": "10.0.10011.16384 (WinBuild.160101.0800)",
+      "SizeOfImage": 2027520,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2090-10-05T19:19:46"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\win32u.dll",
+      "Present": true,
+      "Length": 182632,
+      "LastWriteUtc": "2026-11-14T20:33:22",
+      "Sha256": "5DB5C7CEEC0B8C19344D3720BB3548AD01831966D27D766204429D3147E46ECC",
+      "FileVersion": "10.0.26100.9974 (WinBuild.160101.0800)",
+      "SizeOfImage": 159744,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2041-02-17T04:28:45"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\user32.dll",
+      "Present": true,
+      "Length": 2003968,
+      "LastWriteUtc": "2026-11-14T20:33:21",
+      "Sha256": "4F66C3C584276F7DF0DBFB78332315990EF81276661C8EACD8BA93197931FF91",
+      "FileVersion": "10.0.26100.9949 (WinBuild.160101.0800)",
+      "SizeOfImage": 1957888,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "1984-11-16T14:04:53"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\shell32.dll",
+      "Present": true,
+      "Length": 8189472,
+      "LastWriteUtc": "2026-11-14T20:33:09",
+      "Sha256": "10560EFF83911E165674ADAFD31E05450CA827F2B5800E91130823B1E854F5D0",
+      "FileVersion": "10.0.26100.9949 (WinBuild.160101.0800)",
+      "SizeOfImage": 8060928,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2001-11-15T14:29:34"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\windows.storage.dll",
+      "Present": true,
+      "Length": 9323080,
+      "LastWriteUtc": "2026-11-14T20:32:57",
+      "Sha256": "D31D11307CB87A6A9E26F7B805B480717B78E8833DCECE75CBEE319D14654F74",
+      "FileVersion": "10.0.26100.9949 (WinBuild.160101.0800)",
+      "SizeOfImage": 9175040,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "1987-04-07T19:23:10"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\twinui.dll",
+      "Present": true,
+      "Length": 5332992,
+      "LastWriteUtc": "2026-11-14T20:33:19",
+      "Sha256": "FF142DCE37144C92655971E21726CF0572F944A0EF81B966302A383BE963F4ED",
+      "FileVersion": "10.0.26100.9949 (WinBuild.160101.0800)",
+      "SizeOfImage": 5361664,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "1987-09-04T01:44:22"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\twinui.pcshell.dll",
+      "Present": true,
+      "Length": 10268672,
+      "LastWriteUtc": "2026-11-14T20:33:19",
+      "Sha256": "0D44E428FE81F68522678F0958DB8B039E1E7DC3175B0D6A641918C3B125A2AE",
+      "FileVersion": "10.0.26100.9949 (WinBuild.160101.0800)",
+      "SizeOfImage": 10301440,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2017-05-27T05:09:45"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\uiautomationcore.dll",
+      "Present": true,
+      "Length": 4300800,
+      "LastWriteUtc": "2026-11-14T20:33:20",
+      "Sha256": "6889FCAE6BAE830366A16DD1BD710C6D0C125AFE88A847E51C5DD6D0BD68EA23",
+      "FileVersion": "7.2.26100.9949 (WinBuild.160101.0800)",
+      "SizeOfImage": 4325376,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "1994-08-08T04:47:02"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\combase.dll",
+      "Present": true,
+      "Length": 3892080,
+      "LastWriteUtc": "2026-11-14T20:32:31",
+      "Sha256": "B9136A89F90897B8423B10DEA838BABBF1B6318FD717A37C9DD638CAA0A305E3",
+      "FileVersion": "10.0.26100.7705 (WinBuild.160101.0800)",
+      "SizeOfImage": 3821568,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "2069-09-21T14:32:16"
+    },
+    {
+      "Path": "C:\\WINDOWS\\System32\\comctl32.dll",
+      "Present": true,
+      "Length": 742904,
+      "LastWriteUtc": "2026-08-27T13:08:00",
+      "Sha256": "67E04B3A6650430BA7B57CE01180D7A8F2E06FB04570F4C26B511E6CB05B1761",
+      "FileVersion": "5.82 (WinBuild.160101.0800)",
+      "SizeOfImage": 741376,
+      "Machine": "0x8664",
+      "LinkTimeUtc": "1980-12-24T18:01:37"
+    }
+  ],
+  "Explorer": {
+    "Path": "C:\\WINDOWS\\explorer.exe",
+    "Present": true,
+    "Length": 3358576,
+    "LastWriteUtc": "2026-11-14T20:32:42",
+    "Sha256": "EEE840F2BCE235DCE1DA0A5F4EACDB94A2BFB11ACF13822D7DBCD243273219C3",
+    "FileVersion": "10.0.26100.9949 (WinBuild.160101.0800)",
+    "SizeOfImage": 3309568,
+    "Machine": "0x8664",
+    "LinkTimeUtc": "2073-03-14T04:18:19"
+  },
+  "Win11Menu": {
+    "KeyPresent": true,
+    "InprocServer32": {
+      "(Default)": "C:\\Windows\\System32\\Windows.UI.FileExplorer.dll",
+      "ThreadingModel": "Apartment"
+    },
+    "TreatAs": {
+      "(Default)": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    "Owner": "NT SERVICE\\TrustedInstaller",
+    "UsersRights": [
+      "-2147483648 inherited=False flags=ContainerInherit",
+      "ReadKey inherited=False flags=None"
+    ],
+    "HkcuOverride": null
+  },
+  "Registration": [
+    {
+      "Hive": "HKLM",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}",
+      "Default": "Nilesoft.Shell",
+      "InprocServer32": {
+        "(Default)": "C:\\Program Files\\Nilesoft Shell\\shell.dll",
+        "ThreadingModel": "Apartment"
+      }
+    },
+    {
+      "Hive": "HKLM",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF2}",
+      "Default": "Nilesoft.Shell",
+      "InprocServer32": {
+        "(Default)": "C:\\Program Files\\Nilesoft Shell\\shell.dll",
+        "ThreadingModel": "Apartment"
+      }
+    },
+    {
+      "Hive": "HKLM",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF3}",
+      "Default": "Nilesoft.Shell",
+      "InprocServer32": {
+        "(Default)": "C:\\Program Files\\Nilesoft Shell\\shell.dll",
+        "ThreadingModel": "Apartment"
+      }
+    }
+  ],
+  "Handlers": [
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": " FileSyncEx",
+      "Clsid": "{CB3D0F55-BC2C-4C1A-85ED-23ED75B5106B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "{90AA3A4E-1CBA-4233-B8BB-535773D48449}",
+      "Clsid": "Taskband Pin"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "{a2a9545d-a0c2-42b4-9708-a0b2badd77c8}",
+      "Clsid": "Start Menu Pin"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "AccExt",
+      "Clsid": "{2A118EB5-5797-4F5E-8B3D-F4ECBA3C98E4}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "Adobe.Acrobat.ContextMenu",
+      "Clsid": "[CC]{A6595CD1-BF77-430A-A452-18696685F7C7}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "DriveFS 28 or later",
+      "Clsid": "{EE15C2BD-CECB-49F8-A113-CA1BFC528F5B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "EPP",
+      "Clsid": "{09A47860-11B0-4DA5-AFA5-26D86198A780}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "FileConverterExtension",
+      "Clsid": "{af9b72b5-f4e4-44b0-a3d9-b55b748efe90}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "GpgEX",
+      "Clsid": "{CCD955E4-5C16-4A33-AFDA-A8947A94946B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "IObitUnstaler",
+      "Clsid": ""
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "Open With",
+      "Clsid": "{09799AFB-AD67-11d1-ABCD-00C04FC30936}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "Open With EncryptionMenu",
+      "Clsid": "{A470F8CF-A1E8-4f65-8335-227475AA5C46}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "Sharing",
+      "Clsid": "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "*",
+      "Handler": "WorkFolders",
+      "Clsid": "{E61BF828-5E63-4287-BEF1-60B1A4FDE0E3}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "AllFilesystemObjects",
+      "Handler": "{474C98EE-CF3D-41f5-80E3-4AAB0AB04301}",
+      "Clsid": ""
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "AllFilesystemObjects",
+      "Handler": "{596AB062-B4D2-4215-9F74-E9109B0A8153}",
+      "Clsid": ""
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "AllFilesystemObjects",
+      "Handler": "{a2a9545d-a0c2-42b4-9708-a0b2badd77c8}",
+      "Clsid": "Start Menu Pin"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "AllFilesystemObjects",
+      "Handler": "{B482AE79-23AE-402E-AA76-F364C4655289}",
+      "Clsid": "RwcShellExtensionHandler.RwcShellExtension"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "AllFilesystemObjects",
+      "Handler": "CopyAsPathMenu",
+      "Clsid": "{f3d06e7c-1e45-4a26-847e-f9fcdee59be0}"
+    },
+    {
+      "Hive": "HKCU",
+      "Class": "AllFilesystemObjects",
+      "Handler": "FileLocksmithExt",
+      "Clsid": "{84D68575-E186-46AD-B0CB-BAEB45EE29C0}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "AllFilesystemObjects",
+      "Handler": "ModernSharing",
+      "Clsid": "{e2bf9676-5f8f-435c-97eb-11607a5bedf7}"
+    },
+    {
+      "Hive": "HKCU",
+      "Class": "AllFilesystemObjects",
+      "Handler": "PowerRenameExt",
+      "Clsid": "{0440049F-D1DC-4E46-B27B-98393D79486B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "AllFilesystemObjects",
+      "Handler": "SendTo",
+      "Clsid": "{7BA4C740-9E81-11CF-99D3-00AA004AE837}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "DesktopBackground",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "DesktopBackground",
+      "Handler": "DesktopSlideshow",
+      "Clsid": "{0bf754aa-c967-445c-ab3d-d8fda9bae7ef}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": " FileSyncEx",
+      "Clsid": "{CB3D0F55-BC2C-4C1A-85ED-23ED75B5106B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "{596AB062-B4D2-4215-9F74-E9109B0A8153}",
+      "Clsid": ""
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "DriveFS 28 or later",
+      "Clsid": "{EE15C2BD-CECB-49F8-A113-CA1BFC528F5B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "EncryptionMenu",
+      "Clsid": "{A470F8CF-A1E8-4f65-8335-227475AA5C46}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "EPP",
+      "Clsid": "{09A47860-11B0-4DA5-AFA5-26D86198A780}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "GpgEX",
+      "Clsid": "{CCD955E4-5C16-4A33-AFDA-A8947A94946B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "Offline Files",
+      "Clsid": "{474C98EE-CF3D-41f5-80E3-4AAB0AB04301}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "Sharing",
+      "Clsid": "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory",
+      "Handler": "WorkFolders",
+      "Clsid": "{E61BF828-5E63-4287-BEF1-60B1A4FDE0E3}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": " FileSyncEx",
+      "Clsid": "{CB3D0F55-BC2C-4C1A-85ED-23ED75B5106B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": "DriveFS 28 or later",
+      "Clsid": "{EE15C2BD-CECB-49F8-A113-CA1BFC528F5B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": "HardLinkMenu",
+      "Clsid": "{0A479751-02BC-11d3-A855-0004AC2568AA}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": "New",
+      "Clsid": "{D969A300-E7FF-11d0-A93B-00A0C90F2719}"
+    },
+    {
+      "Hive": "HKCU",
+      "Class": "Directory\\background",
+      "Handler": "NewPlusShellExtensionWin10",
+      "Clsid": "{FF90D477-E32A-4BE8-8CC5-A502A97F5401}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": "NvAppDesktopContext",
+      "Clsid": "{F2E8B4A1-9C7D-4F6E-B3A5-8D2C1F4E9B7A}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": "NvCplDesktopContext",
+      "Clsid": "{3D1975AF-48C6-4f8e-A182-BE0E08FA86A9}"
+    },
+    {
+      "Hive": "HKCU",
+      "Class": "Directory\\background",
+      "Handler": "PowerRenameExt",
+      "Clsid": "{0440049F-D1DC-4E46-B27B-98393D79486B}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": "Sharing",
+      "Clsid": "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Directory\\background",
+      "Handler": "WorkFolders",
+      "Clsid": "{E61BF828-5E63-4287-BEF1-60B1A4FDE0E3}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": "{596AB062-B4D2-4215-9F74-E9109B0A8153}",
+      "Clsid": ""
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": "{B482AE79-23AE-402E-AA76-F364C4655289}",
+      "Clsid": "RwcShellExtensionHandler.RwcShellExtension"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": "{D6791A63-E7E2-4fee-BF52-5DED8E86E9B8}",
+      "Clsid": ""
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": "{fbeb8a05-beee-4442-804e-409d6c4515e9}",
+      "Clsid": ""
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": "EnhancedStorageShell",
+      "Clsid": "{2854F705-3548-414C-A113-93E27C808C85}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": "EPP",
+      "Clsid": "{09A47860-11B0-4DA5-AFA5-26D86198A780}"
+    },
+    {
+      "Hive": "HKCU",
+      "Class": "Drive",
+      "Handler": "FileLocksmithExt",
+      "Clsid": "{84D68575-E186-46AD-B0CB-BAEB45EE29C0}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Drive",
+      "Handler": "Sharing",
+      "Clsid": "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Folder",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Folder",
+      "Handler": "{a2a9545d-a0c2-42b4-9708-a0b2badd77c8}",
+      "Clsid": "Start Menu Pin"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Folder",
+      "Handler": "AccExt",
+      "Clsid": "{2A118EB5-5797-4F5E-8B3D-F4ECBA3C98E4}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Folder",
+      "Handler": "HardLinkMenu",
+      "Clsid": "{0A479751-02BC-11d3-A855-0004AC2568AA}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Folder",
+      "Handler": "Library Location",
+      "Clsid": "{3dad6c5d-2167-4cae-9914-f99e41c12cfa}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Folder",
+      "Handler": "Offline Files",
+      "Clsid": "{474C98EE-CF3D-41f5-80E3-4AAB0AB04301}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "Folder",
+      "Handler": "PintoStartScreen",
+      "Clsid": "{470C0EBD-5D73-4d58-9CED-E91E22E23282}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "LibraryFolder",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "LibraryFolder",
+      "Handler": "LibraryFolder",
+      "Clsid": "{0af96ede-aebf-41ed-a1c8-cf7a685505b6}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "LibraryFolder\\background",
+      "Handler": " @nilesoft.shell",
+      "Clsid": "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "LibraryFolder\\background",
+      "Handler": "New",
+      "Clsid": "{D969A300-E7FF-11d0-A93B-00A0C90F2719}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "LibraryFolder\\background",
+      "Handler": "Sharing",
+      "Clsid": "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "UserLibraryFolder",
+      "Handler": "SendTo",
+      "Clsid": "{7BA4C740-9E81-11CF-99D3-00AA004AE837}"
+    },
+    {
+      "Hive": "HKLM",
+      "Class": "UserLibraryFolder",
+      "Handler": "Sharing",
+      "Clsid": "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+    }
+  ],
+  "Approved": [
+    "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1} =  @nilesoft.shell"
+  ],
+  "Blocked": {
+    "{9421DD08-935F-4701-A9CA-22DF90AC4EA6}": "Epson Easy Photo Print 2: Blocked by {6AF39996-9C88-459B-9282-DA18B14E4402}"
+  },
+  "Product": {
+    "DisplayName": "Nilesoft Shell",
+    "DisplayVersion": "1.9.20",
+    "InstallDate": "20260820",
+    "InstallSource": "C:\\Users\\j_opp\\Projects\\Shell\\src\\bin\\",
+    "PSChildName": "{7BCA6512-254B-456F-8F08-AAD7508BE640}",
+    "UninstallString": "MsiExec.exe /X{7BCA6512-254B-456F-8F08-AAD7508BE640}"
+  },
+  "CachedMsi": {
+    "LocalPackage": "C:\\Windows\\Installer\\1b0c368.msi",
+    "Present": true,
+    "Sha256": "080A9BB84BF1B43385FF6EAA9FF7C7E14F14835AD0EBB258144A7E6F837CAEF6"
+  },
+  "UserConfig": {
+    "HkcuNilesoftShell": {},
+    "ShellNssSha256": "07D4F706B68EA27635A4EB6017A335CE010AF91C0797D00E9D10F7B459B3D5A2"
+  },
+  "LoadedHosts": [
+    {
+      "Process": "AppActions",
+      "Pid": 23828,
+      "StartedUtc": "2026-11-21T23:28:12",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "chrome",
+      "Pid": 64732,
+      "StartedUtc": "2026-11-25T01:52:18",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "claude",
+      "Pid": 15592,
+      "StartedUtc": "2026-11-24T00:38:25",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "Code",
+      "Pid": 3196,
+      "StartedUtc": "2026-11-22T00:07:42",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "Cold Turkey Blocker",
+      "Pid": 12788,
+      "StartedUtc": "2026-11-21T23:18:13",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "CrossDeviceService",
+      "Pid": 12332,
+      "StartedUtc": "2026-11-21T23:18:13",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "dllhost",
+      "Pid": 6020,
+      "StartedUtc": "2026-11-22T12:39:53",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "dllhost",
+      "Pid": 12668,
+      "StartedUtc": "2026-11-22T00:44:57",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "dllhost",
+      "Pid": 14096,
+      "StartedUtc": "2026-11-22T00:44:57",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "Everything",
+      "Pid": 26220,
+      "StartedUtc": "2026-11-25T01:32:43",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "explorer",
+      "Pid": 30824,
+      "StartedUtc": "2026-11-25T02:02:57",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "FileCoAuth",
+      "Pid": 8044,
+      "StartedUtc": "2026-11-21T23:20:02",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "msedgewebview2",
+      "Pid": 59976,
+      "StartedUtc": "2026-11-25T02:02:59",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "msrdc",
+      "Pid": 66548,
+      "StartedUtc": "2026-11-25T01:34:21",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "Notepad",
+      "Pid": 26112,
+      "StartedUtc": "2026-11-22T00:22:12",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "nvcontainer",
+      "Pid": 11052,
+      "StartedUtc": "2026-11-21T23:18:11",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "OneDrive",
+      "Pid": 18640,
+      "StartedUtc": "2026-11-22T00:21:42",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "OneDrive.Sync.Service",
+      "Pid": 36232,
+      "StartedUtc": "2026-11-22T19:03:12",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "PhoneExperienceHost",
+      "Pid": 43392,
+      "StartedUtc": "2026-11-24T05:19:11",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "PowerToys",
+      "Pid": 20552,
+      "StartedUtc": "2026-11-22T00:10:25",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "ServiceHub.Helper",
+      "Pid": 12148,
+      "StartedUtc": "2026-11-21T23:18:12",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "sihost",
+      "Pid": 11160,
+      "StartedUtc": "2026-11-21T23:18:11",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "StartMenuExperienceHost",
+      "Pid": 52996,
+      "StartedUtc": "2026-11-25T02:02:58",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "svchost",
+      "Pid": 2852,
+      "StartedUtc": "2026-11-22T00:05:05",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "svchost",
+      "Pid": 13384,
+      "StartedUtc": "2026-11-21T23:18:14",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "svchost",
+      "Pid": 20012,
+      "StartedUtc": "2026-11-22T00:21:40",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "SystemSettings",
+      "Pid": 55564,
+      "StartedUtc": "2026-11-25T01:51:49",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "TextInputHost",
+      "Pid": 18524,
+      "StartedUtc": "2026-11-25T02:03:08",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "WhatsApp.Root",
+      "Pid": 37416,
+      "StartedUtc": "2026-11-22T20:30:39",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "WidgetBoard",
+      "Pid": 12564,
+      "StartedUtc": "2026-11-21T23:18:13",
+      "MappedSize": 2072576
+    },
+    {
+      "Process": "wscript",
+      "Pid": 60076,
+      "StartedUtc": "2026-11-25T02:00:01",
+      "MappedSize": 2072576
+    }
+  ]
+}
